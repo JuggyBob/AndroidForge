@@ -1,0 +1,1095 @@
+use std::time::{Duration, Instant};
+
+use androidforge_adb::AdbClient;
+use androidforge_core::error::{ErrorCode, ForgeError, Result};
+use androidforge_core::util::short_id;
+use androidforge_process::escape_input_text;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::hierarchy::{Rect, UiHierarchy, UiNode};
+use crate::selector::{Selection, Selector, UiMatch, find, select, selector_not_found};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindResult {
+    pub matches: Vec<UiMatch>,
+    pub ambiguous: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TapResult {
+    pub matched: UiMatch,
+    pub tap_x: i32,
+    pub tap_y: i32,
+    pub used_clickable_ancestor: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ancestor: Option<UiMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_size: Option<(u32, u32)>,
+    pub rotation: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextResult {
+    pub text: String,
+    pub cleared: bool,
+    pub verified: bool,
+    pub focused: UiMatch,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard_was_visible: Option<bool>,
+    pub keyboard_hidden: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaitResult {
+    pub present: bool,
+    pub matched: bool,
+    pub attempts: u32,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_element: Option<UiMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hierarchy_package: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettleResult {
+    pub stable: bool,
+    pub attempts: u32,
+    pub duration_ms: u64,
+    pub xml_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScrollResult {
+    pub direction: String,
+    pub start_x: i32,
+    pub start_y: i32,
+    pub end_x: i32,
+    pub end_y: i32,
+    pub target_bounds: Rect,
+    pub used_scrollable_node: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScrollToResult {
+    pub found: bool,
+    pub swipes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_element: Option<UiMatch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackResult {
+    pub keyboard_was_visible: Option<bool>,
+    pub keyboard_hidden: bool,
+    pub back_sent: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyResult {
+    pub keycode: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UiManager {
+    pub adb: AdbClient,
+    pub default_timeout: Duration,
+    pub poll_interval: Duration,
+    pub settle_interval: Duration,
+    pub tap_clickable_ancestor: bool,
+    pub text_verify: bool,
+}
+
+impl UiManager {
+    pub fn new(
+        adb: AdbClient,
+        default_timeout: Duration,
+        poll_interval: Duration,
+        settle_interval: Duration,
+        tap_clickable_ancestor: bool,
+        text_verify: bool,
+    ) -> Self {
+        Self {
+            adb,
+            default_timeout,
+            poll_interval,
+            settle_interval,
+            tap_clickable_ancestor,
+            text_verify,
+        }
+    }
+
+    pub async fn dump(&self, serial: &str) -> Result<UiHierarchy> {
+        let remote = format!("/data/local/tmp/androidforge-ui-{}.xml", short_id());
+        let mut last_error = None;
+        for attempt in 0..3 {
+            let dump_output = self
+                .adb
+                .shell_args(
+                    serial,
+                    &[
+                        "uiautomator".to_string(),
+                        "dump".to_string(),
+                        remote.clone(),
+                    ],
+                    Some(Duration::from_secs(30)),
+                    Some(2 * 1024 * 1024),
+                )
+                .await;
+            match dump_output {
+                Ok(output) => {
+                    let text = output.combined_text();
+                    if text.contains("ERROR: could not get idle state")
+                        || text.contains("ERROR: null root node")
+                        || text.contains("ERROR: could not parse")
+                    {
+                        last_error = Some(text.trim().to_string());
+                    } else {
+                        match self
+                            .adb
+                            .exec_out_args(
+                                serial,
+                                &["cat".to_string(), remote.clone()],
+                                Some(Duration::from_secs(30)),
+                                Some(16 * 1024 * 1024),
+                            )
+                            .await
+                        {
+                            Ok(xml_output) => {
+                                if xml_output.stdout_truncated {
+                                    last_error = Some(
+                                        "UI hierarchy exceeded the 16 MiB capture limit"
+                                            .to_string(),
+                                    );
+                                } else {
+                                    let xml = xml_output.stdout_text();
+                                    if xml.contains("<hierarchy") {
+                                        match UiHierarchy::parse(&xml) {
+                                            Ok(hierarchy) => {
+                                                let _ = self
+                                                    .adb
+                                                    .shell_args(
+                                                        serial,
+                                                        &[
+                                                            "rm".to_string(),
+                                                            "-f".to_string(),
+                                                            remote.clone(),
+                                                        ],
+                                                        Some(Duration::from_secs(10)),
+                                                        None,
+                                                    )
+                                                    .await;
+                                                return Ok(hierarchy);
+                                            }
+                                            Err(error) => {
+                                                last_error = Some(error.message().to_string());
+                                            }
+                                        }
+                                    } else {
+                                        last_error = Some(
+                                            "uiautomator produced empty or partial XML".to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                last_error = Some(error.message().to_string());
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    last_error = Some(error.message().to_string());
+                    if error.code() == ErrorCode::UnsupportedOperation
+                        || error.message().to_ascii_lowercase().contains("uiautomator")
+                    {
+                        break;
+                    }
+                }
+            }
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(450)).await;
+            }
+        }
+        let _ = self
+            .adb
+            .shell_args(
+                serial,
+                &["rm".to_string(), "-f".to_string(), remote],
+                Some(Duration::from_secs(10)),
+                None,
+            )
+            .await;
+        Err(ForgeError::new(
+            ErrorCode::CommandFailed,
+            "could not obtain a usable UIAutomator hierarchy",
+        )
+        .with_context_string(
+            "last_error",
+            last_error.unwrap_or_else(|| "unknown UIAutomator failure".to_string()),
+        )
+        .with_suggestion("Retry after the screen is awake and animation has stopped.")
+        .with_suggestion("Inspect the device with `androidforge diagnostics collect`.")
+        .device(serial.to_string()))
+    }
+
+    pub async fn find(&self, serial: &str, selector: &Selector) -> Result<FindResult> {
+        let hierarchy = self.dump(serial).await?;
+        let matches = find(&hierarchy, selector)?;
+        Ok(FindResult {
+            ambiguous: matches.len() > 1,
+            matches,
+        })
+    }
+
+    pub async fn select(&self, serial: &str, selector: &Selector) -> Result<Selection> {
+        let hierarchy = self.dump(serial).await?;
+        select(hierarchy, selector)
+    }
+
+    pub async fn tap(&self, serial: &str, selector: &Selector) -> Result<TapResult> {
+        let selection = self.select(serial, selector).await?;
+        self.tap_selection(serial, selection).await
+    }
+
+    pub async fn tap_xy(&self, serial: &str, x: i32, y: i32) -> Result<Option<(u32, u32)>> {
+        let display = self.display_size(serial, None).await;
+        if let Some((width, height)) = display {
+            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                return Err(ForgeError::new(
+                    ErrorCode::InvalidArgument,
+                    format!("tap coordinate ({x}, {y}) is outside the current display {width}x{height}"),
+                )
+                .with_suggestion(
+                    "Coordinates are real device pixels in the current display orientation. Do not scale them from an unrelated screenshot.",
+                )
+                .with_suggestion("Prefer semantic selectors such as --text or --resource-id.")
+                .device(serial.to_string()));
+            }
+        }
+        self.adb.input_tap(serial, x as u32, y as u32).await?;
+        Ok(display)
+    }
+
+    pub async fn long_press(&self, serial: &str, selector: &Selector) -> Result<TapResult> {
+        let selection = self.select(serial, selector).await?;
+        let hierarchy = &selection.hierarchy;
+        let node = selection.selected_node();
+        let (target, ancestor) = self.tap_target(hierarchy, node)?;
+        let (x, y) = target.bounds.center();
+        let display = self.display_size(serial, hierarchy.rotation).await;
+        self.validate_point(serial, x, y, display)?;
+        self.adb
+            .input_swipe(serial, x as u32, y as u32, x as u32, y as u32, 900)
+            .await?;
+        Ok(TapResult {
+            matched: UiMatch::from_node(hierarchy, 0, node),
+            tap_x: x,
+            tap_y: y,
+            used_clickable_ancestor: ancestor.is_some(),
+            ancestor: ancestor.map(|node| UiMatch::from_node(hierarchy, 0, node)),
+            display_size: display,
+            rotation: hierarchy.rotation,
+        })
+    }
+
+    pub async fn swipe(
+        &self,
+        serial: &str,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u32,
+    ) -> Result<Option<(u32, u32)>> {
+        let display = self.display_size(serial, None).await;
+        self.validate_point(serial, x1, y1, display)?;
+        self.validate_point(serial, x2, y2, display)?;
+        self.adb
+            .input_swipe(
+                serial,
+                x1 as u32,
+                y1 as u32,
+                x2 as u32,
+                y2 as u32,
+                duration_ms,
+            )
+            .await?;
+        Ok(display)
+    }
+
+    /// Clear the focused field, or the field matched by `selector`.
+    ///
+    /// Unlike text entry, clearing with no selector should fail with a
+    /// selector/focus explanation rather than a generic text-verification
+    /// error: there is nothing to verify if no editable field is focused.
+    pub async fn clear(&self, serial: &str, selector: Option<&Selector>) -> Result<TextResult> {
+        if selector.is_none() {
+            let hierarchy = self.dump(serial).await?;
+            let focused = hierarchy
+                .nodes
+                .iter()
+                .filter(|node| node.focused)
+                .map(|node| UiMatch::from_node(&hierarchy, 0, node))
+                .collect::<Vec<_>>();
+            if !hierarchy
+                .nodes
+                .iter()
+                .any(|node| node.focused && node.editable_like())
+            {
+                return Err(ForgeError::new(
+                    ErrorCode::SelectorNotFound,
+                    "no editable field is focused; refusing to clear an unknown target",
+                )
+                .with_context(
+                    "focused_nodes",
+                    serde_json::to_value(focused).unwrap_or(Value::Null),
+                )
+                .with_suggestion("Tap the field first, or pass --text, --resource-id, --content-desc or --class.")
+                .with_suggestion("Run `androidforge ui focused` to inspect the focused node.")
+                .device(serial.to_string()));
+            }
+        }
+        self.text(serial, "", selector, true, false).await
+    }
+
+    pub async fn text(
+        &self,
+        serial: &str,
+        text: &str,
+        selector: Option<&Selector>,
+        clear: bool,
+        hide_keyboard: bool,
+    ) -> Result<TextResult> {
+        if let Some(selector) = selector {
+            self.tap(serial, selector).await?;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+
+        let mut notes = Vec::new();
+        let (hierarchy, focused_id, keyboard_visible) = self
+            .wait_for_focused_field(serial, selector.is_some())
+            .await?;
+        let focused_node = hierarchy.nodes.get(focused_id).cloned().ok_or_else(|| {
+            ForgeError::new(
+                ErrorCode::TextVerificationFailed,
+                "focused field disappeared",
+            )
+        })?;
+        let mut before_text = focused_node.text.clone();
+        if focused_node.text_is_hint() {
+            if !before_text.as_deref().unwrap_or("").is_empty() {
+                notes.push(
+                    "the field exposes its hint/placeholder as text; treating it as empty before input"
+                        .to_string(),
+                );
+            }
+            before_text = None;
+        }
+        let mut cleared = false;
+        if clear {
+            cleared = self
+                .clear_focused_field(serial, &focused_node, &mut notes)
+                .await?;
+        }
+
+        let encoded = escape_input_text(text).map_err(|message| {
+            ForgeError::new(ErrorCode::InvalidArgument, message)
+                .with_suggestion("Use `androidforge adb shell input ...` for text that the standard input command cannot represent.")
+                .device(serial.to_string())
+        })?;
+        let mut output_notes = Vec::new();
+        if !text.is_empty() {
+            let output = self.adb.input_text(serial, &encoded).await?;
+            let stderr = output.stderr_text();
+            if !stderr.trim().is_empty() {
+                output_notes.push(format!("input text stderr: {}", stderr.trim()));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        } else {
+            cleared = true;
+            notes.push("no text was sent because the requested text was empty".to_string());
+        }
+
+        let hierarchy_after = self.dump(serial).await?;
+        let focused_after = hierarchy_after
+            .nodes
+            .iter()
+            .filter(|node| node.focused)
+            .collect::<Vec<_>>();
+        let Some(focused_after) = focused_after.first() else {
+            return Err(ForgeError::new(
+                ErrorCode::TextVerificationFailed,
+                "text was sent, but no UI field is focused afterward",
+            )
+            .with_context_string("requested_text", text.to_string())
+            .with_suggestion("The field may have lost focus or the screen changed.")
+            .with_suggestion("Run `androidforge ui dump` and inspect the current screen.")
+            .device(serial.to_string()));
+        };
+        let after_text = focused_after.text.clone();
+        let mut verified = false;
+        if focused_after.password {
+            notes.push(
+                "field is a password field; text entry cannot be read back or verified".to_string(),
+            );
+        } else if self.text_verify {
+            let expected = if clear {
+                text.to_string()
+            } else {
+                format!("{}{}", before_text.clone().unwrap_or_default(), text)
+            };
+            let placeholder_after_clear =
+                clear && text.is_empty() && focused_after.text_is_placeholder_after_clear();
+            if after_text.as_deref().unwrap_or("") == expected.as_str() || placeholder_after_clear {
+                verified = true;
+                if placeholder_after_clear && !after_text.as_deref().unwrap_or("").is_empty() {
+                    let note = "the field exposes its hint/placeholder as text after clearing; treating it as empty";
+                    if !notes.iter().any(|existing| existing == note) {
+                        notes.push(note.to_string());
+                    }
+                }
+            } else {
+                notes.extend(output_notes);
+                return Err(ForgeError::new(
+                    ErrorCode::TextVerificationFailed,
+                    "the field text does not match the requested text after input",
+                )
+                .with_context_string("requested_text", text.to_string())
+                .with_context_string(
+                    "expected_text",
+                    expected,
+                )
+                .with_context_string(
+                    "actual_text",
+                    after_text.clone().unwrap_or_default(),
+                )
+                .with_context(
+                    "focused_node",
+                    serde_json::to_value(UiMatch::from_node(&hierarchy_after, 0, focused_after))
+                        .unwrap_or(Value::Null),
+                )
+                .with_context(
+                    "note",
+                    "The IME may have dropped unsupported characters, or the field transformed the input.",
+                )
+                .with_suggestion("Verify the text with `androidforge ui find --text ...`.")
+                .with_suggestion("Use --clear when replacing existing field contents.")
+                .with_suggestion("Non-ASCII text support depends on the device IME; inspect the focused field.")
+                .device(serial.to_string()));
+            }
+        } else {
+            notes.push("text verification was disabled with --no-verify".to_string());
+        }
+
+        let mut keyboard_hidden = false;
+        if hide_keyboard {
+            match self.adb.hide_keyboard(serial).await {
+                Ok(_) => keyboard_hidden = true,
+                Err(error) => notes.push(format!("could not hide keyboard: {}", error.message())),
+            }
+        }
+
+        Ok(TextResult {
+            text: text.to_string(),
+            cleared,
+            verified,
+            focused: UiMatch::from_node(&hierarchy_after, 0, focused_after),
+            before_text,
+            after_text,
+            keyboard_was_visible: keyboard_visible,
+            keyboard_hidden,
+            notes,
+        })
+    }
+
+    pub async fn wait(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        timeout: Duration,
+        absent: bool,
+    ) -> Result<WaitResult> {
+        let started = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_hierarchy = None;
+        while started.elapsed() <= timeout || attempts == 0 {
+            attempts += 1;
+            let hierarchy = self.dump(serial).await?;
+            let matches = find(&hierarchy, selector)?;
+            let present = !matches.is_empty();
+            if absent {
+                if !present {
+                    return Ok(WaitResult {
+                        present: false,
+                        matched: true,
+                        attempts,
+                        duration_ms: elapsed_ms(started),
+                        matched_element: None,
+                        hierarchy_package: hierarchy.package_name,
+                    });
+                }
+            } else if let Some(first) = matches.first() {
+                return Ok(WaitResult {
+                    present: true,
+                    matched: true,
+                    attempts,
+                    duration_ms: elapsed_ms(started),
+                    matched_element: Some(first.clone()),
+                    hierarchy_package: hierarchy.package_name,
+                });
+            }
+            last_hierarchy = Some((hierarchy, matches));
+            if started.elapsed() >= timeout {
+                break;
+            }
+            tokio::time::sleep(self.poll_interval).await;
+        }
+        let (hierarchy, matches) = last_hierarchy.unwrap_or_else(|| {
+            (
+                UiHierarchy {
+                    xml: String::new(),
+                    rotation: None,
+                    nodes: Vec::new(),
+                    root: None,
+                    package_name: None,
+                },
+                Vec::new(),
+            )
+        });
+        if absent {
+            Err(ForgeError::new(
+                ErrorCode::UiAssertionFailed,
+                "element still exists after waiting for its absence",
+            )
+            .with_context("selector", selector.describe())
+            .with_context(
+                "matches",
+                serde_json::to_value(matches).unwrap_or(Value::Null),
+            )
+            .with_suggestion(
+                "Inspect the current hierarchy and check whether the element is stale.",
+            )
+            .device(serial.to_string()))
+        } else {
+            let error = selector_not_found(&hierarchy, selector)
+                .with_context("wait_attempts", Value::from(attempts))
+                .with_context("wait_timeout_ms", Value::from(timeout.as_millis() as u64));
+            Err(error)
+        }
+    }
+
+    pub async fn assert(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        timeout: Duration,
+        absent: bool,
+    ) -> Result<WaitResult> {
+        self.wait(serial, selector, timeout, absent).await
+    }
+
+    pub async fn settle(&self, serial: &str, timeout: Duration) -> Result<SettleResult> {
+        let started = Instant::now();
+        let mut attempts = 0u32;
+        let mut previous: Option<String> = None;
+        loop {
+            attempts += 1;
+            let hierarchy = self.dump(serial).await?;
+            let xml = hierarchy.xml.clone();
+            if previous.as_deref() == Some(xml.as_str()) {
+                return Ok(SettleResult {
+                    stable: true,
+                    attempts,
+                    duration_ms: elapsed_ms(started),
+                    xml_sha256: androidforge_core::util::sha256_hex(xml.as_bytes()),
+                });
+            }
+            previous = Some(xml);
+            if started.elapsed() >= timeout {
+                return Err(ForgeError::new(
+                    ErrorCode::UiAssertionFailed,
+                    "UI hierarchy did not settle before the timeout",
+                )
+                .with_suggestion(
+                    "Increase the timeout or inspect the current screen for ongoing animation.",
+                )
+                .device(serial.to_string()));
+            }
+            tokio::time::sleep(self.settle_interval).await;
+        }
+    }
+
+    pub async fn focused(&self, serial: &str) -> Result<Vec<UiMatch>> {
+        let hierarchy = self.dump(serial).await?;
+        Ok(hierarchy
+            .focused()
+            .into_iter()
+            .enumerate()
+            .map(|(index, node)| UiMatch::from_node(&hierarchy, index, node))
+            .collect())
+    }
+
+    pub async fn scroll(
+        &self,
+        serial: &str,
+        direction: &str,
+        selector: Option<&Selector>,
+    ) -> Result<ScrollResult> {
+        let hierarchy = self.dump(serial).await?;
+        let selected_scrollable = if let Some(selector) = selector {
+            let selection = select(hierarchy.clone(), selector)?;
+            let node = selection.selected_node();
+            if node.scrollable {
+                Some(node.clone())
+            } else {
+                hierarchy
+                    .clickable_ancestor(node)
+                    .filter(|ancestor| ancestor.scrollable)
+                    .cloned()
+                    .or_else(|| {
+                        hierarchy
+                            .nodes
+                            .iter()
+                            .filter(|candidate| candidate.scrollable && candidate.visible())
+                            .max_by_key(|candidate| candidate.bounds.area())
+                            .cloned()
+                    })
+            }
+        } else {
+            hierarchy
+                .nodes
+                .iter()
+                .filter(|node| node.scrollable && node.visible())
+                .max_by_key(|node| node.bounds.area())
+                .cloned()
+        };
+        let display = self.display_size(serial, hierarchy.rotation).await;
+        let (target, used_node) = if let Some(node) = selected_scrollable {
+            (node.bounds, true)
+        } else {
+            let (width, height) = display.unwrap_or((1080, 2400));
+            (
+                Rect {
+                    left: 0,
+                    top: 0,
+                    right: width as i32,
+                    bottom: height as i32,
+                },
+                false,
+            )
+        };
+        let (x1, y1, x2, y2) = scroll_points(target, direction)?;
+        self.adb
+            .input_swipe(serial, x1 as u32, y1 as u32, x2 as u32, y2 as u32, 350)
+            .await?;
+        Ok(ScrollResult {
+            direction: direction.to_string(),
+            start_x: x1,
+            start_y: y1,
+            end_x: x2,
+            end_y: y2,
+            target_bounds: target,
+            used_scrollable_node: used_node,
+        })
+    }
+
+    pub async fn scroll_to(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        direction: &str,
+        max_swipes: u32,
+        timeout: Duration,
+    ) -> Result<ScrollToResult> {
+        selector.validate()?;
+        let started = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_hierarchy = None;
+        let mut notes = Vec::new();
+        while attempts <= max_swipes && started.elapsed() < timeout {
+            let hierarchy = self.dump(serial).await?;
+            let matches = find(&hierarchy, selector)?;
+            if let Some(first) = matches.first() {
+                return Ok(ScrollToResult {
+                    found: true,
+                    swipes: attempts,
+                    matched_element: Some(first.clone()),
+                    notes,
+                });
+            }
+            if attempts >= max_swipes {
+                last_hierarchy = Some(hierarchy);
+                break;
+            }
+            last_hierarchy = Some(hierarchy);
+            let scroll = self.scroll(serial, direction, None).await?;
+            if !scroll.used_scrollable_node {
+                notes.push("no scrollable container was found; used the display area".to_string());
+            }
+            attempts += 1;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        let hierarchy = last_hierarchy.unwrap_or_else(|| UiHierarchy {
+            xml: String::new(),
+            rotation: None,
+            nodes: Vec::new(),
+            root: None,
+            package_name: None,
+        });
+        let mut error = if hierarchy.nodes.is_empty() {
+            ForgeError::new(
+                ErrorCode::SelectorNotFound,
+                "selector was not found before scrolling exhausted",
+            )
+            .with_suggestion("Run `androidforge ui dump` and inspect the current hierarchy.")
+        } else {
+            selector_not_found(&hierarchy, selector)
+        };
+        error = error
+            .with_context_string("scroll_direction", direction)
+            .with_context_string("swipes", attempts.to_string());
+        Err(error)
+    }
+
+    pub async fn back(&self, serial: &str, hide_keyboard: bool) -> Result<BackResult> {
+        let keyboard_was_visible = self.adb.keyboard_shown(serial).await;
+        let mut keyboard_hidden = false;
+        if keyboard_was_visible == Some(true) {
+            if !hide_keyboard {
+                return Err(ForgeError::new(
+                    ErrorCode::ImeVisible,
+                    "the soft keyboard is visible; refusing to send Back because it would dismiss the keyboard instead of navigating",
+                )
+                .with_suggestion("Run `androidforge ui hide-keyboard` first.")
+                .with_suggestion("Or pass --hide-keyboard to dismiss the IME and then press Back.")
+                .device(serial.to_string()));
+            }
+            self.adb.hide_keyboard(serial).await?;
+            if self.adb.keyboard_shown(serial).await == Some(true) {
+                return Err(ForgeError::new(
+                    ErrorCode::ImeVisible,
+                    "the soft keyboard is still visible after attempting to hide it",
+                )
+                .with_suggestion("Dismiss the keyboard manually or retry.")
+                .device(serial.to_string()));
+            }
+            keyboard_hidden = true;
+        }
+        self.adb.keyevent(serial, "KEYCODE_BACK", None).await?;
+        Ok(BackResult {
+            keyboard_was_visible,
+            keyboard_hidden,
+            back_sent: true,
+        })
+    }
+
+    pub async fn home(&self, serial: &str) -> Result<KeyResult> {
+        self.adb.keyevent(serial, "KEYCODE_HOME", None).await?;
+        Ok(KeyResult {
+            keycode: "KEYCODE_HOME".to_string(),
+        })
+    }
+
+    pub async fn keyevent(&self, serial: &str, keycode: &str) -> Result<KeyResult> {
+        self.adb.keyevent(serial, keycode, None).await?;
+        Ok(KeyResult {
+            keycode: keycode.to_string(),
+        })
+    }
+
+    pub async fn hide_keyboard(&self, serial: &str) -> Result<bool> {
+        self.adb.hide_keyboard(serial).await
+    }
+
+    async fn tap_selection(&self, serial: &str, selection: Selection) -> Result<TapResult> {
+        let hierarchy = &selection.hierarchy;
+        let node = selection.selected_node();
+        let (target, ancestor) = self.tap_target(hierarchy, node)?;
+        let (x, y) = target.bounds.center();
+        let display = self.display_size(serial, hierarchy.rotation).await;
+        self.validate_point(serial, x, y, display)?;
+        if !target.enabled {
+            return Err(ForgeError::new(
+                ErrorCode::UiAssertionFailed,
+                "the matched UI element is disabled",
+            )
+            .with_context(
+                "element",
+                serde_json::to_value(UiMatch::from_node(hierarchy, 0, target))
+                    .unwrap_or(Value::Null),
+            )
+            .with_suggestion("Wait until the control is enabled or inspect the screen state.")
+            .device(serial.to_string()));
+        }
+        self.adb.input_tap(serial, x as u32, y as u32).await?;
+        Ok(TapResult {
+            matched: UiMatch::from_node(hierarchy, 0, node),
+            tap_x: x,
+            tap_y: y,
+            used_clickable_ancestor: ancestor.is_some(),
+            ancestor: ancestor.map(|node| UiMatch::from_node(hierarchy, 0, node)),
+            display_size: display,
+            rotation: hierarchy.rotation,
+        })
+    }
+
+    fn tap_target<'a>(
+        &self,
+        hierarchy: &'a UiHierarchy,
+        node: &'a UiNode,
+    ) -> Result<(&'a UiNode, Option<&'a UiNode>)> {
+        if node.visible() && node.clickable {
+            return Ok((node, None));
+        }
+        if self.tap_clickable_ancestor {
+            if let Some(ancestor) = hierarchy.clickable_ancestor(node) {
+                if ancestor.visible() {
+                    return Ok((ancestor, Some(ancestor)));
+                }
+            }
+        }
+        if node.visible() {
+            return Ok((node, None));
+        }
+        Err(ForgeError::new(
+            ErrorCode::SelectorNotFound,
+            "the matched element has no tappable bounds",
+        )
+        .with_context(
+            "element",
+            serde_json::to_value(UiMatch::from_node(hierarchy, 0, node)).unwrap_or(Value::Null),
+        )
+        .with_suggestion("Use `androidforge ui dump` to inspect the current bounds.")
+        .with_suggestion("Use a clickable ancestor selector or --x/--y as a fallback."))
+    }
+
+    async fn display_size(&self, serial: &str, rotation: Option<i32>) -> Option<(u32, u32)> {
+        let size = self.adb.display_size(serial).await?;
+        if matches!(rotation, Some(1) | Some(3)) {
+            Some((size.1, size.0))
+        } else {
+            Some(size)
+        }
+    }
+
+    fn validate_point(
+        &self,
+        serial: &str,
+        x: i32,
+        y: i32,
+        display: Option<(u32, u32)>,
+    ) -> Result<()> {
+        if let Some((width, height)) = display {
+            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                return Err(ForgeError::new(
+                    ErrorCode::InvalidArgument,
+                    format!(
+                        "coordinate ({x}, {y}) is outside the current display {width}x{height}"
+                    ),
+                )
+                .with_suggestion(
+                    "Coordinates are real device pixels in the current display orientation. Never scale from an unrelated screenshot.",
+                )
+                .device(serial.to_string()));
+            }
+        }
+        Ok(())
+    }
+
+    async fn wait_for_focused_field(
+        &self,
+        serial: &str,
+        targeted: bool,
+    ) -> Result<(UiHierarchy, usize, Option<bool>)> {
+        let started = Instant::now();
+        let timeout = Duration::from_secs(5);
+        let mut last_focused = Vec::new();
+        while started.elapsed() <= timeout {
+            let hierarchy = self.dump(serial).await?;
+            let keyboard = self.adb.keyboard_shown(serial).await;
+            let focused_ids = hierarchy
+                .nodes
+                .iter()
+                .filter(|node| node.focused)
+                .map(|node| node.id)
+                .collect::<Vec<_>>();
+            if focused_ids.is_empty() {
+                last_focused = Vec::new();
+            } else {
+                last_focused = focused_ids
+                    .iter()
+                    .map(|id| UiMatch::from_node(&hierarchy, 0, &hierarchy.nodes[*id]))
+                    .collect();
+                let editable = focused_ids
+                    .iter()
+                    .copied()
+                    .find(|id| hierarchy.nodes[*id].editable_like());
+                let chosen = editable.or_else(|| {
+                    if focused_ids.len() == 1
+                        && (keyboard == Some(true)
+                            || (targeted && hierarchy.nodes[focused_ids[0]].clickable))
+                    {
+                        Some(focused_ids[0])
+                    } else {
+                        None
+                    }
+                });
+                if let Some(id) = chosen {
+                    return Ok((hierarchy, id, keyboard));
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        let mut error = ForgeError::new(
+            ErrorCode::TextVerificationFailed,
+            "no editable field appears to be focused; refusing to send text to an unknown target",
+        )
+        .with_context(
+            "focused_nodes",
+            serde_json::to_value(last_focused).unwrap_or(Value::Null),
+        )
+        .with_suggestion("Tap the intended field first, or pass --selector with --text.")
+        .with_suggestion("Run `androidforge ui dump` and inspect the focused node.")
+        .with_suggestion(
+            "The soft keyboard may be hidden or the field may use nonstandard semantics.",
+        )
+        .device(serial.to_string());
+        if !targeted {
+            error = error.with_suggestion("Use `androidforge ui text <text> --selector ...`.");
+        }
+        Err(error)
+    }
+
+    async fn clear_focused_field(
+        &self,
+        serial: &str,
+        node: &UiNode,
+        notes: &mut Vec<String>,
+    ) -> Result<bool> {
+        let Some(current) = node.text.clone() else {
+            return Ok(false);
+        };
+        if current.is_empty() {
+            return Ok(false);
+        }
+        if node.text_is_hint() {
+            notes.push(
+                "the field only contains its hint/placeholder; no deletion was necessary"
+                    .to_string(),
+            );
+            return Ok(false);
+        }
+        self.adb.keyevent(serial, "KEYCODE_MOVE_END", None).await?;
+        let delete_count = if node.password {
+            current.chars().count().clamp(64, 300)
+        } else {
+            current.chars().count().min(300)
+        };
+        let mut remaining = delete_count;
+        while remaining > 0 {
+            let batch = remaining.min(80);
+            let mut args = vec!["input".to_string(), "keyevent".to_string()];
+            for _ in 0..batch {
+                args.push("KEYCODE_DEL".to_string());
+            }
+            self.adb
+                .shell_args(serial, &args, Some(Duration::from_secs(20)), None)
+                .await?;
+            remaining -= batch;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let after = self.dump(serial).await?;
+        let focused_after = after.nodes.iter().find(|candidate| candidate.focused);
+        if node.password {
+            notes.push("password field cannot be read back after clearing".to_string());
+            return Ok(true);
+        }
+        if let Some(after_node) = focused_after {
+            if after_node.text_is_placeholder_after_clear() {
+                if !after_node.text.as_deref().unwrap_or("").is_empty() {
+                    notes.push(
+                        "the field exposes its hint/placeholder as text after clearing; treating it as empty"
+                            .to_string(),
+                    );
+                }
+                return Ok(true);
+            }
+            return Err(ForgeError::new(
+                ErrorCode::TextVerificationFailed,
+                "the field still contains text after the clear operation",
+            )
+            .with_context(
+                "element",
+                serde_json::to_value(UiMatch::from_node(&after, 0, after_node)).unwrap_or(Value::Null),
+            )
+            .with_suggestion("The field may have a custom editor or the deletes were intercepted by the IME.")
+            .with_suggestion("Re-run the operation after tapping the field; use --no-verify only when necessary.")
+            .device(serial.to_string()));
+        }
+        Err(ForgeError::new(
+            ErrorCode::TextVerificationFailed,
+            "focus was lost while clearing the field",
+        )
+        .with_suggestion("Tap the field again and retry.")
+        .device(serial.to_string()))
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn scroll_points(bounds: Rect, direction: &str) -> Result<(i32, i32, i32, i32)> {
+    let width = bounds.width();
+    let height = bounds.height();
+    if width < 20 || height < 20 {
+        return Err(ForgeError::new(
+            ErrorCode::UiAssertionFailed,
+            "scroll target has no usable bounds",
+        ));
+    }
+    let cx = bounds.left + width / 2;
+    let cy = bounds.top + height / 2;
+    let inset_x = (width as f64 * 0.18) as i32;
+    let inset_y = (height as f64 * 0.18) as i32;
+    Ok(match direction {
+        "down" => (cx, bounds.bottom - inset_y, cx, bounds.top + inset_y),
+        "up" => (cx, bounds.top + inset_y, cx, bounds.bottom - inset_y),
+        "right" => (bounds.left + inset_x, cy, bounds.right - inset_x, cy),
+        "left" => (bounds.right - inset_x, cy, bounds.left + inset_x, cy),
+        _ => {
+            return Err(ForgeError::invalid_argument(format!(
+                "unsupported scroll direction '{direction}'; expected up, down, left or right"
+            )));
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_points_respect_direction() {
+        let bounds = Rect {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 2000,
+        };
+        let (_, y1, _, y2) = scroll_points(bounds, "down").unwrap();
+        assert!(y1 > y2);
+        let (_, y1, _, y2) = scroll_points(bounds, "up").unwrap();
+        assert!(y1 < y2);
+    }
+}

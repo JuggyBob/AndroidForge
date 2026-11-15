@@ -1,0 +1,14 @@
+version = 1
+name = "release-smoke"
+description = "App launch, first-run onboarding, process/task liveness, widget-intent hooks, Settings navigation, screen recording and diagnostics."
+setup_fixture = "smoke"
+
+[flow]
+type = "script"
+command = ["python", "conformance/release_smoke.py"]
+timeout_secs = 300
+
+[expect]
+status = "success"
+exit_code = 0
+artifacts = ["screenshots/*.png", "recordings/*.mp4"]

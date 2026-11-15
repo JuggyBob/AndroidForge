@@ -1,0 +1,31 @@
+version = 1
+name = "smoke"
+description = "Launch CalcSuite 3.x and verify its main shell is visible before the updater conformance."
+default_timeout_secs = 60
+requires_confirmation = false
+
+[[steps]]
+name = "stop a previous process"
+phase = "pre-test"
+action = { type = "force_stop", package = "com.calcsuite" }
+
+[[steps]]
+name = "launch CalcSuite"
+phase = "pre-test"
+action = { type = "launch", package = "com.calcsuite" }
+
+[[steps]]
+name = "assert app title"
+phase = "pre-test"
+action = { type = "assert", text_contains = "Calc Suite", timeout_secs = 15 }
+
+[[steps]]
+name = "assert category shell"
+phase = "pre-test"
+capture = "always"
+action = { type = "assert", text = "Categories", timeout_secs = 15 }
+
+[[steps]]
+name = "ignore cleanup example"
+phase = "cleanup"
+action = { type = "assert", text_contains = "Calc Suite", timeout_secs = 15 }

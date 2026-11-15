@@ -1,0 +1,22 @@
+[package]
+name = "androidforge-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "UI hierarchy parsing, semantic selectors and interaction for AndroidForge"
+repository.workspace = true
+publish = false
+
+[dependencies]
+androidforge-core.workspace = true
+androidforge-process.workspace = true
+androidforge-adb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+roxmltree.workspace = true
+regex.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

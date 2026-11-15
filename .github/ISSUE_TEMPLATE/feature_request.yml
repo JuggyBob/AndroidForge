@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a workflow or capability for AndroidForge
+title: "[feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is currently hard, unsafe or impossible?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should AndroidForge do? Include the command or JSON shape if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, existing tools, or why they do not fit.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Devices / emulators
+        - Sessions / ownership
+        - APK / app install
+        - UI automation
+        - Evidence / diagnostics
+        - Fixtures / hooks
+        - Conformance / reports
+        - Agent integration / JSON
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions first.
+          required: true
+        - label: This request keeps project-specific behavior out of the Rust core.
+          required: true

@@ -1,0 +1,15 @@
+[package]
+name = "androidforge-test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Fake external tools used by AndroidForge integration tests"
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "fake-android-tool"
+path = "src/main.rs"
+
+[dependencies]

@@ -1,0 +1,14 @@
+version = 1
+name = "release-smoke"
+description = "Debug-build smoke: app foreground, semantic Settings navigation, real background-check hook, permission state and evidence."
+setup_fixture = "smoke"
+
+[flow]
+type = "script"
+command = ["python", "conformance/release_smoke.py"]
+timeout_secs = 240
+
+[expect]
+status = "success"
+exit_code = 0
+artifacts = ["screenshots/*.png"]

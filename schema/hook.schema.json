@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/hook.schema.json",
+  "title": "AndroidForge debug hook",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": { "enum": ["broadcast", "deep-link", "shell", "instrumentation", "command"] },
+    "description": { "type": "string" },
+    "action": { "type": "string" },
+    "component": { "type": "string" },
+    "uri": { "type": "string" },
+    "package": { "type": "string" },
+    "command": { "type": "array", "items": { "type": "string" } },
+    "extras": { "type": "object", "additionalProperties": { "type": "string" } },
+    "timeout_secs": { "type": "integer", "minimum": 1 },
+    "idempotent": { "type": "boolean" },
+    "run_as": { "type": "boolean" },
+    "kind": { "type": "string" },
+    "verify": {
+      "type": "object",
+      "properties": {
+        "shell": { "type": "string" },
+        "command": { "type": "array", "items": { "type": "string" } },
+        "expect_contains": { "type": "string" },
+        "expect_not_contains": { "type": "string" },
+        "must_change": { "type": "boolean" },
+        "timeout_secs": { "type": "integer", "minimum": 1 },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

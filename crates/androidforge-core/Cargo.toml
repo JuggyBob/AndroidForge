@@ -1,0 +1,25 @@
+[package]
+name = "androidforge-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Core configuration, errors, sessions, artifacts and run reports for AndroidForge"
+repository.workspace = true
+publish = false
+
+[dependencies]
+androidforge-process.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+fs2.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

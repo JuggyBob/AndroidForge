@@ -1,0 +1,13 @@
+version = 1
+name = "release-smoke"
+description = "Thin conformance flow: one real UI assertion, no custom scripting language."
+setup_fixture = "smoke"
+
+[flow]
+type = "script"
+command = ["python", "conformance/release_smoke.py"]
+timeout_secs = 120
+
+[expect]
+status = "success"
+exit_code = 0

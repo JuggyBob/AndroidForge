@@ -1,0 +1,83 @@
+# DiscountHunter adapter example.
+# This file is project-specific; the Rust core has no DiscountHunter branch.
+adapter_version = 1
+min_androidforge_version = "0.1.0"
+
+[project]
+name = "DiscountHunter"
+package = "com.discounthunter.android"
+debug_package = "com.discounthunter.android.debug"
+# Debug builds use the standard Android debug certificate. Add the release
+# certificate here after inspecting a release APK with `androidforge apk inspect`.
+expected_cert_sha256 = ["C1FD411DC1DA096FD12001EC5B71DA212C91E13442BA289D2C8F36A72F0ED691"]
+default_avd = "dh36"
+artifact_dir = ".artifacts"
+retention_days = 14
+verify_installed_apk = true
+
+[fixtures]
+directory = ".androidforge/fixtures"
+default = "smoke"
+
+[conformance]
+flow = ".androidforge/conformance/release-smoke.toml"
+
+[ui]
+backend = "uiautomator"
+default_timeout_secs = 20
+poll_interval_ms = 300
+settle_interval_ms = 400
+text_verify = true
+tap_clickable_ancestor = true
+
+[timeouts]
+command_secs = 30
+adb_secs = 30
+install_secs = 300
+boot_secs = 300
+ui_secs = 20
+
+[diagnostics]
+logcat_tail_lines = 2000
+max_log_bytes = 5242880
+capture_on_failure = true
+redact = true
+include_dumps = true
+record_max_seconds = 180
+logcat_max_seconds = 900
+
+# The receiver is not exported, but an explicit shell broadcast can still
+# address it on a debuggable build. This is the app's real background-check
+# entry point, not a guessed JobScheduler id.
+[hooks.check-deals]
+type = "broadcast"
+description = "Ask the app to run its idempotent background deal check"
+action = "com.discounthunter.android.action.CHECK_DEALS"
+component = "com.discounthunter.android.debug/com.discounthunter.android.alerts.DealAlertReceiver"
+timeout_secs = 30
+idempotent = true
+# The receiver is not exported. Send the explicit broadcast as the app UID so
+# the app can receive its own debug trigger without weakening the manifest.
+run_as = true
+
+# ADB exit 0 is not proof that the app performed a check. Require the app's
+# own status record to change before this hook is considered successful.
+[hooks.check-deals.verify]
+shell = "run-as com.discounthunter.android.debug cat files/alerts/status.json"
+must_change = true
+timeout_secs = 30
+
+[hooks.open-deal-link]
+type = "deep-link"
+description = "Open the store-page deep link declared by the app"
+uri = "https://store.steampowered.com/app/570/Dota_2/"
+package = "com.discounthunter.android.debug"
+timeout_secs = 30
+idempotent = false
+
+[hooks.open-notification-settings]
+type = "shell"
+description = "Open this package's notification settings for channel diagnosis"
+action = "am start -a android.settings.APP_NOTIFICATION_SETTINGS --es android.provider.extra.APP_PACKAGE com.discounthunter.android.debug"
+timeout_secs = 30
+idempotent = true

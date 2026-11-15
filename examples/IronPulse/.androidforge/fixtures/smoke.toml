@@ -1,0 +1,20 @@
+version = 1
+name = "smoke"
+description = "Force-stop, launch and verify that IronPulse renders a real app surface. The conformance handles first-run onboarding."
+default_timeout_secs = 120
+requires_confirmation = false
+
+[[steps]]
+name = "stop a previous process"
+phase = "pre-test"
+action = { type = "force_stop" }
+
+[[steps]]
+name = "launch IronPulse"
+phase = "pre-test"
+action = { type = "launch" }
+
+[[steps]]
+name = "assert an IronPulse surface"
+phase = "pre-test"
+action = { type = "assert", text_contains = "IronPulse", timeout_secs = 30 }

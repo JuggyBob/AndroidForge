@@ -1,0 +1,73 @@
+# IronPulse adapter example.
+# This file is project-specific; the Rust core has no IronPulse branch.
+adapter_version = 1
+min_androidforge_version = "0.1.0"
+
+[project]
+name = "IronPulse"
+package = "com.aistudio.fitness.ironpulse"
+debug_package = "com.aistudio.fitness.ironpulse"
+# 4.4.0 release certificate and the standard Android debug certificate used by
+# debug builds. `apk inspect` records both; this list only declares expectations.
+expected_cert_sha256 = [
+  "46893F8E6C463E01B7B849AEF18098331E4C162325E906D86762F16A6430BB2C",
+  "C1FD411DC1DA096FD12001EC5B71DA212C91E13442BA289D2C8F36A72F0ED691",
+]
+default_avd = "ipwork"
+artifact_dir = ".artifacts"
+retention_days = 14
+verify_installed_apk = true
+
+[fixtures]
+directory = ".androidforge/fixtures"
+default = "smoke"
+
+[conformance]
+flow = ".androidforge/conformance/release-smoke.toml"
+
+[ui]
+backend = "uiautomator"
+default_timeout_secs = 20
+poll_interval_ms = 300
+settle_interval_ms = 400
+text_verify = true
+tap_clickable_ancestor = true
+
+[timeouts]
+command_secs = 30
+adb_secs = 30
+install_secs = 300
+boot_secs = 300
+ui_secs = 20
+
+[diagnostics]
+logcat_tail_lines = 2000
+max_log_bytes = 5242880
+capture_on_failure = true
+redact = true
+include_dumps = true
+record_max_seconds = 180
+logcat_max_seconds = 900
+
+# The widget-provider actions are real activity intents handled by MainActivity.
+# They are not deep links: the activity reads the intent action.
+[hooks.focus-streak]
+type = "shell"
+description = "Open Home and focus the streak card, the same path as the streak widget"
+action = "am start -W -n com.aistudio.fitness.ironpulse/com.example.MainActivity -a com.example.widget.OPEN_STREAK"
+timeout_secs = 30
+idempotent = true
+
+[hooks.open-profile]
+type = "shell"
+description = "Open the profile tab, the same path as the profile widget"
+action = "am start -W -n com.aistudio.fitness.ironpulse/com.example.MainActivity -a com.example.widget.OPEN_PROFILE"
+timeout_secs = 30
+idempotent = true
+
+[hooks.open-notification-settings]
+type = "shell"
+description = "Open this package's notification settings"
+action = "am start -a android.settings.APP_NOTIFICATION_SETTINGS --es android.provider.extra.APP_PACKAGE com.aistudio.fitness.ironpulse"
+timeout_secs = 30
+idempotent = true

@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: release-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --release
+
+      - name: Package binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path target\release\androidforge.exe -DestinationPath dist\androidforge-windows-x86_64.zip -Force
+          $hash = (Get-FileHash dist\androidforge-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  androidforge-windows-x86_64.zip" | Set-Content dist\SHA256SUMS.txt -Encoding ascii
+          Get-Content dist\SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: androidforge-windows-x86_64
+          path: |
+            dist/androidforge-windows-x86_64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if (-not $tag.StartsWith("v")) {
+            throw "Release workflow must run from a v* tag, got '$tag'"
+          }
+          gh release create $tag `
+            dist/androidforge-windows-x86_64.zip `
+            dist/SHA256SUMS.txt `
+            --title "AndroidForge $tag (Alpha)" `
+            --prerelease `
+            --generate-notes

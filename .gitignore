@@ -1,0 +1,42 @@
+# Rust / build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# AndroidForge runtime state and evidence
+.artifacts/
+**/.androidforge/current-session
+**/.androidforge/current-run
+*.tmp
+*.log
+
+# Raw case-study evidence can contain machine paths, device logs and app data.
+# Keep local run directories out of the public repository; the case-study
+# README files record the run ids and results.
+case-studies/*/*-run/
+case-studies/*/*.json
+
+# Local release packaging
+/dist/
+
+# Android build outputs
+*.apk
+*.aab
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+keystore.properties
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# AndroidForge writes runs under .artifacts/ by default.
+# Add the line below to your Android project's .gitignore:
+# .artifacts/

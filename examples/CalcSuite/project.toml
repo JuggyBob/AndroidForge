@@ -1,0 +1,51 @@
+# CalcSuite adapter example. This file is project-specific; the Rust core has no CalcSuite branch.
+adapter_version = 1
+min_androidforge_version = "0.1.0"
+
+[project]
+name = "CalcSuite"
+package = "com.calcsuite"
+debug_package = "com.calcsuite"
+expected_cert_sha256 = ["55071A2393348B9C2F44DDE98D21277F1666A56040DECD51C0B83F377A6F9E02"]
+default_avd = "dh36"
+artifact_dir = ".artifacts"
+retention_days = 14
+verify_installed_apk = true
+
+[fixtures]
+directory = ".androidforge/fixtures"
+default = "smoke"
+
+[conformance]
+flow = ".androidforge/conformance/release-smoke.toml"
+
+[ui]
+backend = "uiautomator"
+default_timeout_secs = 15
+poll_interval_ms = 300
+settle_interval_ms = 400
+text_verify = true
+tap_clickable_ancestor = true
+
+[timeouts]
+command_secs = 30
+adb_secs = 30
+install_secs = 300
+boot_secs = 300
+ui_secs = 15
+
+[diagnostics]
+logcat_tail_lines = 2000
+max_log_bytes = 5242880
+capture_on_failure = true
+redact = true
+include_dumps = true
+record_max_seconds = 180
+logcat_max_seconds = 900
+
+[hooks.open-settings]
+type = "shell"
+description = "Open Android settings without guessing an app-specific intent"
+action = "am start -a android.settings.SETTINGS"
+timeout_secs = 30
+idempotent = true

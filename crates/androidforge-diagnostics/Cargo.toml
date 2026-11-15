@@ -1,0 +1,24 @@
+[package]
+name = "androidforge-diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Logcat, dumpsys, capture and evidence collection for AndroidForge"
+repository.workspace = true
+publish = false
+
+[dependencies]
+androidforge-core.workspace = true
+androidforge-process.workspace = true
+androidforge-adb.workspace = true
+androidforge-app.workspace = true
+androidforge-ui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

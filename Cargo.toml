@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/androidforge-cli",
+    "crates/androidforge-core",
+    "crates/androidforge-process",
+    "crates/androidforge-adb",
+    "crates/androidforge-emulator",
+    "crates/androidforge-app",
+    "crates/androidforge-ui",
+    "crates/androidforge-diagnostics",
+    "crates/androidforge-automation",
+    "crates/androidforge-test-support",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["AndroidForge contributors"]
+repository = "https://github.com/JuggyBob/AndroidForge"
+
+[workspace.dependencies]
+androidforge-core = { path = "crates/androidforge-core" }
+androidforge-process = { path = "crates/androidforge-process" }
+androidforge-adb = { path = "crates/androidforge-adb" }
+androidforge-emulator = { path = "crates/androidforge-emulator" }
+androidforge-app = { path = "crates/androidforge-app" }
+androidforge-ui = { path = "crates/androidforge-ui" }
+androidforge-diagnostics = { path = "crates/androidforge-diagnostics" }
+androidforge-automation = { path = "crates/androidforge-automation" }
+
+clap = { version = "4.6", features = ["derive", "env", "string", "wrap_help", "suggestions"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9"
+thiserror = "2.0"
+tokio = { version = "1.54", features = ["rt", "macros", "process", "time", "io-util", "sync"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.29", features = ["v4", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+roxmltree = "0.21"
+regex = "1.11"
+fs2 = "0.4"
+base64 = "0.22"
+
+assert_cmd = "2.2"
+predicates = "3.1"
+tempfile = "3.27"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true

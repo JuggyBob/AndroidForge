@@ -1,0 +1,23 @@
+version = 1
+name = "debug-file-roundtrip"
+description = "Debuggable-build-only proof that app-private file push/pull works through run-as. It does not claim to seed Room or DataStore state."
+default_timeout_secs = 120
+requires_confirmation = false
+
+[vars]
+MARKER = "${PROJECT_ROOT}/.androidforge/fixtures/debug-marker.json"
+
+[[steps]]
+name = "stop a previous process"
+phase = "pre-test"
+action = { type = "force_stop" }
+
+[[steps]]
+name = "push a marker into app-private files"
+phase = "pre-test"
+action = { type = "app_file_push", local = "${MARKER}", remote = "files/androidforge-fixture-marker.json" }
+
+[[steps]]
+name = "pull the marker back"
+phase = "post-test"
+action = { type = "app_file_pull", remote = "files/androidforge-fixture-marker.json", local = "${PROJECT_ROOT}/.artifacts/androidforge-fixture-marker.json" }

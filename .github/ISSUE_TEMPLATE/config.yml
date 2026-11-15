@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/JuggyBob/AndroidForge/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Usage and troubleshooting
+    url: https://github.com/JuggyBob/AndroidForge/blob/main/USER_GUIDE.md
+    about: Read the user guide before opening a usage question.

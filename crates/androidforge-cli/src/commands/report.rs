@@ -1,0 +1,730 @@
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use androidforge_core::error::{ErrorCode, ForgeError, Result};
+use androidforge_core::model::BuildIdentity;
+use androidforge_core::output::CommandSuccess;
+use androidforge_core::run::{
+    RunContext, RunOptions, RunReport, RunStatus, clear_active_run, get_active_run, list_runs,
+    resolve_run_dir, set_active_run,
+};
+use androidforge_core::util::parse_duration;
+
+use crate::cli::{ReportCommand, RunCommand, RunEndArgs, RunExecArgs, RunStartArgs};
+use crate::commands::common::success;
+use crate::context::CliContext;
+use crate::junit::import_junit;
+use crate::run_scope::tool_versions;
+
+pub async fn run_command(ctx: &CliContext, command: &RunCommand) -> Result<CommandSuccess> {
+    match command {
+        RunCommand::Start(args) => run_start(ctx, args).await,
+        RunCommand::End(args) => run_end(ctx, args).await,
+        RunCommand::Status => run_status_command(ctx).await,
+        RunCommand::Exec(args) => run_exec(ctx, args).await,
+    }
+}
+
+async fn run_start(ctx: &CliContext, args: &RunStartArgs) -> Result<CommandSuccess> {
+    if ctx.dry_run {
+        return Ok(success(
+            "run.start",
+            serde_json::json!({"dry_run": true, "name": args.name}),
+            format!("Would start run '{}'.\n", args.name),
+        ));
+    }
+    let session = ctx.load_session(false)?;
+    let mut options = RunOptions::new(
+        ctx.paths.artifacts_dir.clone(),
+        ctx.paths.project_root.clone(),
+        ctx.config.project_name(),
+        "run.start",
+    );
+    options.name = Some(args.name.clone());
+    options.project_config = ctx.paths.project_config_path.clone();
+    options.session_id = session.as_ref().map(|session| session.id.clone());
+    options.build = crate::run_scope::build_identity_for_run(ctx, session.as_ref()).await;
+    options.tool_versions = tool_versions(ctx);
+    let run = RunContext::create(options, ctx.redactor())?;
+    set_active_run(
+        &ctx.paths,
+        session.as_ref().map(|session| session.id.as_str()),
+        &run.run_id,
+        &ctx.paths.project_root,
+    )?;
+    let human = format!(
+        "Run {}\nreport: {}\n\nUse --run {} on subsequent commands, or export:\n  ANDROIDFORGE_RUN_ID={}\n",
+        run.run_id,
+        run.report_path().display(),
+        run.run_id,
+        run.run_id
+    );
+    Ok(success(
+        "run.start",
+        serde_json::json!({
+            "run_id": run.run_id,
+            "report_path": run.report_path(),
+            "artifact_directory": run.dir,
+            "env": {"ANDROIDFORGE_RUN_ID": run.run_id},
+        }),
+        human,
+    )
+    .with_optional_session(session.map(|session| session.id))
+    .with_run(run.run_id))
+}
+
+async fn run_end(ctx: &CliContext, args: &RunEndArgs) -> Result<CommandSuccess> {
+    let (run_id, session_id, _) = resolve_active_run(ctx)?;
+    let mut run = RunContext::open(&ctx.paths.artifacts_dir, &run_id, ctx.redactor())?;
+    if run.report.status != RunStatus::Running {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            format!("run {run_id} is already {:?}", run.report.status),
+        )
+        .with_suggestion("Start a new run with `androidforge run start --name <name>`.")
+        .with_context_string("run_id", run_id));
+    }
+    let failed_steps = run.report.failed_steps();
+    let requested = args.status.as_deref();
+    let status = match requested {
+        None if failed_steps > 0 => RunStatus::Failed,
+        None => RunStatus::Passed,
+        Some("passed" | "pass" | "success") if failed_steps > 0 && !args.allow_failures => {
+            return Err(ForgeError::invalid_argument(format!(
+                "run {run_id} has {failed_steps} failed step(s); refusing to finalize it as passed"
+            ))
+            .with_context_string("run_id", &run_id)
+            .with_context("failed_steps", serde_json::json!(failed_steps))
+            .with_suggestion("Inspect the failed steps with `androidforge report show <run>`.")
+            .with_suggestion("Use `--status failed` to record the failure.")
+            .with_suggestion(
+                "Use `--allow-failures` only when deliberately keeping a failed run marked passed.",
+            ));
+        }
+        Some("passed" | "pass" | "success") => RunStatus::Passed,
+        Some("failed" | "fail" | "failure") => RunStatus::Failed,
+        Some("partial") => RunStatus::Partial,
+        Some(other) => {
+            return Err(ForgeError::invalid_argument(format!(
+                "unknown run status '{other}'; use passed, failed or partial"
+            )));
+        }
+    };
+    let default_exit = match status {
+        RunStatus::Passed => 0,
+        RunStatus::Failed => 6,
+        RunStatus::Partial => 10,
+        _ => 0,
+    };
+    let exit_code = args
+        .exit_code
+        .filter(|code| *code != 0 || status == RunStatus::Passed)
+        .unwrap_or(default_exit);
+    run.finalize(status, exit_code)?;
+    // `--run` may name the session's active run. Clear the pointer only when
+    // it still points at the run we just finalized; ending one run must not
+    // forget a different active run in the same session.
+    if get_active_run(&ctx.paths, session_id.as_deref())?
+        .is_some_and(|active| active.run_id == run_id)
+    {
+        clear_active_run(&ctx.paths, session_id.as_deref())?;
+    }
+    let report = serde_json::to_value(&run.report)?;
+    if status != RunStatus::Passed {
+        let code = if status == RunStatus::Partial {
+            ErrorCode::PartialFailure
+        } else {
+            ErrorCode::CommandFailed
+        };
+        return Err(ForgeError::new(
+            code,
+            format!(
+                "run {run_id} finalized as {:?} with {} failed step(s)",
+                status, failed_steps
+            ),
+        )
+        .with_context("report", report)
+        .with_context_string("report_path", run.report_path().to_string_lossy())
+        .with_context_string("run_id", &run_id)
+        .with_suggestion("Inspect `report.json` and the failure artifacts before retrying.")
+        .with_exit_code(exit_code));
+    }
+    Ok(success(
+        "run.end",
+        report,
+        format!(
+            "Run {run_id} finalized as {:?} (exit {}).\nReport: {}\n",
+            status,
+            exit_code,
+            run.report_path().display()
+        ),
+    )
+    .with_optional_session(session_id)
+    .with_run(run_id))
+}
+
+async fn run_status_command(ctx: &CliContext) -> Result<CommandSuccess> {
+    let (run_id, session_id, _) = resolve_active_run(ctx)?;
+    let run = RunContext::open(&ctx.paths.artifacts_dir, &run_id, ctx.redactor())?;
+    let summary = summary_json(&run.report, &run.dir);
+    Ok(
+        success("run.status", summary, report_human(&run.report, &run.dir))
+            .with_optional_session(session_id)
+            .with_run(run_id),
+    )
+}
+
+async fn run_exec(ctx: &CliContext, args: &RunExecArgs) -> Result<CommandSuccess> {
+    let session = ctx.require_session()?;
+    let device = ctx.resolve_device(Some(&session)).await?;
+    let mut options =
+        androidforge_automation::ExternalRunOptions::new(args.program.clone(), args.name.clone());
+    options.timeout = ctx.parse_timeout(
+        args.timeout.as_deref(),
+        ctx.config.file.timeouts.command_secs,
+    )?;
+    options.capture_logcat = args.capture_logcat;
+    options.capture_screen = args.capture_screen;
+    options.trace = ctx.trace;
+    options.package = ctx.config.package().map(str::to_string);
+    execute_in_run!(
+        ctx,
+        "run.exec",
+        Some("run exec"),
+        Some(&session),
+        Some(&device),
+        false,
+        |run| async {
+            let app = ctx.app_manager()?;
+            let ui = ctx.ui_manager()?;
+            let result = androidforge_automation::run_external(
+                &app.adb,
+                &app,
+                &ui,
+                &session,
+                run,
+                &ctx.paths.project_root,
+                &options,
+            )
+            .await?;
+            if !result.success {
+                return Err(ForgeError::new(
+                    if result.timed_out {
+                        ErrorCode::CommandTimeout
+                    } else {
+                        ErrorCode::CommandFailed
+                    },
+                    format!(
+                        "external command '{}' {}",
+                        result.command,
+                        if result.timed_out {
+                            "timed out"
+                        } else {
+                            "failed"
+                        }
+                    ),
+                )
+                .with_context(
+                    "external_result",
+                    serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+                )
+                .with_artifacts(result.artifacts.clone())
+                .with_suggestion("Inspect stdout/stderr artifacts and the run report.")
+                .session(session.id.clone())
+                .device(device.serial.clone()));
+            }
+            Ok(success(
+                "run.exec",
+                serde_json::to_value(&result)?,
+                format!(
+                    "External command completed in {}ms (exit {}).\n",
+                    result.duration_ms,
+                    result
+                        .exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                ),
+            )
+            .with_artifacts(result.artifacts)
+            .with_session(session.id.clone())
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
+}
+
+pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<CommandSuccess> {
+    match command {
+        ReportCommand::List { limit } => {
+            let runs = list_runs(&ctx.paths.artifacts_dir)?;
+            let total = runs.len();
+            let mut human = String::new();
+            if runs.is_empty() {
+                human.push_str("No runs found.\n");
+            } else {
+                human.push_str(&format!(
+                    "{} run(s) in {}\n",
+                    total,
+                    ctx.paths.artifacts_dir.join("runs").display()
+                ));
+                for run in runs.iter().take(*limit) {
+                    human.push_str(&format!(
+                        "  {}  {:?}  failed={}  {}\n",
+                        run.run_id, run.status, run.failed_steps, run.command
+                    ));
+                }
+            }
+            Ok(success(
+                "report.list",
+                serde_json::json!({
+                    "count": total,
+                    "limit": limit,
+                    "runs": runs.into_iter().take(*limit).collect::<Vec<_>>(),
+                }),
+                human,
+            ))
+        }
+        ReportCommand::Show { run } => {
+            let dir = resolve_report_dir(ctx, run)?;
+            let report: RunReport = androidforge_core::util::read_json(&dir.join("report.json"))?;
+            Ok(success(
+                "report.show",
+                serde_json::to_value(&report)?,
+                report_human(&report, &dir),
+            ))
+        }
+        ReportCommand::Path { run } => {
+            let dir = resolve_report_dir(ctx, run)?;
+            Ok(success(
+                "report.path",
+                serde_json::json!({
+                    "run_id": dir.file_name().map(|name| name.to_string_lossy().into_owned()),
+                    "path": dir,
+                    "report": dir.join("report.json"),
+                    "manifest": dir.join("manifest.json"),
+                    "metadata": dir.join("metadata.json"),
+                }),
+                format!("{}\n", dir.display()),
+            ))
+        }
+        ReportCommand::Prune(args) => prune(ctx, args).await,
+        ReportCommand::Import { command } => match command {
+            crate::cli::ReportImportCommand::Junit { paths } => {
+                import_junit_report(ctx, paths).await
+            }
+        },
+    }
+}
+
+async fn import_junit_report(
+    ctx: &CliContext,
+    inputs: &[std::path::PathBuf],
+) -> Result<CommandSuccess> {
+    let files = collect_junit_files(ctx, inputs)?;
+    let active = resolve_optional_run(ctx)?;
+    if ctx.dry_run {
+        return Ok(success(
+            "report.import.junit",
+            serde_json::json!({"dry_run": true, "files": files}),
+            format!("Would import {} JUnit XML file(s).\n", files.len()),
+        ));
+    }
+    let mut implicit = false;
+    let mut run = if let Some(run_id) = &active {
+        RunContext::open(&ctx.paths.artifacts_dir, run_id, ctx.redactor())?
+    } else {
+        let mut options = RunOptions::new(
+            ctx.paths.artifacts_dir.clone(),
+            ctx.paths.project_root.clone(),
+            ctx.config.project_name(),
+            "report.import.junit",
+        );
+        options.name = Some("junit-import".to_string());
+        options.project_config = ctx.paths.project_config_path.clone();
+        options.build = BuildIdentity {
+            package: ctx.config.debug_package().map(str::to_string),
+            ..BuildIdentity::default()
+        };
+        options.tool_versions = tool_versions(ctx);
+        implicit = true;
+        RunContext::create(options, ctx.redactor())?
+    };
+    let mut passed = true;
+    let mut suites = 0usize;
+    let mut tests = 0usize;
+    let mut failures = 0usize;
+    let mut errors = 0usize;
+    let mut skipped = 0usize;
+    let mut cases = Vec::new();
+    let mut artifacts = Vec::new();
+    for file in &files {
+        let summary = import_junit(&mut run, file)?;
+        passed &= summary.passed;
+        suites += summary.suites;
+        tests += summary.tests;
+        failures += summary.failures;
+        errors += summary.errors;
+        skipped += summary.skipped;
+        cases.extend(summary.cases);
+        artifacts.push(summary.artifact);
+    }
+    let result = serde_json::json!({
+        "passed": passed,
+        "files": artifacts,
+        "suites": suites,
+        "tests": tests,
+        "failures": failures,
+        "errors": errors,
+        "skipped": skipped,
+        "cases": cases,
+    });
+    if !passed {
+        let error = ForgeError::new(
+            ErrorCode::UiAssertionFailed,
+            format!("JUnit import reports {failures} failure(s) and {errors} error(s)"),
+        )
+        .with_context("junit", result.clone())
+        .with_artifacts(artifacts.clone())
+        .with_suggestion("Inspect the merged run report and the original JUnit XML.")
+        .with_context_string("run_id", run.run_id.clone());
+        if implicit {
+            run.finalize_failure(&error)?;
+        }
+        return Err(error);
+    }
+    if implicit {
+        run.finalize_pass()?;
+    }
+    Ok(success(
+        "report.import.junit",
+        result,
+        format!(
+            "Imported {tests} JUnit test(s) from {} file(s): {failures} failure(s), {errors} error(s), {skipped} skipped.\n",
+            files.len()
+        ),
+    )
+    .with_artifacts(artifacts)
+    .with_run(run.run_id))
+}
+
+fn collect_junit_files(
+    ctx: &CliContext,
+    inputs: &[std::path::PathBuf],
+) -> Result<Vec<std::path::PathBuf>> {
+    let mut files = Vec::new();
+    for input in inputs {
+        let path = if input.is_absolute() {
+            input.clone()
+        } else {
+            ctx.paths.cwd.join(input)
+        };
+        if path.is_dir() {
+            collect_xml_files(&path, &mut files)?;
+        } else if path.is_file() {
+            files.push(path);
+        } else {
+            return Err(ForgeError::new(
+                ErrorCode::JunitInvalid,
+                format!(
+                    "JUnit input {} was not found; pass an XML file or a directory",
+                    path.display()
+                ),
+            )
+            .with_suggestion(
+                "Gradle writes reports under app/build/test-results/<variant>/ as a directory of XML files.",
+            ));
+        }
+    }
+    files.sort();
+    files.dedup();
+    if files.is_empty() {
+        return Err(ForgeError::new(
+            ErrorCode::JunitInvalid,
+            "no JUnit XML files were found",
+        ));
+    }
+    Ok(files)
+}
+
+fn collect_xml_files(
+    directory: &std::path::Path,
+    files: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    let entries = std::fs::read_dir(directory).map_err(|error| {
+        ForgeError::new(
+            ErrorCode::JunitInvalid,
+            format!(
+                "could not read JUnit directory {}: {error}",
+                directory.display()
+            ),
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            ForgeError::new(
+                ErrorCode::JunitInvalid,
+                format!("could not read a JUnit directory entry: {error}"),
+            )
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_xml_files(&path, files)?;
+        } else if path.extension().and_then(|value| value.to_str()) == Some("xml") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+async fn prune(ctx: &CliContext, args: &crate::cli::ReportPruneArgs) -> Result<CommandSuccess> {
+    if !ctx.yes && !ctx.dry_run {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            "pruning run artifacts is destructive; pass --yes",
+        )
+        .with_suggestion("Use --dry-run to preview which runs would be deleted."));
+    }
+    let runs = list_runs(&ctx.paths.artifacts_dir)?;
+    let keep_last = args.keep_last.unwrap_or(0);
+    let older_than = match &args.older_than {
+        Some(value) => parse_duration(value).map_err(ForgeError::invalid_argument)?,
+        None => Duration::from_secs(u64::from(ctx.config.file.project.retention_days) * 86_400),
+    };
+    let now = chrono::Utc::now();
+    let mut removable = Vec::new();
+    for (index, run) in runs.iter().enumerate() {
+        if index < keep_last {
+            continue;
+        }
+        if run.status == RunStatus::Running {
+            continue;
+        }
+        let age = chrono::DateTime::parse_from_rfc3339(&run.started_at)
+            .map(|started| now.signed_duration_since(started.with_timezone(&chrono::Utc)))
+            .map(|duration| duration.to_std().unwrap_or_default())
+            .unwrap_or_default();
+        if age >= older_than {
+            removable.push(run.clone());
+        }
+    }
+    let mut deleted = Vec::new();
+    for run in &removable {
+        if !ctx.dry_run {
+            let path = ctx.paths.artifacts_dir.join(&run.path);
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).map_err(|error| {
+                    ForgeError::new(
+                        ErrorCode::ArtifactWriteFailed,
+                        format!("could not delete {}: {error}", path.display()),
+                    )
+                })?;
+            }
+        }
+        deleted.push(run.run_id.clone());
+    }
+    let result = serde_json::json!({
+        "dry_run": ctx.dry_run,
+        "deleted_runs": deleted,
+        "kept_runs": runs.len().saturating_sub(removable.len()),
+        "older_than_seconds": older_than.as_secs(),
+        "keep_last": keep_last,
+    });
+    Ok(success(
+        "report.prune",
+        result,
+        format!(
+            "{} {} run(s); {} kept.\n",
+            if ctx.dry_run {
+                "Would delete"
+            } else {
+                "Deleted"
+            },
+            deleted.len(),
+            runs.len().saturating_sub(removable.len())
+        ),
+    ))
+}
+
+/// Resolve a run in the current artifacts directory, then fall back to
+/// project-local `.artifacts/runs` directories. Conformance runs live under the
+/// adapter's project root; agents often inspect them from the repository root
+/// without repeating `--project`.
+fn resolve_report_dir(ctx: &CliContext, spec: &str) -> Result<PathBuf> {
+    let original = match resolve_run_dir(&ctx.paths.artifacts_dir, spec) {
+        Ok(dir) => return Ok(dir),
+        Err(error) => error,
+    };
+    if Path::new(spec).is_dir() {
+        return Err(original);
+    }
+    let mut roots = Vec::new();
+    collect_artifact_roots(&ctx.paths.project_root, 0, &mut roots);
+    roots.sort();
+    roots.dedup();
+    let mut matches = Vec::new();
+    for root in &roots {
+        if let Ok(dir) = resolve_run_dir(root, spec) {
+            if !matches.contains(&dir) {
+                matches.push(dir);
+            }
+        }
+    }
+    match matches.len() {
+        0 => Err(original.with_suggestion(
+            "If the run belongs to a configured project, pass --project <dir> or run from that project.",
+        )),
+        1 => Ok(matches.remove(0)),
+        _ if spec == "latest" => {
+            matches.sort_by_key(|path| run_dir_name(path));
+            Ok(matches.pop().expect("non-empty matches"))
+        }
+        _ => {
+            let candidates = matches
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                format!("run '{spec}' exists in more than one project: {candidates}"),
+            )
+            .with_suggestion("Pass --project <dir> to choose the project."))
+        }
+    }
+}
+
+fn run_dir_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn collect_artifact_roots(root: &Path, depth: usize, roots: &mut Vec<PathBuf>) {
+    if depth > 3 {
+        return;
+    }
+    let artifacts = root.join(".artifacts");
+    if artifacts.join("runs").is_dir() {
+        roots.push(artifacts);
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            || matches!(
+                name.as_ref(),
+                "target" | "node_modules" | "build" | "dist" | "vendor" | "crates" | "src"
+            )
+        {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_artifact_roots(&path, depth + 1, roots);
+        }
+    }
+}
+
+fn resolve_active_run(ctx: &CliContext) -> Result<(String, Option<String>, Option<String>)> {
+    let session_id = ctx.session_id()?;
+    if let Some(run) = &ctx.run_arg {
+        return Ok((run.clone(), session_id.clone(), session_id));
+    }
+    if let Ok(run) = std::env::var("ANDROIDFORGE_RUN_ID") {
+        if !run.trim().is_empty() {
+            return Ok((run, session_id.clone(), session_id));
+        }
+    }
+    let active = get_active_run(&ctx.paths, session_id.as_deref())?.ok_or_else(|| {
+        ForgeError::new(ErrorCode::InvalidArgument, "no active run was found")
+            .with_suggestion("Start one with `androidforge run start --name <name>`.")
+            .with_suggestion("Or set ANDROIDFORGE_RUN_ID.")
+    })?;
+    Ok((active.run_id, session_id.clone(), session_id))
+}
+
+fn resolve_optional_run(ctx: &CliContext) -> Result<Option<String>> {
+    if let Some(run) = &ctx.run_arg {
+        return Ok(Some(run.clone()));
+    }
+    if let Ok(run) = std::env::var("ANDROIDFORGE_RUN_ID") {
+        if !run.trim().is_empty() {
+            return Ok(Some(run));
+        }
+    }
+    let session_id = ctx.session_id()?;
+    let Some(active) = get_active_run(&ctx.paths, session_id.as_deref())? else {
+        return Ok(None);
+    };
+    // A crashed or externally finalized run can leave a pointer behind. Do not
+    // make every later command fail against a finished run: clear the stale
+    // pointer and let the command start an implicit run instead.
+    let report_path = ctx.paths.run_dir(&active.run_id).join("report.json");
+    if let Ok(report) = androidforge_core::util::read_json::<RunReport>(&report_path) {
+        if report.status != RunStatus::Running {
+            clear_active_run(&ctx.paths, session_id.as_deref())?;
+            return Ok(None);
+        }
+    }
+    Ok(Some(active.run_id))
+}
+
+fn report_human(report: &RunReport, dir: &std::path::Path) -> String {
+    let mut human = format!(
+        "Run {} ({:?})\ncommand: {}\nproject: {}\nstarted: {}\nduration: {}ms\nsession: {}\ndevice: {}\n\n",
+        report.run_id,
+        report.status,
+        report.command,
+        report.project,
+        report.started_at,
+        report.duration_ms,
+        report.session_id.as_deref().unwrap_or("-"),
+        report.device_serial.as_deref().unwrap_or("-"),
+    );
+    for step in &report.steps {
+        human.push_str(&format!(
+            "  [{:?}] {} ({})\n",
+            step.status, step.name, step.duration_ms
+        ));
+        for artifact in &step.artifacts {
+            human.push_str(&format!("      [{}] {}\n", artifact.kind, artifact.path));
+        }
+    }
+    if let Some(failure) = &report.failure {
+        human.push_str(&format!(
+            "\nFailure [{}]: {}\n",
+            failure.code.as_str(),
+            failure.message
+        ));
+        for suggestion in &failure.suggestions {
+            human.push_str(&format!("  - {suggestion}\n"));
+        }
+    }
+    human.push_str(&format!(
+        "\nReport: {}\n",
+        dir.join("report.json").display()
+    ));
+    human
+}
+
+fn summary_json(report: &RunReport, dir: &std::path::Path) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": report.run_id,
+        "status": report.status,
+        "command": report.command,
+        "project": report.project,
+        "started_at": report.started_at,
+        "ended_at": report.ended_at,
+        "duration_ms": report.duration_ms,
+        "session_id": report.session_id,
+        "device_serial": report.device_serial,
+        "steps": report.steps.len(),
+        "failed_steps": report.failed_steps(),
+        "artifacts": report.artifacts.len(),
+        "report_path": dir.join("report.json"),
+        "manifest_path": dir.join("manifest.json"),
+    })
+}

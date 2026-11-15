@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/adapter.schema.json",
+  "title": "AndroidForge project adapter (.androidforge/project.toml)",
+  "type": "object",
+  "required": ["adapter_version"],
+  "properties": {
+    "adapter_version": { "const": 1 },
+    "min_androidforge_version": { "type": "string" },
+    "project": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "package": { "type": "string" },
+        "debug_package": { "type": "string" },
+        "expected_cert_sha256": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "default_avd": { "type": "string" },
+        "default_device": { "type": "string" },
+        "locale": { "type": "string" },
+        "timezone": { "type": "string" },
+        "artifact_dir": { "type": "string", "default": ".artifacts" },
+        "retention_days": { "type": "integer", "minimum": 1, "default": 14 },
+        "verify_installed_apk": { "type": "boolean", "default": true },
+        "auto_prune": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+    "fixtures": {
+      "type": "object",
+      "properties": {
+        "directory": { "type": "string", "default": ".androidforge/fixtures" },
+        "default": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": { "$ref": "hook.schema.json" }
+    },
+    "conformance": {
+      "type": "object",
+      "properties": { "flow": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "backend": { "const": "uiautomator" },
+        "default_timeout_secs": { "type": "integer", "minimum": 1 },
+        "poll_interval_ms": { "type": "integer", "minimum": 50 },
+        "settle_interval_ms": { "type": "integer", "minimum": 50 },
+        "text_verify": { "type": "boolean" },
+        "tap_clickable_ancestor": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "maestro": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "binary": { "type": "string" },
+        "timeout_secs": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "logcat_tail_lines": { "type": "integer", "minimum": 1 },
+        "max_log_bytes": { "type": "integer", "minimum": 65536 },
+        "capture_on_failure": { "type": "boolean" },
+        "redact": { "type": "boolean" },
+        "include_dumps": { "type": "boolean" },
+        "record_max_seconds": { "type": "integer", "minimum": 1, "maximum": 180 },
+        "logcat_max_seconds": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "timeouts": {
+      "type": "object",
+      "properties": {
+        "command_secs": { "type": "integer", "minimum": 1 },
+        "adb_secs": { "type": "integer", "minimum": 1 },
+        "install_secs": { "type": "integer", "minimum": 1 },
+        "boot_secs": { "type": "integer", "minimum": 1 },
+        "ui_secs": { "type": "integer", "minimum": 1 },
+        "fixture_secs": { "type": "integer", "minimum": 1 },
+        "emulator_stop_secs": { "type": "integer", "minimum": 1 },
+        "app_launch_secs": { "type": "integer", "minimum": 1 },
+        "screenshot_secs": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "sdk": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string" },
+        "adb": { "type": "string" },
+        "emulator": { "type": "string" },
+        "build_tools": { "type": "string" },
+        "aapt2": { "type": "string" },
+        "apksigner": { "type": "string" },
+        "zipalign": { "type": "string" },
+        "apkanalyzer": { "type": "string" },
+        "java": { "type": "string" },
+        "maestro": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "redaction": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "patterns": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

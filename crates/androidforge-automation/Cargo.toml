@@ -1,0 +1,25 @@
+[package]
+name = "androidforge-automation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Fixtures, hooks, conformance, Maestro and external command orchestration for AndroidForge"
+repository.workspace = true
+publish = false
+
+[dependencies]
+androidforge-core.workspace = true
+androidforge-process.workspace = true
+androidforge-adb.workspace = true
+androidforge-app.workspace = true
+androidforge-ui.workspace = true
+androidforge-diagnostics.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+regex.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

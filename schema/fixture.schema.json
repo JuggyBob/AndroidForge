@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/fixture.schema.json",
+  "title": "AndroidForge fixture pack",
+  "type": "object",
+  "required": ["version", "name", "steps"],
+  "properties": {
+    "version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "default_timeout_secs": { "type": "integer", "minimum": 1 },
+    "requires_confirmation": { "type": "boolean" },
+    "vars": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "name": { "type": "string" },
+          "phase": { "enum": ["pre-install", "post-install", "pre-test", "post-test", "cleanup"] },
+          "timeout_secs": { "type": "integer", "minimum": 1 },
+          "retries": { "type": "integer", "minimum": 0, "maximum": 20 },
+          "on_failure": { "enum": ["stop", "continue", "cleanup"] },
+          "capture": { "enum": ["none", "on-failure", "always"] },
+          "destructive": { "type": "boolean" },
+          "action": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {
+                "enum": [
+                  "adb", "shell", "install", "uninstall", "clear_data",
+                  "launch", "force_stop", "grant", "revoke", "app_op",
+                  "push", "pull", "app_file_push", "app_file_pull",
+                  "settings", "wait", "assert", "script",
+                  "backup_app_data", "restore_app_data"
+                ]
+              },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "command": {},
+              "apk": { "type": "string" },
+              "fresh": { "type": "boolean" },
+              "package": { "type": "string" },
+              "keep_data": { "type": "boolean" },
+              "activity": { "type": "string" },
+              "permission": { "type": "string" },
+              "operation": { "type": "string" },
+              "mode": { "type": "string" },
+              "local": { "type": "string" },
+              "remote": { "type": "string" },
+              "external": { "type": "boolean" },
+              "namespace": { "type": "string" },
+              "key": { "type": "string" },
+              "value": { "type": "string" },
+              "ms": { "type": "integer", "minimum": 0 },
+              "text": { "type": "string" },
+              "text_contains": { "type": "string" },
+              "content_desc": { "type": "string" },
+              "content_desc_contains": { "type": "string" },
+              "resource_id": { "type": "string" },
+              "class": { "type": "string" },
+              "index": { "type": "integer", "minimum": 0 },
+              "not_exists": { "type": "boolean" },
+              "timeout_secs": { "type": "integer", "minimum": 1 },
+              "env": { "type": "object", "additionalProperties": { "type": "string" } },
+              "path": { "type": "string" }
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

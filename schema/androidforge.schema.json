@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/androidforge.schema.json",
+  "title": "AndroidForge JSON envelope",
+  "type": "object",
+  "required": ["schema_version", "status", "command", "exit_code", "duration_ms"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "status": { "enum": ["success", "error"] },
+    "command": { "type": "string" },
+    "exit_code": { "type": "integer" },
+    "run_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "device": {
+      "type": "object",
+      "properties": { "serial": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "result": {},
+    "error": { "$ref": "#/$defs/error" },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "duration_ms": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "recoverable"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^E_[A-Z0-9_]+$" },
+        "message": { "type": "string" },
+        "recoverable": { "type": "boolean" },
+        "suggestions": { "type": "array", "items": { "type": "string" } },
+        "context": { "type": "object", "additionalProperties": true },
+        "command": { "type": "string" },
+        "device_serial": { "type": "string" },
+        "session_id": { "type": "string" },
+        "cause": { "type": "string" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "type": "string" },
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,33 @@
+version = 1
+name = "smoke"
+description = "Deterministic 1.1.x debug starting state: notification permission, a known watch-state baseline, and the app shell visible."
+default_timeout_secs = 120
+requires_confirmation = false
+
+[vars]
+WATCH_STATE = "${PROJECT_ROOT}/.androidforge/fixtures/watch-state.json"
+
+[[steps]]
+name = "stop a previous process"
+phase = "pre-test"
+action = { type = "force_stop" }
+
+[[steps]]
+name = "grant notification permission"
+phase = "pre-test"
+action = { type = "grant", permission = "android.permission.POST_NOTIFICATIONS" }
+
+[[steps]]
+name = "seed the machine-written watch state"
+phase = "pre-test"
+action = { type = "app_file_push", local = "${WATCH_STATE}", remote = "files/alerts/watch-state.json" }
+
+[[steps]]
+name = "launch DiscountHunter"
+phase = "pre-test"
+action = { type = "launch" }
+
+[[steps]]
+name = "assert the app shell"
+phase = "pre-test"
+action = { type = "assert", text_contains = "Discount Hunter", timeout_secs = 30 }

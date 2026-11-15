@@ -1,0 +1,18 @@
+[package]
+name = "androidforge-process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Bounded, UTF-8-safe external process execution for AndroidForge"
+repository.workspace = true
+publish = false
+
+[dependencies]
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]

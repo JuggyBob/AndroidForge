@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/conformance.schema.json",
+  "title": "AndroidForge conformance flow",
+  "type": "object",
+  "required": ["version", "name", "flow"],
+  "properties": {
+    "version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "setup_fixture": { "type": "string" },
+    "flow": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["script", "maestro", "fixture"] },
+        "command": { "type": "array", "items": { "type": "string" } },
+        "path": { "type": "string" },
+        "name": { "type": "string" },
+        "timeout_secs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "properties": {
+        "status": { "enum": ["success", "passed", "failure", "failed"] },
+        "exit_code": { "type": "integer" },
+        "artifacts": { "type": "array", "items": { "type": "string" } },
+        "json_paths": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
