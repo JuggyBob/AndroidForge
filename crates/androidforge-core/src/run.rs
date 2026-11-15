@@ -852,7 +852,7 @@ mod tests {
         let run_dir = paths.run_dir("run-1");
         std::fs::create_dir_all(&run_dir).unwrap();
         std::fs::write(run_dir.join("report.json"), "{}").unwrap();
-        let active = set_active_run(&paths, Some("ses-123"), "run-1", &project).unwrap();
+        let active = set_active_run(&paths, Some("ses-123"), "run-1", &paths.project_root).unwrap();
         assert_eq!(active.run_id, "run-1");
         assert!(get_active_run(&paths, Some("ses-123")).unwrap().is_some());
         clear_active_run(&paths, Some("ses-123")).unwrap();
