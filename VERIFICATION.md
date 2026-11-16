@@ -179,8 +179,13 @@ cargo build --workspace --release
 | `androidforge-desktop-windows-x86_64.zip` | Portable CLI + desktop cockpit, aligned at `0.2.0`. |
 | `SHA256SUMS.txt` | SHA-256 for both archives. |
 
-The checksums below are filled from the published release:
+The assets were downloaded from the published release, extracted and checked against `SHA256SUMS.txt`:
 
 ```text
-pending release upload
+e373b2ca3dc2112b882a0d4f2795ceb8791cc7d5c0e191992461e2bfdd22c7dc  androidforge-cli-windows-x86_64.zip
+9a8385658a0f54829ea60c577eb47f088aa072093c58da8e6a79380c352bdecb  androidforge-desktop-windows-x86_64.zip
 ```
+
+Both extracted `androidforge.exe` binaries reported `androidforge 0.2.0`. The desktop archive contained
+`androidforge.exe`, `androidforge-desktop.exe`, `LICENSE` and `PORTABLE.txt`. Release:
+`https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0`.
