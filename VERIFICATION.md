@@ -92,6 +92,22 @@ validation and packaging validation from areas that were not exercised.
   confirming it stays responsive; the new Triage/Setup/Sessions panels were compile- and unit-tested but
   not screenshot-reviewed at multiple DPI scales.
 
+### Published release
+
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.4.0>
+- Tag: `v0.4.0`, tag object `83fb053083c479316ab74b311193ef27be0f01ee`, commit
+  `34f2706df37a128fb2573258ee6380fd216b04fa`.
+- Assets attached: `androidforge-cli-windows-x86_64.zip`,
+  `androidforge-desktop-windows-x86_64.zip`, `androidforge-windows-x86_64-setup.exe`,
+  `SHA256SUMS.txt`.
+- All three assets were downloaded from the published release and their SHA-256 values matched
+  `SHA256SUMS.txt`.
+- The downloaded portable ZIP was extracted to a clean directory; `androidforge --version` reported
+  `0.4.0`, all new command help pages loaded, and the adjacent desktop launched with window title
+  `AndroidForge`.
+- The downloaded installer ran silently, installed CLI/desktop `0.4.0`, and uninstalled cleanly while
+  removing the install directory.
+
 ## Environment
 
 - Windows 11 x86_64 host, 2560×1440 display at 125% scaling.
