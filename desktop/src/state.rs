@@ -13,9 +13,10 @@ use crate::backend::process_manager::{OperationHandle, OperationOutcome};
 use crate::backend::project::DiscoveredProject;
 use crate::backend::update::UpdateCheck;
 use crate::models::{
-    ApkInfo, DeviceList, DoctorResult, ErrorBody, FixtureInfo, FlakyReport, FrameResult, HookInfo,
-    LogcatPeek, MaintenanceSummary, ProjectConfig, ReconcileResult, ReportPath, RunComparison,
-    RunList, RunReport, SessionInfo, SessionList, UiInspectResult,
+    ApkInfo, DeviceList, DiagnosisExplanation, DoctorResult, ErrorBody, FixtureInfo, FlakyReport,
+    FrameResult, HookInfo, LogcatPeek, MaintenanceSummary, ProjectConfig, ReconcileResult,
+    RepairPlan, ReportPath, RunComparison, RunList, RunReport, SessionInfo, SessionList,
+    UiInspectResult,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -441,6 +442,9 @@ pub struct SetupState {
     pub test_error: Option<String>,
     pub checked_cli: bool,
     pub created_session: bool,
+    pub repair_plan: Option<RepairPlan>,
+    pub repair_loading: bool,
+    pub repair_error: Option<String>,
 }
 
 #[derive(Default)]
@@ -485,6 +489,9 @@ pub struct TriageState {
     pub flaky: Option<FlakyReport>,
     pub flaky_loading: bool,
     pub flaky_error: Option<String>,
+    pub explanation: Option<DiagnosisExplanation>,
+    pub explanation_loading: bool,
+    pub explanation_error: Option<String>,
 }
 
 #[derive(Default)]
@@ -789,4 +796,6 @@ pub enum AppEvent {
         label: String,
         result: std::result::Result<String, String>,
     },
+    Explanation(std::result::Result<DiagnosisExplanation, String>),
+    RepairPlan(std::result::Result<RepairPlan, String>),
 }

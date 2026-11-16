@@ -214,6 +214,189 @@ pub struct SessionInfo {
     pub device_settings: BTreeMap<String, Option<String>>,
     #[serde(default)]
     pub snapshots: Vec<Value>,
+    #[serde(default)]
+    pub project_root: Option<String>,
+    #[serde(default)]
+    pub lease_expires_at: Option<String>,
+    #[serde(default)]
+    pub lease_ttl_seconds: Option<u64>,
+    #[serde(default)]
+    pub lease_expired: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CommandLine {
+    #[serde(default)]
+    pub argv: Vec<String>,
+}
+
+impl CommandLine {
+    pub fn display(&self) -> String {
+        self.argv
+            .iter()
+            .map(|arg| {
+                if arg.contains(' ') || arg.contains('\t') {
+                    format!("'{}'", arg.replace('\'', "''"))
+                } else {
+                    arg.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NextAction {
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub command: CommandLine,
+    #[serde(default)]
+    pub destructive: bool,
+    #[serde(default)]
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Diagnosis {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub confidence: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub failed_operation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EvidenceRef {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub artifact_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiagnosisExplanation {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub run_id: String,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub project_root: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub diagnosis: Diagnosis,
+    #[serde(default)]
+    pub alternatives: Vec<Diagnosis>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub next_actions: Vec<NextAction>,
+    #[serde(default)]
+    pub fingerprint: String,
+    #[serde(default)]
+    pub uncertainty: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepairAction {
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub package: Option<String>,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub requires_confirmation: bool,
+    #[serde(default)]
+    pub requires_admin: bool,
+    #[serde(default)]
+    pub requires_network: bool,
+    #[serde(default)]
+    pub modifies_environment: bool,
+}
+
+impl RepairAction {
+    pub fn command_display(&self) -> Option<String> {
+        self.command.as_ref().map(|argv| {
+            argv.iter()
+                .map(|arg| {
+                    if arg.contains(' ') {
+                        format!("'{}'", arg.replace('\'', "''"))
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepairIssue {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub detected: String,
+    #[serde(default)]
+    pub component: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub repair: RepairAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepairSummary {
+    #[serde(default)]
+    pub blocking: usize,
+    #[serde(default)]
+    pub recommended: usize,
+    #[serde(default)]
+    pub optional: usize,
+    #[serde(default)]
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepairPlan {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub generated_at: String,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub summary: RepairSummary,
+    #[serde(default)]
+    pub issues: Vec<RepairIssue>,
+    #[serde(default)]
+    pub next_actions: Vec<NextAction>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

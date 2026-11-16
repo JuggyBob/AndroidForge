@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use androidforge_core::analysis::{analyze_flaky, compare_reports};
+use androidforge_core::diagnosis::{DiagnosticExplanation, explain_report};
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::BuildIdentity;
 use androidforge_core::output::CommandSuccess;
@@ -12,8 +13,8 @@ use androidforge_core::run::{
 use androidforge_core::util::parse_duration;
 
 use crate::cli::{
-    ReportCommand, ReportCompareArgs, ReportFlakyArgs, ReportReconcileArgs, RunCommand, RunEndArgs,
-    RunExecArgs, RunStartArgs,
+    ReportCommand, ReportCompareArgs, ReportExplainArgs, ReportFlakyArgs, ReportReconcileArgs,
+    RunCommand, RunEndArgs, RunExecArgs, RunStartArgs,
 };
 use crate::commands::common::success;
 use crate::context::CliContext;
@@ -322,6 +323,7 @@ pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<Command
         ReportCommand::Reconcile(args) => reconcile(ctx, args).await,
         ReportCommand::Compare(args) => compare(ctx, args).await,
         ReportCommand::Flaky(args) => flaky(ctx, args).await,
+        ReportCommand::Explain(args) => explain(ctx, args).await,
         ReportCommand::Import { command } => match command {
             crate::cli::ReportImportCommand::Junit { paths } => {
                 import_junit_report(ctx, paths).await
@@ -1014,4 +1016,232 @@ fn summary_json(report: &RunReport, dir: &std::path::Path) -> serde_json::Value 
         "report_path": dir.join("report.json"),
         "manifest_path": dir.join("manifest.json"),
     })
+}
+
+async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSuccess> {
+    let dir = resolve_report_dir(ctx, &args.run)?;
+    let report: RunReport = androidforge_core::util::read_json(&dir.join("report.json"))?;
+    let explanation = explain_report(&report);
+    let mut result = serde_json::to_value(&explanation)?;
+    if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "run_dir".to_string(),
+            serde_json::json!(dir.to_string_lossy()),
+        );
+        if args.full {
+            object.insert("report".to_string(), serde_json::to_value(&report)?);
+            object.insert(
+                "evidence_excerpts".to_string(),
+                serde_json::json!(evidence_excerpts(&explanation, &dir)),
+            );
+        }
+    }
+    let markdown = explain_markdown(&explanation, &dir, args.full);
+    let human = if args.markdown && !ctx.json {
+        markdown.clone()
+    } else {
+        format!(
+            "{} [{} / {} confidence]\nrun: {}\nnext actions:\n{}\n",
+            explanation.diagnosis.summary,
+            explanation.diagnosis.category.as_str(),
+            confidence_label(explanation.diagnosis.confidence),
+            explanation.run_id,
+            explanation
+                .next_actions
+                .iter()
+                .map(|action| format!("  {}  ({})\n", action.command.argv.join(" "), action.reason))
+                .collect::<String>()
+        )
+    };
+    Ok(success("report.explain", result, human))
+}
+
+fn confidence_label(confidence: androidforge_core::diagnosis::Confidence) -> &'static str {
+    use androidforge_core::diagnosis::Confidence;
+    match confidence {
+        Confidence::High => "high",
+        Confidence::Medium => "medium",
+        Confidence::Low => "low",
+        Confidence::InsufficientEvidence => "insufficient evidence",
+    }
+}
+
+fn evidence_excerpts(explanation: &DiagnosticExplanation, dir: &Path) -> Vec<serde_json::Value> {
+    let mut excerpts = Vec::new();
+    for evidence in &explanation.evidence {
+        let path = dir.join(&evidence.source);
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if metadata.len() > 2 * 1024 * 1024 {
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "txt" | "log" | "xml" | "json" | "md" | "csv"
+        ) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        let mut preview = text.chars().take(4000).collect::<String>();
+        if text.chars().count() > 4000 {
+            preview.push_str("\n[... excerpt truncated ...]");
+        }
+        excerpts.push(serde_json::json!({
+            "path": evidence.source,
+            "description": evidence.description,
+            "preview": preview,
+        }));
+        if excerpts.len() >= 12 {
+            break;
+        }
+    }
+    excerpts
+}
+
+fn explain_markdown(explanation: &DiagnosticExplanation, dir: &Path, full: bool) -> String {
+    let mut out = format!(
+        "# Failure explanation: `{}`\n\n- Project: `{}`\n- Project root: `{}`\n- Scenario: `{}`\n- Status: **{}**\n- Category: **{}**\n- Confidence: **{}**\n- Fingerprint: `{}`\n\n## Summary\n\n{}\n",
+        explanation.run_id,
+        explanation.project,
+        explanation.project_root,
+        explanation.scenario,
+        format!("{:?}", explanation.status).to_ascii_lowercase(),
+        explanation.diagnosis.category.as_str(),
+        confidence_label(explanation.diagnosis.confidence),
+        explanation.fingerprint,
+        explanation.diagnosis.summary
+    );
+    if let Some(code) = &explanation.diagnosis.code {
+        out.push_str(&format!("\n- Error code: `{code}`"));
+    }
+    if let Some(operation) = &explanation.diagnosis.failed_operation {
+        out.push_str(&format!("\n- Failed operation: `{operation}`"));
+    }
+    out.push('\n');
+    if !explanation.alternatives.is_empty() {
+        out.push_str("\n## Alternatives\n\n");
+        for alternative in &explanation.alternatives {
+            out.push_str(&format!(
+                "- **{}** ({}) — {}\n",
+                alternative.category.as_str(),
+                confidence_label(alternative.confidence),
+                alternative.summary
+            ));
+        }
+    }
+    if !explanation.uncertainty.is_empty() {
+        out.push_str("\n## Uncertainty\n\n");
+        for line in &explanation.uncertainty {
+            out.push_str(&format!("- {line}\n"));
+        }
+    }
+    out.push_str("\n## Evidence\n\n");
+    if explanation.evidence.is_empty() {
+        out.push_str("No artifact evidence was recorded.\n");
+    } else {
+        for evidence in &explanation.evidence {
+            out.push_str(&format!(
+                "- `{}` — {}\n",
+                evidence.source, evidence.description
+            ));
+        }
+    }
+    out.push_str("\n## Next actions\n\n");
+    if explanation.next_actions.is_empty() {
+        out.push_str("No deterministic next action was available.\n");
+    } else {
+        for action in &explanation.next_actions {
+            out.push_str(&format!(
+                "### {}\n\n```powershell\n{}\n```\n",
+                action.reason,
+                action.command.argv.join(" ")
+            ));
+            if action.destructive {
+                out.push_str("\n> **Destructive:** confirm this is intended before running it.\n");
+            }
+        }
+    }
+    out.push_str(&format!(
+        "\n## Artifact directory\n\n```text\n{}\n```\n",
+        dir.display()
+    ));
+    if full {
+        out.push_str(
+            "\n_Full explanation requested; use `--json --full` for expanded evidence._\n",
+        );
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_all(report: &RunReport) {
+        let explanation = explain_report(report);
+        for action in &explanation.next_actions {
+            crate::cli::Cli::try_parse_from(action.command.argv.clone()).unwrap_or_else(|error| {
+                panic!(
+                    "generated next action does not parse: {:?}\n{error}",
+                    action.command.argv
+                )
+            });
+        }
+    }
+
+    #[test]
+    fn diagnosis_next_actions_match_real_cli_syntax() {
+        let cases = [
+            (ErrorCode::SelectorNotFound, "no UI element matched"),
+            (ErrorCode::SelectorAmbiguous, "multiple elements matched"),
+            (ErrorCode::DeviceNotFound, "device missing"),
+            (ErrorCode::ToolNotFound, "adb missing"),
+            (ErrorCode::InstallFailed, "INSTALL_FAILED_VERSION_DOWNGRADE"),
+            (
+                ErrorCode::InstallSignatureMismatch,
+                "signatures do not match",
+            ),
+            (ErrorCode::UiAssertionFailed, "assertion failed"),
+            (ErrorCode::PermissionDenied, "permission denied"),
+            (ErrorCode::CommandTimeout, "timed out"),
+            (ErrorCode::CommandFailed, "ANR in com.example"),
+        ];
+        for (code, message) in cases {
+            let mut report = RunReport::new("run-test", "conformance.run", "App", "C:\\App");
+            report.status = RunStatus::Failed;
+            report.build.apk_path = Some("C:\\builds\\app-debug.apk".to_string());
+            report.failure = Some(androidforge_core::run::FailureInfo {
+                code,
+                message: message.to_string(),
+                failed_operation: "ui.tap".to_string(),
+                recoverable: true,
+                suggestions: Vec::new(),
+                context: [
+                    ("package".to_string(), serde_json::json!("com.example.app")),
+                    (
+                        "selector".to_string(),
+                        serde_json::json!({"text": "Save", "index": 1}),
+                    ),
+                    (
+                        "permission".to_string(),
+                        serde_json::json!("android.permission.CAMERA"),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                artifacts: Vec::new(),
+            });
+            parse_all(&report);
+        }
+    }
 }

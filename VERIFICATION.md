@@ -1,8 +1,96 @@
 # Verification record
 
-This document records what was actually run for the `0.3.0` Alpha delivery on 2026-11-16. It separates
-automated checks, real Android validation, desktop workflow validation and packaging validation from the
-areas that were not exercised.
+This document records what was actually run for the `0.4.0` Alpha delivery on 2026-11-16, followed by
+the historical `0.3.0` record. It separates automated checks, real Android validation, desktop workflow
+validation and packaging validation from areas that were not exercised.
+
+## v0.4.0 verification (2026-11-16)
+
+### Environment
+
+- Windows 11 x86_64 host, 2560x1440 display at 125% scaling.
+- Android 16 / API 36 emulator, serial `emulator-5554`, AVD `dh36` (attached/reused for all three apps).
+- AndroidForge CLI and desktop built from the same `0.4.0` workspace.
+- Real targets:
+  - CalcSuite `CalculatorSuite-v3.0.3.apk`, package `com.calcsuite`, version `3.0.3` (7), certificate
+    `55071A2393348B9C2F44DDE98D21277F1666A56040DECD51C0B83F377A6F9E02`.
+  - DiscountHunter debug APK, package `com.discounthunter.android.debug`, debug certificate
+    `C1FD411DC1DA096FD12001EC5B71DA212C91E13442BA289D2C8F36A72F0ED691`.
+  - IronPulse debug APK `5.0.0` (13), package `com.aistudio.fitness.ironpulse`, debug certificate
+    `C1FD...D691`; release `5.0.1` used to exercise signature mismatch, release `4.4.0` used to exercise
+    downgrade rejection.
+
+### Automated checks
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --workspace` | Passed: core unit tests (including diagnosis categories, fingerprint stability, evidence filtering, lease behavior and session ownership), CLI unit/integration tests (context partial results, read-only repair plan, stable explain output, ensure dry-run, missing-session errors, dry-run pipeline, diff semantics, token scoping) and desktop tests. |
+| `cargo build --workspace --release` | Passed. |
+| `androidforge --version` | `androidforge 0.4.0`. |
+
+### Real Android validation
+
+| Scenario | Result |
+| --- | --- |
+| `session ensure --avd dh36 --owner AgentTest --ttl 2h` | Launched a ready session in 30.1 s. |
+| Repeated identical ensure | Reused the same session in 1.05 s; mode `reused_session`. |
+| Ensure as `OtherAgent` | Refused with `E_DEVICE_BUSY` and the owner/session/alternatives; no takeover. |
+| Ensure after simulated expired lease with `--ttl 30m` | Renewed the lease and reported `expired_lease_renewed`. |
+| Ensure after simulated expired lease without `--ttl` | Returned `ready: true`, `lease_expired: true`, `needs_reconciliation: true` and a warning; did not stop the device. |
+| `context --session` cold/warm | ~3.0 s cold, ~0.68 s warm, ~17 KB JSON including app and screen; reused the recent observation. |
+| `context --include project,environment` | ~0.34 s, ~2.8 KB, omitted sections in one compact call. |
+| `ui observe` compact / `--full` | ~2.7 s; ~14 KB compact, ~56 KB full; foreground/focus/actionables correct. |
+| `ui observe --since TOKEN` | No changes reported on an unchanged screen. |
+| `ui diff --from TOKEN` | Correctly reported package/activity changes and semantic added/removed nodes when Chrome/Gmail replaced the launcher. |
+| Reboot then `ui diff --from TOKEN` | Failed with `E_OBSERVATION_EXPIRED` (exit 4), proving boot-id invalidation. |
+| Tap Chrome with `--wait-for-package com.android.chrome` | Action executed once; postcondition satisfied in 7.1 s. |
+| Tap Gmail with impossible text and `--timeout 3` | Failed with `E_POSTCONDITION_TIMEOUT`, `action_executed: true`, foreground `com.google.android.gm`, observation token and screenshot/logcat/hierarchy evidence. |
+| IronPulse update dialog: tap `Close` with `--wait-for-absent-text "Update available"` | Postcondition satisfied; no duplicate tap. |
+| CalcSuite Settings: tap `Back` with `--wait-for-absent-text "Check for updates"` | Postcondition satisfied; diff showed the screen change. |
+| `report explain latest` on a postcondition timeout | Classified `assertion` / `E_POSTCONDITION_TIMEOUT`, high confidence, 12 evidence refs, exact observe/screenshot/report commands, 125 ms. |
+| `report explain` on an interrupted CalcSuite run | Classified `interrupted` / `E_INTERRUPTED`, high confidence, stable fingerprint. |
+| `report explain` on IronPulse conformance failure | Selected the step's `E_UI_ASSERTION_FAILED` instead of the aggregate command exit, surfaced failed checks (`status, exit_code, artifact:recordings/*.mp4`) and produced an assertion diagnosis. |
+| `report explain` repeated for the same run | Identical fingerprint. |
+| `doctor fix --plan` with a valid SDK | Read-only, `mutations_performed: []`, optional Maestro/adapter issues only. |
+| `doctor fix --plan` with invalid `ANDROID_HOME` | Detected the invalid path and kept the project files unchanged; no environment modification. |
+| `agent test` CalcSuite with `--install --flow conformance` | Success in 39.6 s; install and conformance stages passed; 8 artifacts. |
+| `agent test` CalcSuite again without `--install` | Success in 35.5 s; install skipped because the recorded SHA-256 matched (`proof: sha256`). |
+| `agent test` DiscountHunter with `--install --flow conformance` | Success in 50.7 s; debug signature, install and conformance passed. |
+| `agent test` IronPulse debug `5.0.0` with conformance | Reached conformance; the existing flow failed because `recordings/*.mp4` was not produced. The pipeline returned the assertion explanation and failed checks instead of a generic command error. |
+| IronPulse release `5.0.1` on a debug-signed install | Failed with `E_INSTALL_SIGNATURE_MISMATCH`; explanation classified `signature`, referenced the candidate APK, and offered a destructive `--fresh --yes` action with a warning. No automatic uninstall occurred. |
+| IronPulse release `4.4.0` over `5.0.0` | Failed with `E_INSTALL_FAILED` version downgrade; explanation offered `--downgrade`. |
+| `agent test --dry-run` | Listed planned stages and `--install`/`--flow` confirmations; created no session or agent-test report. |
+
+### Desktop validation
+
+- `cargo check -p androidforge-desktop` passed after adding typed explanation, repair-plan and lease
+  models.
+- The release desktop was built with both executables from the same workspace. The new Triage, Setup and
+  Sessions panels compile and use only CLI JSON results.
+- The packaged portable desktop launched successfully; no screenshot-based visual review at multiple DPI
+  scales was performed.
+
+### Packaging validation
+
+- `.\packaging\package.ps1 -SkipBuild` produced:
+  - `androidforge-cli-windows-x86_64.zip` (3,837,067 bytes), SHA-256
+    `3737ec9ad2950fc0bee861f7490128f2e93d5f063689f8a4e105ef328a873255`.
+  - `androidforge-desktop-windows-x86_64.zip` (10,442,651 bytes), SHA-256
+    `9aeb3bf84a22822b2eed068b5debd83d239ceda84d6e2866adf45b9e63088859`.
+  - `androidforge-windows-x86_64-setup.exe` (8,948,509 bytes), SHA-256
+    `f8245889c8903261fdd50a6770c5e73c6a839950747023ac402613b76859ce5f`.
+  - `SHA256SUMS.txt` matching all three assets.
+- The portable ZIP was extracted into a clean directory. `androidforge.exe --version` reported
+  `androidforge 0.4.0`; `doctor fix --plan --json` reported `read_only: true`; the adjacent
+  `androidforge-desktop.exe` launched with window title `AndroidForge` and stayed running until closed.
+- The installer ran silently with `/VERYSILENT /CURRENTUSER`, installed both executables at version
+  `0.4.0`, reported `androidforge 0.4.0`, and uninstalled cleanly with `unins000.exe`; the install
+  directory was removed afterward.
+- Desktop interactive validation in this delivery was limited to launching the packaged executable and
+  confirming it stays responsive; the new Triage/Setup/Sessions panels were compile- and unit-tested but
+  not screenshot-reviewed at multiple DPI scales.
 
 ## Environment
 
@@ -125,3 +213,6 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
+
+

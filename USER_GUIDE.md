@@ -29,6 +29,105 @@ cargo build --workspace --release
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
+## 2.1 Agent loop commands (v0.4.0)
+
+These commands reduce repeated discovery and inspection. They keep the same JSON envelope, exit codes
+and evidence rules as the rest of the CLI.
+
+### Context
+
+```powershell
+androidforge context --project . --json
+androidforge context --session <ID> --json
+androidforge context --session <ID> --include project,environment,session,device,app --json
+androidforge context --session <ID> --refresh-screen --json
+androidforge context --session <ID> --full --json
+```
+
+The compact result includes project, environment, session, device, app, recent screen observation, last
+run and deterministic next actions. Missing sections are explicit (`available: false` with a reason).
+The screen section reports `observed_at`, `age_ms` and `stale`. Observations younger than five seconds
+are reused unless `--refresh-screen` is passed. `--dry-run` avoids capturing a new screen observation.
+
+### Session ensure
+
+```powershell
+androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
+androidforge session ensure --project . --serial emulator-5554 --owner MyAgent --json
+```
+
+`ensure` is idempotent for the same owner/project/target. It reuses a healthy compatible session,
+attaches to a warm unowned emulator, or starts the requested AVD. It refuses to steal a device from
+another owner. `lease_expires_at` and `lease_ttl_seconds` are advisory: expiry never stops a device or
+interrupts work. An expired lease is reported as `needs_reconciliation: true`; supplying `--ttl` to
+ensure renews it.
+
+### Observations and diffs
+
+```powershell
+androidforge ui observe --session <ID> --json
+androidforge ui observe --session <ID> --package com.example.app --json
+androidforge ui observe --session <ID> --since obs-... --json
+androidforge ui observe --session <ID> --full --json
+androidforge ui diff --session <ID> --from obs-... --json
+```
+
+Default observations contain actionable/scrollable semantics, focus, foreground package/activity,
+display and visible text. `actionable_total` and `actionable_truncated` state whether the compact view
+was capped. `--full` returns the complete parsed hierarchy plus all actionable nodes. Observation tokens
+are session-scoped, boot-id-scoped, kept in the local AndroidForge state directory and expire after 24
+hours or the per-session retention limit. A reboot or cross-session token returns
+`E_OBSERVATION_EXPIRED` or `E_OBSERVATION_SESSION_MISMATCH`.
+
+### Action postconditions
+
+```powershell
+androidforge ui tap --session <ID> --text "Save" --wait-for-text "Saved" --timeout 10 --json
+androidforge ui tap --session <ID> --text "Settings" --wait-for-package com.example.app --json
+androidforge ui type "Example" --session <ID> --wait-for-value "Example" --json
+androidforge ui scroll --session <ID> --direction down --wait-for-text "More" --json
+```
+
+Conditions are ANDed. The action executes once; only observations are polled. A timeout returns
+`E_POSTCONDITION_TIMEOUT` with `action_executed: true`, unsatisfied conditions, current foreground state,
+the timeout and evidence. Actions are never retried automatically.
+
+### Failure explanations
+
+```powershell
+androidforge report explain latest --json
+androidforge report explain <RUN_ID> --full --json
+androidforge report explain <RUN_ID> --markdown
+```
+
+Explanations are deterministic and offline. They include category, stable error code, confidence,
+curated evidence, alternatives, exact `argv` next actions, a stable fingerprint and the project root.
+Run commands from `project_root` or pass `--project`.
+
+### Read-only repair planning
+
+```powershell
+androidforge doctor fix --plan --json
+androidforge doctor fix --check --json
+```
+
+`--plan` never installs packages, downloads tools, edits PATH or the registry, or changes Java/emulator
+configuration. Every issue lists severity, detected state, component, reason and (when exact) a repair
+command with confirmation/network/permission flags. `mutations_performed` is empty.
+
+### Transparent agent pipeline
+
+```powershell
+androidforge --project . agent test --apk .\app-debug.apk --flow conformance --install --json
+androidforge --project . agent test --apk .\app-debug.apk --flow conformance --dry-run --json
+```
+
+Stages are validate config, resolve/ensure session, verify device, inspect APK, compare the recorded
+installed build, optionally install, optionally run a fixture, optionally run conformance, explain a
+failure and write a consolidated report. Without `--install`, a mismatch stops at `install_apk`; the
+pipeline never runs a `--fresh` install, clears data or uninstalls. `--dry-run` performs no session,
+install, fixture or conformance changes and lists required confirmations.
+
 ## 3. Desktop cockpit
 
 `androidforge-desktop.exe` is the optional native cockpit. It is a separate executable built with Rust,
@@ -56,11 +155,17 @@ Overview error banner and in Settings.
 - **Overview** — environment status, devices/sessions/runs counters, recent runs and CLI resolution.
 - **Devices** — selectable device table with serial, model, Android version, state, battery and owner;
   details include boot state, AVD, port, architecture and resolution.
-- **Sessions** — selectable session table with owner, heartbeat and state; details show prepared
-  settings and expose `Release`, `Stop`, `Restart`, `Use as target` and `Install APK`. Released/abandoned
-  tombstones are read-only.
-- **Runs** — report-backed runs, project hooks and `Run project flow`. Selecting `Open` or a row shows
+- **Sessions** - selectable session table with owner, heartbeat, state, advisory lease and project
+  binding; details show prepared settings and expose `Release`, `Stop`, `Restart`, `Use as target` and
+  `Install APK`. Released/abandoned tombstones are read-only.
+- **Runs** - report-backed runs, project hooks and `Run project flow`. Selecting `Open` or a row shows
   build identity, steps, failure details and evidence.
+- **Triage** - failure metadata, evidence, flaky analysis and the v0.4.0 deterministic explanation:
+  category, confidence, summary, fingerprint, curated evidence and copyable next-action commands. The
+  commands are never executed by the desktop.
+- **Setup** - the environment section builds the same read-only `doctor fix --plan` result as the CLI,
+  lists blocking/recommended/optional issues and offers copyable repair commands without changing the
+  environment.
 
 The project picker refreshes discovered adapters. Use `Refresh` or wait for the automatic interval; a
 stale timestamp is shown when the last refresh failed.
@@ -514,7 +619,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.3.0` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.4.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents
@@ -529,3 +634,4 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 8. Treat `--yes`, `--fresh`, `clear-data`, snapshot load, time/network changes and raw ADB as destructive.
 9. In the desktop, check the selected project/session in every confirmation; closing the app does not
    release or stop anything. Cancelling a run preserves the emulator.
+

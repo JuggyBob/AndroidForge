@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/diagnosis.schema.json",
+  "title": "AndroidForge deterministic failure explanation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "run_id",
+    "project",
+    "project_root",
+    "scenario",
+    "status",
+    "diagnosis",
+    "next_actions",
+    "fingerprint",
+    "fingerprint_version",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string" },
+    "project": { "type": "string" },
+    "project_root": { "type": "string" },
+    "scenario": { "type": "string" },
+    "status": { "type": "string" },
+    "diagnosis": { "$ref": "#/$defs/diagnosis" },
+    "alternatives": { "type": "array", "items": { "$ref": "#/$defs/diagnosis" } },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "description"],
+        "properties": {
+          "source": { "type": "string" },
+          "description": { "type": "string" },
+          "artifact_kind": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "next_actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "fingerprint_version": { "type": "integer", "minimum": 1 },
+    "session_id": { "type": "string" },
+    "device_serial": { "type": "string" },
+    "package": { "type": "string" },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "uncertainty": { "type": "array", "items": { "type": "string" } },
+    "run_dir": { "type": "string" },
+    "report": { "type": "object", "description": "Present only with --full." },
+    "evidence_excerpts": {
+      "type": "array",
+      "description": "Present only with --full.",
+      "items": {
+        "type": "object",
+        "required": ["path", "description", "preview"],
+        "properties": {
+          "path": { "type": "string" },
+          "description": { "type": "string" },
+          "preview": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "diagnosis": {
+      "type": "object",
+      "required": ["category", "confidence", "summary"],
+      "properties": {
+        "category": {
+          "enum": [
+            "environment",
+            "device",
+            "emulator",
+            "install",
+            "signature",
+            "application",
+            "process",
+            "task",
+            "anr",
+            "selector",
+            "selector_ambiguous",
+            "timeout",
+            "assertion",
+            "permission",
+            "configuration",
+            "cancelled",
+            "interrupted",
+            "unknown"
+          ]
+        },
+        "code": { "type": "string" },
+        "confidence": { "enum": ["high", "medium", "low", "insufficient_evidence"] },
+        "summary": { "type": "string" },
+        "failed_operation": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "required": ["reason", "priority", "command", "destructive"],
+      "properties": {
+        "reason": { "type": "string" },
+        "priority": { "enum": ["high", "normal", "low"] },
+        "command": {
+          "type": "object",
+          "required": ["argv"],
+          "properties": {
+            "argv": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        },
+        "destructive": { "type": "boolean" },
+        "warning": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["kind", "path"],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

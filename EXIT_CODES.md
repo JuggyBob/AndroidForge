@@ -54,6 +54,7 @@ Agents must branch on the process exit code and on `error.code` in JSON. Do not 
 | `E_SELECTOR_NOT_FOUND` | 7 | yes | No UI node matched the selector, or `ui clear` had no focused editable field. |
 | `E_UI_HIERARCHY_INVALID` | 6 | yes | UIAutomator returned an unreadable hierarchy. |
 | `E_SELECTOR_AMBIGUOUS` | 7 | yes | Multiple nodes matched; inspect candidates and add `--index` or a narrower selector. |
+| `E_POSTCONDITION_TIMEOUT` | 7 | yes | The action executed but its requested postcondition was not satisfied before the timeout. The action is not retried. Context includes current foreground state and an observation token. |
 | `E_UI_ASSERTION_FAILED` | 7 | yes | The requested UI condition did not hold. |
 | `E_TEXT_VERIFICATION_FAILED` | 7 | yes | Entered text did not read back as requested. |
 | `E_IME_VISIBLE` | 7 | yes | Back was refused while the soft keyboard was up; pass `--hide-keyboard`. |
@@ -62,6 +63,10 @@ Agents must branch on the process exit code and on `error.code` in JSON. Do not 
 | `E_SESSION_EXPIRED` | 4 | yes | Session metadata is unreadable, stale, or the device is gone. |
 | `E_SESSION_OWNERSHIP_MISMATCH` | 4 | yes | The session is not owned by the caller/owner, including destructive `session stop|release|restart`. |
 | `E_SESSION_NOT_FOUND` | 4 | yes | The session id does not exist. |
+| `E_OBSERVATION_NOT_FOUND` | 4 | yes | The observation token does not exist for this session or was pruned by retention. |
+| `E_OBSERVATION_EXPIRED` | 4 | yes | The observation is older than 24 hours or the device rebooted. Capture a fresh observation. |
+| `E_OBSERVATION_SESSION_MISMATCH` | 4 | yes | The token belongs to another session. Use a token from the target session. |
+| `E_LEASE_EXPIRED` | 4 | yes | A session lease is expired and requires reconciliation or renewal. Expiry never stops a device by itself. |
 | `E_ARTIFACT_WRITE_FAILED` | 9 | yes | Evidence could not be written. Check disk/path permissions. |
 | `E_CONFIG_INVALID` | 8 | no | Global or merged configuration is invalid. |
 | `E_ADAPTER_INVALID` | 8 | no | Project adapter is invalid or uses an unsupported `adapter_version`. |

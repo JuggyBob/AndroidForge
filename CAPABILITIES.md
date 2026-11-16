@@ -17,6 +17,13 @@
 | `devices.list` | supported | adb | Parses `adb devices -l`, enriches operational devices. |
 | `emulator.lifecycle` | supported | adb, emulator | Legacy emulator executable; headless start, boot wait, stop, snapshots. |
 | `session.ownership` | supported | filesystem locks | Coordinates AndroidForge sessions only; external ADB users are not prevented. |
+| `session.ensure` | supported | filesystem locks | Idempotent reuse/attach/launch with advisory lease metadata; never steals another owner's device. |
+| `context` | supported | local state, optional adb | Compact project/session/device/app/screen/run snapshot with partial results and argv next actions. |
+| `ui.observation` | supported | adb, uiautomator | Compact semantic observations, session/boot-scoped tokens, semantic diffs and `--full` hierarchy. |
+| `ui.postconditions` | supported | adb, uiautomator | One action plus observation polling; no hidden action retries. |
+| `diagnosis.explain` | supported | local reports | Deterministic categories, confidence, evidence, stable fingerprints and exact argv next actions. No LLM. |
+| `repair.plan` | supported | local toolchain | Strictly read-only environment repair planning; does not install or edit anything. |
+| `agent.pipeline` | supported | adb, project adapter | Transparent ensure/inspect/install/fixture/conformance/explain stages with dry-run. |
 | `apk.inspect` | supported | aapt2 | Package, version, SDKs, label, launchable activity, architectures, hash. |
 | `apk.verify` | supported | aapt2, apksigner, Java | Local signature verification. No signing automation. |
 | `app.install` | supported | adb | Signature-aware diagnostics; never auto-uninstalls. |
@@ -68,10 +75,15 @@
 - `avd list`; `avd clone` is present only to return a structured `E_UNSUPPORTED_OPERATION` with alternatives.
 - `emulator start|status|stop`.
 - `snapshot list|save|load|delete`.
-- `session start|attach|claim|list|inspect|status|release|stop|use|current|gc|restart`.
+- `session start|ensure|attach|claim|list|inspect|status|release|stop|use|current|gc|restart`.
   `session list --active` hides released/failed tombstones; a released tombstone can still stop its
   owned emulator if nobody else owns it. `session stop|release|restart` require the matching `--owner`
   (or `ANDROIDFORGE_OWNER`) unless `--force` is used for a deliberate takeover.
+- `session ensure` reuses a compatible owned session, attaches to a warm unowned emulator or launches the
+  requested AVD. `--ttl` records an advisory lease; expiry marks `needs_reconciliation` rather than
+  stopping a device.
+- `context` - project, environment, session, device, app, screen, last run and next actions; supports
+  `--include`, `--full`, `--refresh-screen`, `--no-screen` and partial results.
 
 ### Apps and APKs
 
@@ -82,7 +94,18 @@
 
 ### UI
 
-- `ui dump|find|tap|long-press|text|clear|wait|assert|settle|scroll|scroll-to|swipe|back|home|keyevent|hide-keyboard|focused`.
+- `ui dump|inspect|observe|diff|find|tap|long-press|text|clear|wait|assert|settle|scroll|scroll-to|swipe|back|home|keyevent|hide-keyboard|focused`.
+- `ui observe` returns compact semantics and a session/boot-scoped token; `ui diff` compares tokens.
+- `tap`, `long-press`, `text` and `scroll` accept `--wait-for-text`, `--wait-for-absent-text`,
+  `--wait-for-value`, `--wait-for-package`, `--wait-for-activity` and `--timeout` postconditions.
+
+### Agent loop and repair
+
+- `report explain <run|latest>` with `--full` and `--markdown`; deterministic categories, evidence,
+  fingerprints and exact argv next actions.
+- `doctor fix --plan|--check`; strictly read-only repair planning.
+- `agent test` with `--dry-run`, `--apk`, `--session-id`, `--avd`, `--serial`, `--owner`, `--profile`,
+  `--ttl`, `--install`, `--flow` and `--fixture`.
 
 ### Evidence and diagnostics
 
@@ -121,4 +144,4 @@
 
 ## Verified versus unverified
 
-The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. It also validated the portable ZIP and per-user installer. Physical-device, Maestro, instrumentation-package, snapshot-restore and root-only time paths were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.
+The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery exercised compact context, semantic observations and diffs, successful and timed-out postconditions, reboot token invalidation, idempotent session ensure with lease renewal and ownership refusal, read-only repair planning, deterministic explanations and the full `agent test` pipeline on CalcSuite, DiscountHunter and IronPulse. It also validated the portable ZIP and per-user installer. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.

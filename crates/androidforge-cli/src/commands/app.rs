@@ -246,7 +246,7 @@ pub async fn app(ctx: &CliContext, command: &AppCommand) -> Result<CommandSucces
     }
 }
 
-async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<CommandSuccess> {
+pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<CommandSuccess> {
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
     let mut options = InstallOptions::new(local_path(ctx, &args.apk));
@@ -331,7 +331,12 @@ async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<CommandSucce
         true,
         |run| async {
             let app = ctx.app_manager()?;
-            let result = app.install(&device.serial, &options).await?;
+            let result = app.install(&device.serial, &options).await.map_err(|error| {
+                error.with_context_string(
+                    "apk_path",
+                    options.apk_path.to_string_lossy().into_owned(),
+                )
+            })?;
             run.set_build(result.build.clone());
             let identity = serde_json::to_string_pretty(&result.build).unwrap_or_default();
             let artifact = run.write_text_artifact(

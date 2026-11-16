@@ -55,6 +55,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .column(Column::initial(130.0))
         .column(Column::remainder().at_least(120.0))
         .column(Column::initial(80.0))
+        .column(Column::initial(110.0))
         .column(Column::initial(70.0))
         .column(Column::initial(58.0))
         .header(24.0, |mut header| {
@@ -64,6 +65,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 "Device",
                 "Kind / state",
                 "Heartbeat",
+                "Lease",
                 "Stale",
                 "",
             ] {
@@ -101,6 +103,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
                 row.col(|ui| {
                     ui.label(RichText::new(format!("{}s", session.age_seconds)).size(10.0));
+                });
+                row.col(|ui| {
+                    if let Some(lease) = &session.lease_expires_at {
+                        if session.lease_expired {
+                            status_pill(ui, "expired", theme::RED);
+                        } else {
+                            ui.label(RichText::new(lease).size(9.0).monospace())
+                                .on_hover_text(lease);
+                        }
+                    } else {
+                        ui.label(RichText::new("-").size(10.0).color(theme::MUTED));
+                    }
                 });
                 row.col(|ui| {
                     if session.stale {
@@ -173,6 +187,27 @@ fn details(app: &mut App, ui: &mut egui::Ui, session: &crate::models::SessionInf
                         "Heartbeat",
                         session
                             .heartbeat_at
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
+                        "Lease",
+                        session
+                            .lease_expires_at
+                            .clone()
+                            .map(|lease| {
+                                if session.lease_expired {
+                                    format!("{lease} (expired)")
+                                } else {
+                                    lease
+                                }
+                            })
+                            .unwrap_or_else(|| "none".to_string()),
+                    ),
+                    (
+                        "Project",
+                        session
+                            .project_root
                             .clone()
                             .unwrap_or_else(|| "-".to_string()),
                     ),

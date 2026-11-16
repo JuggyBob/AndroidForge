@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod artifact;
 pub mod config;
+pub mod diagnosis;
 pub mod error;
 pub mod model;
 pub mod output;

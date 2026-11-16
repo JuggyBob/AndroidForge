@@ -8,6 +8,75 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.4.0] - 2026-11-16
+
+Fourth alpha, focused on reducing the number of commands, tokens and manual reasoning an AI coding
+agent needs to operate an Android device.
+
+### Added
+
+- `androidforge context` - one compact, section-filterable snapshot of project, environment, session,
+  device, application, screen observation, last run and deterministic next actions. Supports `--full`,
+  `--refresh-screen`, `--no-screen` and `--include`; returns partial results when a device or optional
+  section is unavailable.
+- `androidforge report explain <RUN|latest>` - deterministic failure categories, confidence,
+  evidence references, stable versioned fingerprints and exact `argv` next actions. Supports `--full`
+  and `--markdown`; never calls an LLM or network service.
+- `androidforge ui observe` - compact semantic observation with persisted observation tokens, freshness,
+  foreground/focus/display metadata, actionable/scrollable nodes, visible text and `--full` hierarchy
+  mode. Observation tokens are session-scoped, boot-id-scoped, retained per session and rejected after
+  24 hours, cross-session use or a device reboot.
+- `androidforge ui diff --from <TOKEN> [--to <TOKEN>]` - semantic added/removed/modified/focus/package/
+  activity changes, duplicate resource-id pairing, meaningful bounds-change filtering and explicit
+  truncation counts.
+- UI postconditions for `tap`, `long-press`, `text` and `scroll`: `--wait-for-text`,
+  `--wait-for-absent-text`, `--wait-for-value`, `--wait-for-package`, `--wait-for-activity` and
+  `--timeout`. Actions execute once; only observations are polled. Failures return
+  `E_POSTCONDITION_TIMEOUT` with the current foreground state, postcondition results, observation token
+  and failure evidence.
+- `androidforge session ensure` - idempotent session acquisition by project/owner/target, safe reuse,
+  warm-emulator attachment, project binding, advisory TTL/lease metadata, expiry reconciliation without
+  killing devices, serialized concurrent ensures and ownership-safe alternatives.
+- `androidforge doctor fix --plan|--check` - strictly read-only repair planning for SDK, platform-tools,
+  ADB, emulator, build-tools, Java, Maestro, licenses, SDK/platform gaps, invalid paths, conflicting SDK
+  environment variables and project configuration. No package installation, PATH edit, registry edit or
+  download is performed.
+- `androidforge agent test` - transparent composition of config validation, session ensure, device
+  readiness, APK inspection, installed-build comparison, optional install, optional fixture, optional
+  conformance, failure explanation and a consolidated inline/on-disk report. `--dry-run` lists planned
+  stages, confirmations and state-changing operations without executing them.
+- Stable error codes `E_POSTCONDITION_TIMEOUT`, `E_OBSERVATION_NOT_FOUND`, `E_OBSERVATION_EXPIRED`,
+  `E_OBSERVATION_SESSION_MISMATCH` and `E_LEASE_EXPIRED`.
+- JSON Schemas for context, observation, UI diff, diagnosis, session ensure, repair plan and agent test.
+- Desktop integration: deterministic explanation and copyable next actions in Triage, read-only repair
+  plan in Setup, and lease/project binding in Sessions.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.4.0`.
+- UI observation defaults to a compact actionable view with explicit `actionable_total` and
+  `actionable_truncated`; `--full` returns the complete parsed hierarchy and all actionable nodes.
+- Failure explanations prefer the operation-specific step failure over an aggregate command failure,
+  classify signature rejection messages even when reported as `E_INSTALL_FAILED`, and surface failed
+  conformance check names.
+- `report explain` curates up to ten relevant evidence references by default; all artifacts remain in
+  `artifacts` and expanded excerpts are available with `--full`.
+- APK install failures now record the candidate `apk_path` so diagnosis and next actions reference the
+  APK that actually failed rather than a stale session build.
+- Session metadata now records `project_root`, `lease_expires_at` and `lease_ttl_seconds`; older
+  sessions remain readable.
+
+### Known limitations
+
+- Observation tokens live in the local AndroidForge state directory. They survive normal CLI
+  invocations but not manual deletion of that state or a different `ANDROIDFORGE_STATE_DIR`.
+- Lease expiry is advisory metadata; it never stops an emulator. Expired leases must be renewed or
+  reconciled explicitly.
+- `doctor fix --plan` does not repair environments automatically; this is deliberate.
+- `agent test` supports one APK, one fixture and one conformance flow per invocation.
+- Physical devices, Maestro execution, instrumentation-package validation, snapshot restore, root-only
+  operations, multiple DPI scales and macOS/Linux hosts remain unvalidated.
+
 ## [0.3.0] - 2026-11-16
 
 Third alpha, released as one integrated desktop and backend update.
@@ -198,7 +267,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.4.0
 [0.3.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.1.0

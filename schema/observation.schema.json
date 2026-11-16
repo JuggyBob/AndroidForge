@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/observation.schema.json",
+  "title": "AndroidForge compact UI observation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "session_id",
+    "device_serial",
+    "observed_at",
+    "age_ms",
+    "stale",
+    "display",
+    "foreground",
+    "actionable",
+    "actionable_total",
+    "hierarchy",
+    "raw_xml_path"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^obs-" },
+    "session_id": { "type": "string" },
+    "device_serial": { "type": "string" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "age_ms": { "type": "integer", "minimum": 0 },
+    "stale": { "type": "boolean" },
+    "display": {
+      "type": "object",
+      "required": ["orientation"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 0 },
+        "height": { "type": "integer", "minimum": 0 },
+        "orientation": { "type": "string" },
+        "rotation": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "foreground": {
+      "type": "object",
+      "properties": {
+        "package": { "type": "string" },
+        "activity": { "type": "string" },
+        "window": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "focused": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/node" }] },
+    "actionable": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+    "actionable_total": { "type": "integer", "minimum": 0 },
+    "actionable_truncated": { "type": "boolean" },
+    "scrollable": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+    "visible_text": { "type": "array", "items": { "type": "string" } },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" },
+      "description": "Complete parsed hierarchy; present only with --full."
+    },
+    "hierarchy": {
+      "type": "object",
+      "required": ["node_count", "compact_node_count"],
+      "properties": {
+        "package": { "type": "string" },
+        "rotation": { "type": "integer" },
+        "node_count": { "type": "integer", "minimum": 0 },
+        "compact_node_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "raw_xml_path": { "type": "string" }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["path", "depth", "bounds"],
+      "properties": {
+        "path": { "type": "string" },
+        "depth": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" },
+        "content_desc": { "type": "string" },
+        "hint": { "type": "string" },
+        "resource_id": { "type": "string" },
+        "class": { "type": "string" },
+        "package": { "type": "string" },
+        "bounds": {
+          "type": "object",
+          "required": ["left", "top", "right", "bottom"],
+          "properties": {
+            "left": { "type": "integer" },
+            "top": { "type": "integer" },
+            "right": { "type": "integer" },
+            "bottom": { "type": "integer" }
+          },
+          "additionalProperties": false
+        },
+        "clickable": { "type": "boolean" },
+        "long_clickable": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "focused": { "type": "boolean" },
+        "selected": { "type": "boolean" },
+        "scrollable": { "type": "boolean" },
+        "checked": { "type": "boolean" },
+        "password": { "type": "boolean" },
+        "displayed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

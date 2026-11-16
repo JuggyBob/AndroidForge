@@ -3,15 +3,28 @@ use androidforge_core::output::CommandSuccess;
 use androidforge_core::run::RunContext;
 use androidforge_core::session::Session;
 use androidforge_core::util::write_atomic;
+use androidforge_ui::{Selector, UiHierarchy};
+use std::time::Instant;
 
 use crate::cli::{
-    UiCommand, UiDumpArgs, UiInspectArgs, UiKeyEventArgs, UiScrollArgs, UiScrollToArgs,
-    UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
+    PostconditionArgs, UiCommand, UiDumpArgs, UiInspectArgs, UiKeyEventArgs, UiScrollArgs,
+    UiScrollToArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
 };
 use crate::commands::common::{require_selector, success};
+use crate::commands::observation;
 use crate::context::CliContext;
 
 pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess> {
+    if matches!(command, UiCommand::Observe(_) | UiCommand::Diff(_))
+        && ctx.load_session(false)?.is_none()
+    {
+        return Err(ForgeError::new(
+            androidforge_core::error::ErrorCode::SessionNotFound,
+            "ui observation requires a session",
+        )
+        .with_suggestion("Pass --session <ID> or run `androidforge session ensure ... --json`.")
+        .with_suggestion("Run `androidforge context --json` to inspect available sessions."));
+    }
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
     let serial = device.serial.clone();
@@ -29,6 +42,26 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             .await
         }
         UiCommand::Inspect(args) => inspect(ctx, session.as_ref(), &device, args).await,
+        UiCommand::Observe(args) => {
+            let Some(session) = session.as_ref() else {
+                return Err(ForgeError::new(
+                    androidforge_core::error::ErrorCode::SessionNotFound,
+                    "ui observe requires a session",
+                )
+                .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+            };
+            observation::observe_command(ctx, session, &device, args).await
+        }
+        UiCommand::Diff(args) => {
+            let Some(session) = session.as_ref() else {
+                return Err(ForgeError::new(
+                    androidforge_core::error::ErrorCode::SessionNotFound,
+                    "ui diff requires a session",
+                )
+                .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+            };
+            observation::diff_command(ctx, session, &device, args).await
+        }
         UiCommand::Find(args) => {
             let selector = require_selector(&args.selector)?;
             execute_in_run!(
@@ -106,10 +139,20 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                     |_run| async {
                         let ui = ctx.ui_manager()?;
                         let display = ui.tap_xy(&serial, x, y).await?;
+                        let action = serde_json::json!({"x": x, "y": y, "display_size": display});
+                        let (value, suffix) = apply_postconditions(
+                            ctx,
+                            session.as_ref(),
+                            &device,
+                            None,
+                            &args.postcondition,
+                            action,
+                        )
+                        .await?;
                         Ok(success(
                             "ui.tap",
-                            serde_json::json!({"x": x, "y": y, "display_size": display}),
-                            format!("Tapped ({x}, {y}) on {serial}\n"),
+                            value,
+                            format!("Tapped ({x}, {y}) on {serial}{suffix}\n"),
                         )
                         .with_optional_session(session_id(session.as_ref()))
                         .with_device(serial.clone()))
@@ -128,11 +171,21 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                     |_run| async {
                         let ui = ctx.ui_manager()?;
                         let result = ui.tap(&serial, &selector).await?;
+                        let action = serde_json::to_value(&result)?;
+                        let (value, suffix) = apply_postconditions(
+                            ctx,
+                            session.as_ref(),
+                            &device,
+                            Some(&selector),
+                            &args.postcondition,
+                            action,
+                        )
+                        .await?;
                         Ok(success(
                             "ui.tap",
-                            serde_json::to_value(&result)?,
+                            value,
                             format!(
-                                "Tapped {} at ({}, {}){}\n",
+                                "Tapped {} at ({}, {}){}{}\n",
                                 result
                                     .matched
                                     .text
@@ -146,7 +199,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                     " via clickable ancestor"
                                 } else {
                                     ""
-                                }
+                                },
+                                suffix
                             ),
                         )
                         .with_optional_session(session_id(session.as_ref()))
@@ -168,10 +222,23 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                 |_run| async {
                     let ui = ctx.ui_manager()?;
                     let result = ui.long_press(&serial, &selector).await?;
+                    let action = serde_json::to_value(&result)?;
+                    let (value, suffix) = apply_postconditions(
+                        ctx,
+                        session.as_ref(),
+                        &device,
+                        Some(&selector),
+                        &args.postcondition,
+                        action,
+                    )
+                    .await?;
                     Ok(success(
                         "ui.long-press",
-                        serde_json::to_value(&result)?,
-                        format!("Long-pressed at ({}, {})\n", result.tap_x, result.tap_y),
+                        value,
+                        format!(
+                            "Long-pressed at ({}, {}).{suffix}\n",
+                            result.tap_x, result.tap_y
+                        ),
                     )
                     .with_optional_session(session_id(session.as_ref()))
                     .with_device(serial.clone()))
@@ -464,8 +531,18 @@ async fn text(
                     args.hide_keyboard,
                 )
                 .await?;
+            let action = serde_json::to_value(&result)?;
+            let (value, suffix) = apply_postconditions(
+                ctx,
+                session,
+                device,
+                selector.as_ref(),
+                &args.postcondition,
+                action,
+            )
+            .await?;
             let human = format!(
-                "Text entry {} for {} character(s){}.\n",
+                "Text entry {} for {} character(s){}.{}\n",
                 if result.verified {
                     "verified"
                 } else {
@@ -476,9 +553,10 @@ async fn text(
                     " after clearing the field"
                 } else {
                     ""
-                }
+                },
+                suffix
             );
-            Ok(success("ui.text", serde_json::to_value(&result)?, human)
+            Ok(success("ui.text", value, human)
                 .with_optional_session(session.map(|session| session.id.clone()))
                 .with_device(serial.clone()))
         },
@@ -599,16 +677,27 @@ async fn scroll(
             let result = ui
                 .scroll(&serial, &args.direction, selector.as_ref())
                 .await?;
+            let action = serde_json::to_value(&result)?;
+            let (value, suffix) = apply_postconditions(
+                ctx,
+                session,
+                device,
+                selector.as_ref(),
+                &args.postcondition,
+                action,
+            )
+            .await?;
             Ok(success(
                 "ui.scroll",
-                serde_json::to_value(&result)?,
+                value,
                 format!(
-                    "Scrolled {} within [{},{}][{},{}].\n",
+                    "Scrolled {} within [{},{}][{},{}].{}\n",
                     args.direction,
                     result.target_bounds.left,
                     result.target_bounds.top,
                     result.target_bounds.right,
-                    result.target_bounds.bottom
+                    result.target_bounds.bottom,
+                    suffix
                 ),
             )
             .with_optional_session(session.map(|session| session.id.clone()))
@@ -730,4 +819,219 @@ async fn keyevent(
 
 fn session_id(session: Option<&Session>) -> Option<String> {
     session.map(|session| session.id.clone())
+}
+
+fn postconditions_requested(args: &PostconditionArgs) -> bool {
+    !args.wait_for_text.is_empty()
+        || !args.wait_for_value.is_empty()
+        || !args.wait_for_package.is_empty()
+        || !args.wait_for_activity.is_empty()
+        || !args.wait_for_absent_text.is_empty()
+}
+
+fn contains_text(hierarchy: &UiHierarchy, expected: &str) -> bool {
+    hierarchy.nodes.iter().any(|node| {
+        node.visible()
+            && !node.password
+            && (node
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains(expected))
+                || node
+                    .content_desc
+                    .as_deref()
+                    .is_some_and(|text| text.contains(expected)))
+    })
+}
+
+fn value_matches(hierarchy: &UiHierarchy, selector: Option<&Selector>, expected: &str) -> bool {
+    if let Some(selector) = selector {
+        if let Ok(selection) = androidforge_ui::select(hierarchy.clone(), selector) {
+            let node = selection.selected_node();
+            return node
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains(expected))
+                || node
+                    .hint
+                    .as_deref()
+                    .is_some_and(|text| text.contains(expected));
+        }
+        return false;
+    }
+    hierarchy.nodes.iter().any(|node| {
+        node.focused
+            && node.editable_like()
+            && (node
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains(expected))
+                || node
+                    .hint
+                    .as_deref()
+                    .is_some_and(|text| text.contains(expected)))
+    })
+}
+
+/// Poll the requested postconditions after an action. The action itself is
+/// never repeated: only observations are refreshed until the deadline.
+async fn apply_postconditions(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    selector: Option<&Selector>,
+    post: &PostconditionArgs,
+    action: serde_json::Value,
+) -> Result<(serde_json::Value, String)> {
+    if !postconditions_requested(post) {
+        return Ok((action, String::new()));
+    }
+    let timeout = ctx.parse_timeout(post.timeout.as_deref(), 10)?;
+    let started = Instant::now();
+    let ui = ctx.ui_manager()?;
+    let adb = ctx.adb()?;
+    let serial = device.serial.clone();
+    let needs_hierarchy = !post.wait_for_text.is_empty()
+        || !post.wait_for_absent_text.is_empty()
+        || !post.wait_for_value.is_empty();
+    loop {
+        let hierarchy = if needs_hierarchy {
+            Some(ui.dump(&serial).await?)
+        } else {
+            None
+        };
+        let focus = adb.current_focus(&serial).await;
+        let foreground_package = focus
+            .as_ref()
+            .map(|focus| focus.package.clone())
+            .or_else(|| {
+                hierarchy
+                    .as_ref()
+                    .and_then(|hierarchy| hierarchy.package_name.clone())
+            });
+        let foreground_activity = focus.as_ref().and_then(|focus| focus.activity.clone());
+        let mut conditions = Vec::new();
+        for expected in &post.wait_for_text {
+            conditions.push(serde_json::json!({
+                "type": "text_visible",
+                "expected": expected,
+                "satisfied": hierarchy
+                    .as_ref()
+                    .is_some_and(|hierarchy| contains_text(hierarchy, expected)),
+            }));
+        }
+        for expected in &post.wait_for_absent_text {
+            conditions.push(serde_json::json!({
+                "type": "text_absent",
+                "expected": expected,
+                "satisfied": hierarchy
+                    .as_ref()
+                    .is_some_and(|hierarchy| !contains_text(hierarchy, expected)),
+            }));
+        }
+        for expected in &post.wait_for_value {
+            conditions.push(serde_json::json!({
+                "type": "value_contains",
+                "expected": expected,
+                "satisfied": hierarchy
+                    .as_ref()
+                    .is_some_and(|hierarchy| value_matches(hierarchy, selector, expected)),
+            }));
+        }
+        for expected in &post.wait_for_package {
+            conditions.push(serde_json::json!({
+                "type": "package_foreground",
+                "expected": expected,
+                "satisfied": foreground_package.as_deref() == Some(expected.as_str()),
+            }));
+        }
+        for expected in &post.wait_for_activity {
+            conditions.push(serde_json::json!({
+                "type": "activity_foreground",
+                "expected": expected,
+                "satisfied": foreground_activity
+                    .as_deref()
+                    .is_some_and(|activity| activity.contains(expected.as_str())),
+            }));
+        }
+        let satisfied = conditions.iter().all(|condition| {
+            condition
+                .get("satisfied")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        });
+        if satisfied {
+            let observation_id = match session {
+                Some(session) => {
+                    observation::collect_observation(ctx, session, device, None, false)
+                        .await
+                        .ok()
+                        .map(|observation| observation.id)
+                }
+                None => None,
+            };
+            let result = serde_json::json!({
+                "action_executed": true,
+                "action": action,
+                "postcondition": {
+                    "satisfied": true,
+                    "duration_ms": started.elapsed().as_millis() as u64,
+                    "conditions": conditions,
+                    "foreground_package": foreground_package,
+                    "foreground_activity": foreground_activity,
+                    "observation_id": observation_id,
+                }
+            });
+            return Ok((
+                result,
+                format!(
+                    " Postcondition satisfied in {}ms.",
+                    started.elapsed().as_millis()
+                ),
+            ));
+        }
+        if started.elapsed() >= timeout {
+            let observation = match session {
+                Some(session) => {
+                    observation::collect_observation(ctx, session, device, None, false)
+                        .await
+                        .ok()
+                }
+                None => None,
+            };
+            let mut error = ForgeError::new(
+                androidforge_core::error::ErrorCode::PostconditionTimeout,
+                format!(
+                    "the UI action completed but its postcondition was not satisfied within {}s",
+                    timeout.as_secs()
+                ),
+            )
+            .with_context("action_executed", serde_json::json!(true))
+            .with_context("postconditions", serde_json::json!(conditions))
+            .with_context(
+                "foreground_package",
+                serde_json::json!(foreground_package),
+            )
+            .with_context(
+                "foreground_activity",
+                serde_json::json!(foreground_activity),
+            )
+            .with_context("timeout_ms", serde_json::json!(timeout.as_millis() as u64))
+            .with_suggestion(
+                "Run `androidforge ui observe --session <ID> --json` to inspect the actual screen.",
+            )
+            .with_suggestion(
+                "Do not retry a destructive action blindly; verify whether it already changed state.",
+            )
+            .device(serial);
+            if let Some(session) = session {
+                error = error.session(session.id.clone());
+            }
+            if let Some(observation) = observation {
+                error = error.with_context("observation_id", serde_json::json!(observation.id));
+            }
+            return Err(error);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }

@@ -39,6 +39,52 @@ All meaningful commands build a `CommandSuccess` with a command name, JSON `resu
 
 Errors carry a stable `ErrorCode`, message, recoverability, suggestions, context map, optional command/device/session and artifacts. The process exit code comes from the code, not from a generic `1`.
 
+## Agent loop
+
+The v0.4.0 agent-facing layer is a composition of existing primitives, not a second execution model.
+
+### Context
+
+`context` assembles sections from project config, toolchain discovery, session metadata, a single
+device inspection, app status, a recent or fresh observation and run summaries. It does not require a
+device to return project/environment/session metadata; unavailable sections are explicit. A screen
+observation younger than five seconds is reused unless `--refresh-screen` is passed. Observations are
+written by the same observation token store used by `ui observe`, so `context` never invents freshness.
+
+### Observations and tokens
+
+`ui observe` parses one UIAutomator hierarchy, then derives a compact semantic projection. Tokens are
+written atomically under `<state>/observations/<session>/<token>.json`, with the raw XML in the same
+directory. Records include the session id, boot id, timestamp and parsed projection. Reads validate
+session scope, boot id and the 24-hour maximum age; the per-session retention limit is 20 records. The
+store is filesystem-only and requires no daemon. Diffs pair nodes by resource id when available and by
+path/class/package otherwise, pair duplicate ids in order, ignore sub-threshold bounds movement and cap
+the returned lists with explicit totals.
+
+### Deterministic diagnosis
+
+`androidforge-core::diagnosis` maps stable error codes, then normalized failure messages, to categories
+and confidence. It uses no network, model, telemetry or probabilistic service. Evidence is curated from
+stored report/step artifacts (command output, hierarchy, crash reports, app status, screenshots and
+filtered logcat); raw dumpsys/logcat remain available through the full artifact list. Next actions are
+built as argv arrays for implemented commands. Fingerprints hash a versioned, normalized material string
+(category, code, operation, package, selector, step and normalized message) and exclude run ids,
+timestamps, temporary paths, memory addresses and dynamic numeric ids.
+
+### Orchestration
+
+`session ensure` serializes identical ensure requests with a filesystem lock, then reuses a compatible
+session, attaches to a warm unowned emulator or launches the target. Project/owner/target compatibility
+is checked before reuse; ownership is enforced by the existing device lock. Lease fields are advisory
+metadata only.
+
+`agent test` is an explicit stage machine in the CLI: config validation, session resolution, device
+check, APK inspection, installed-build comparison, optional install, optional fixture, optional
+conformance, explanation and consolidated report. It calls the same internal operations as the
+corresponding CLI commands and records the equivalent argv, duration and status for each stage. It never
+passes `--fresh`, never clears data and never uninstalls. A dry run stops before any session or device
+mutation and reports required confirmations.
+
 ## Desktop cockpit
 
 `androidforge-desktop` is a separate binary, not a library dependency of the CLI. It has four layers:
@@ -51,9 +97,10 @@ Errors carry a stable `ErrorCode`, message, recoverability, suggestions, context
    the report says it passed.
 3. **Workers** — background threads run CLI calls and send typed events over `mpsc`; the egui frame only
    drains events and renders. Refreshes are interval-driven and pinned while an operation is running.
-4. **Views/dialogs** - Setup/onboarding, Overview, Devices, Sessions, Runs, Triage, Compare, Logcat,
-   Inspector, Maintenance, run details/evidence and operation output. Confirmation and error dialogs
-   render above ordinary windows.
+4. **Views/dialogs** - Setup/onboarding with read-only repair planning, Overview, Devices, Sessions with
+   lease/project binding, Runs, Triage with deterministic explanations and copyable next actions,
+   Compare, Logcat, Inspector, Maintenance, run details/evidence and operation output. Confirmation and
+   error dialogs render above ordinary windows.
 
 CLI resolution order is explicit settings path, executable beside the desktop, workspace `target/debug`
 or `target/release` during development, then `PATH`. The compatibility probe checks `--version` and the

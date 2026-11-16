@@ -24,8 +24,43 @@ The schema files:
 | `conformance.schema.json` | Conformance flow, expectations and JSON-path checks. |
 | `analysis.schema.json` | `report compare` and `report flaky` result payloads. |
 | `maintenance.schema.json` | `maintenance summary` and `maintenance clean` result payloads. |
+| `context.schema.json` | `context` result sections and next-action argv. |
+| `observation.schema.json` | `ui observe` observation and compact node projection. |
+| `ui-diff.schema.json` | `ui diff` semantic changes. |
+| `diagnosis.schema.json` | `report explain` diagnosis, evidence, actions and fingerprint. |
+| `session-ensure.schema.json` | `session ensure` acquisition, readiness and lease metadata. |
+| `repair-plan.schema.json` | Read-only `doctor fix --plan` issues and repair commands. |
+| `agent-test.schema.json` | `agent test` stages, dry-run fields and final status. |
 
 Every schema is versioned with `schema_version = 1`, `adapter_version = 1`, fixture `version = 1`, and conformance `version = 1`. Unknown adapter fields are rejected deliberately.
+
+## Agent loop payloads
+
+All agent-facing commands use the normal envelope and put their command-specific object in `result`.
+The new schemas cover:
+
+- `context.schema.json` - `project`, `environment`, `session`, `device`, `app`, `screen`, `last_run`,
+  `next_actions` and `warnings`. Omitted sections are not present; requested-but-unavailable sections
+  have `available: false` and a reason.
+- `observation.schema.json` - observation id, session/device, freshness, display, foreground, focus,
+  compact actionables, scrollables, visible text, hierarchy metadata and raw XML path. `nodes` appears
+  only with `--full`. `actionable_total` and `actionable_truncated` make the compact cap explicit.
+- `ui-diff.schema.json` - from/to tokens plus added, removed, modified, focus, package and activity
+  changes, totals and truncation flag. Pure layout movement is deliberately not reported as a
+  modification.
+- `diagnosis.schema.json` - category, code, confidence, summary, alternatives, evidence references,
+  argv next actions, versioned fingerprint, project root and artifacts. `report` and
+  `evidence_excerpts` appear with `--full`.
+- `session-ensure.schema.json` - `session_id`, acquisition mode, readiness, lease metadata, recovery and
+  warnings. Expiry is advisory (`needs_reconciliation`) and does not imply device termination.
+- `repair-plan.schema.json` - read-only flag, issue severities, detection details and repair actions with
+  confirmation/network/permission flags. `mutations_performed` must stay empty.
+- `agent-test.schema.json` - stage list with status/duration/equivalent argv, installed-build match,
+  final status (`success`, `failed`, `dry_run` or `blocked`), failure context, artifacts and report path.
+
+Fingerprints are `sha256:` values over a versioned normalized material string. They intentionally ignore
+run ids, timestamps, temporary paths, memory addresses and dynamic numeric ids. See
+[AGENT_GUIDE.md](AGENT_GUIDE.md#06-diagnosing-failures) for the agent workflow.
 
 ## Envelope
 

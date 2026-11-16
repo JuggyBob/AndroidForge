@@ -60,7 +60,17 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Inspect host, SDK, ADB, emulator, tools, AVDs, disks and sessions.
-    Doctor,
+    Doctor {
+        #[command(subcommand)]
+        command: Option<DoctorCommand>,
+    },
+    /// Compact, agent-oriented snapshot of the project, session, device, app and screen.
+    Context(ContextArgs),
+    /// Run a transparent high-level agent workflow.
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
     /// Report implemented, best-effort and unsupported capabilities.
     Capabilities,
     /// Print AndroidForge JSON schemas.
@@ -216,6 +226,78 @@ pub enum Command {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum DoctorCommand {
+    /// Produce a read-only, executable repair plan for environment problems.
+    Fix(DoctorFixArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorFixArgs {
+    /// Print the repair plan without modifying the environment. This is the default.
+    #[arg(long)]
+    pub plan: bool,
+    /// Re-check the environment and return a plan. Read-only.
+    #[arg(long)]
+    pub check: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ContextArgs {
+    /// Include only these sections: project, environment, session, device, app, screen, last-run.
+    #[arg(long, value_delimiter = ',')]
+    pub include: Vec<String>,
+    /// Include complete available information instead of the compact default.
+    #[arg(long)]
+    pub full: bool,
+    /// Refresh the screen observation even if a recent observation is cached.
+    #[arg(long)]
+    pub refresh_screen: bool,
+    /// Skip the screen section entirely.
+    #[arg(long)]
+    pub no_screen: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AgentCommand {
+    /// Run the transparent ensure/inspect/install/conformance/explain pipeline.
+    Test(AgentTestArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AgentTestArgs {
+    /// APK to inspect and optionally install before testing.
+    #[arg(long)]
+    pub apk: Option<PathBuf>,
+    /// Existing session id. If omitted, a session is reused or ensured.
+    #[arg(long)]
+    pub session_id: Option<String>,
+    /// AVD for session ensure.
+    #[arg(long)]
+    pub avd: Option<String>,
+    /// Explicit serial for session ensure instead of an AVD.
+    #[arg(long)]
+    pub serial: Option<String>,
+    /// Owner for session ensure.
+    #[arg(long)]
+    pub owner: Option<String>,
+    /// Profile label for session ensure.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Lease duration for session ensure, for example 30m.
+    #[arg(long)]
+    pub ttl: Option<String>,
+    /// Permit installing the APK when the installed build cannot be proven current.
+    #[arg(long)]
+    pub install: bool,
+    /// Run the configured conformance flow. Use `--flow conformance` for the default flow or a path for a specific flow.
+    #[arg(long)]
+    pub flow: Option<String>,
+    /// Run a project fixture before conformance.
+    #[arg(long)]
+    pub fixture: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum SchemaCommand {
     List,
     Show { name: String },
@@ -245,6 +327,8 @@ pub enum ConfigCommand {
 #[derive(Debug, Subcommand)]
 pub enum SessionCommand {
     Start(SessionStartArgs),
+    /// Idempotently acquire or reuse a compatible session.
+    Ensure(SessionEnsureArgs),
     Attach(SessionAttachArgs),
     Claim(SessionAttachArgs),
     List {
@@ -267,6 +351,31 @@ pub enum SessionCommand {
 }
 
 #[derive(Debug, Args, Clone)]
+pub struct SessionEnsureArgs {
+    /// AVD to use if a compatible emulator session does not already exist.
+    #[arg(long)]
+    pub avd: Option<String>,
+    /// Explicitly attach to an already-running serial instead of starting an AVD.
+    #[arg(long)]
+    pub serial: Option<String>,
+    /// Owner label recorded on the session.
+    #[arg(long)]
+    pub owner: Option<String>,
+    /// Profile label stored with the session.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Lease duration metadata, for example 30m or 2h. Does not stop devices on expiry.
+    #[arg(long)]
+    pub ttl: Option<String>,
+    /// Start the emulator headless.
+    #[arg(long)]
+    pub headless: bool,
+    /// Prepare animations/stay-awake settings.
+    #[arg(long)]
+    pub prepare: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct SessionStartArgs {
     #[arg(long)]
     pub avd: String,
@@ -603,6 +712,10 @@ pub enum UiCommand {
     Dump(UiDumpArgs),
     /// Dump and return the parsed hierarchy without creating a run artifact.
     Inspect(UiInspectArgs),
+    /// Capture a compact semantic observation and persist an observation token.
+    Observe(UiObserveArgs),
+    /// Compare a previous observation with a new or stored observation.
+    Diff(UiDiffArgs),
     Find(UiFindArgs),
     Tap(UiTapArgs),
     LongPress(UiTapArgs),
@@ -619,6 +732,29 @@ pub enum UiCommand {
     Keyevent(UiKeyEventArgs),
     HideKeyboard,
     Focused,
+}
+
+#[derive(Debug, Args)]
+pub struct UiObserveArgs {
+    /// Return the complete parsed hierarchy in addition to the compact view.
+    #[arg(long)]
+    pub full: bool,
+    /// Compare against a previous observation token.
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Filter actionable nodes to this package.
+    #[arg(long)]
+    pub package: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct UiDiffArgs {
+    /// Previous observation token.
+    #[arg(long)]
+    pub from: String,
+    /// Optional target observation token. A fresh observation is captured when omitted.
+    #[arg(long)]
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -648,6 +784,8 @@ pub struct UiTapArgs {
     pub x: Option<i32>,
     #[arg(long)]
     pub y: Option<i32>,
+    #[command(flatten)]
+    pub postcondition: PostconditionArgs,
 }
 
 #[derive(Debug, Args)]
@@ -662,6 +800,30 @@ pub struct UiTextArgs {
     pub hide_keyboard: bool,
     #[arg(long)]
     pub no_verify: bool,
+    #[command(flatten)]
+    pub postcondition: PostconditionArgs,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub struct PostconditionArgs {
+    /// Wait until visible text contains this value.
+    #[arg(long = "wait-for-text", value_name = "TEXT")]
+    pub wait_for_text: Vec<String>,
+    /// Wait until the selected/focused edit field contains this value.
+    #[arg(long = "wait-for-value", value_name = "VALUE")]
+    pub wait_for_value: Vec<String>,
+    /// Wait until this package is foreground.
+    #[arg(long = "wait-for-package", value_name = "PACKAGE")]
+    pub wait_for_package: Vec<String>,
+    /// Wait until this activity is foreground.
+    #[arg(long = "wait-for-activity", value_name = "ACTIVITY")]
+    pub wait_for_activity: Vec<String>,
+    /// Fail if this text is visible at the end of the wait.
+    #[arg(long = "wait-for-absent-text", value_name = "TEXT")]
+    pub wait_for_absent_text: Vec<String>,
+    /// Postcondition timeout, for example 10s.
+    #[arg(long)]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -692,6 +854,8 @@ pub struct UiScrollArgs {
     pub direction: String,
     #[command(flatten)]
     pub selector: SelectorArgs,
+    #[command(flatten)]
+    pub postcondition: PostconditionArgs,
 }
 
 #[derive(Debug, Args)]
@@ -1182,6 +1346,8 @@ pub enum ReportCommand {
     Compare(ReportCompareArgs),
     /// Analyze recent runs for flaky steps.
     Flaky(ReportFlakyArgs),
+    /// Explain a failure deterministically and return exact next commands.
+    Explain(ReportExplainArgs),
     Import {
         #[command(subcommand)]
         command: ReportImportCommand,
@@ -1212,6 +1378,17 @@ pub struct ReportCompareArgs {
     pub run: String,
     #[arg(long)]
     pub baseline: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportExplainArgs {
+    pub run: String,
+    /// Include expanded evidence and metadata.
+    #[arg(long)]
+    pub full: bool,
+    /// Emit a human-readable Markdown explanation instead of JSON.
+    #[arg(long)]
+    pub markdown: bool,
 }
 
 #[derive(Debug, Args)]

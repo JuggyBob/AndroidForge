@@ -408,6 +408,37 @@ impl App {
                     }
                 }
             }
+            AppEvent::Explanation(result) => {
+                self.triage.explanation_loading = false;
+                match result {
+                    Ok(explanation) => {
+                        self.triage.explanation = Some(explanation);
+                        self.triage.explanation_error = None;
+                    }
+                    Err(error) => {
+                        self.triage.explanation_error = Some(error);
+                    }
+                }
+            }
+            AppEvent::RepairPlan(result) => {
+                self.setup.repair_loading = false;
+                match result {
+                    Ok(plan) => {
+                        let count = plan.issues.len();
+                        self.setup.repair_plan = Some(plan);
+                        self.setup.repair_error = None;
+                        if count > 0 {
+                            self.toast(
+                                format!(
+                                    "Repair plan ready: {count} issue(s); no changes were made"
+                                ),
+                                ToastLevel::Info,
+                            );
+                        }
+                    }
+                    Err(error) => self.setup.repair_error = Some(error),
+                }
+            }
         }
         ctx.request_repaint();
     }

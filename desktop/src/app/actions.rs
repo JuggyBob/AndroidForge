@@ -9,7 +9,10 @@ use crate::backend::evidence;
 use crate::backend::json_parser::parse_result;
 use crate::backend::process_manager::{self, OperationEvent};
 use crate::backend::update;
-use crate::models::{ApkInfo, InstallResult, ReconcileResult, ReportPath, RunReport};
+use crate::models::{
+    ApkInfo, DiagnosisExplanation, InstallResult, ReconcileResult, RepairPlan, ReportPath,
+    RunReport,
+};
 use crate::state::*;
 
 impl App {
@@ -94,9 +97,12 @@ impl App {
         self.triage.run_id = Some(run_id.clone());
         self.triage.error = None;
         self.triage.flaky = None;
+        self.triage.explanation = None;
+        self.triage.explanation_error = None;
         self.set_page(Page::Triage);
-        self.open_run(run_id, ctx);
+        self.open_run(run_id.clone(), ctx);
         self.refresh_flaky(ctx);
+        self.refresh_explanation(&run_id, ctx);
     }
 
     pub fn request_evidence_text(&mut self, key: String, ctx: &egui::Context) {
@@ -642,6 +648,36 @@ impl App {
             AppEvent::Flaky(run_result::<crate::models::FlakyReport>(
                 &runner, invocation,
             ))
+        });
+    }
+
+    pub fn refresh_explanation(&mut self, run_id: &str, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.triage.explanation_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.triage.explanation_loading = true;
+        self.triage.explanation_error = None;
+        let invocation = self
+            .project_invocation(["report", "explain", run_id])
+            .timeout(Duration::from_secs(30));
+        self.spawn_event(ctx, move || {
+            AppEvent::Explanation(run_result::<DiagnosisExplanation>(&runner, invocation))
+        });
+    }
+
+    pub fn refresh_repair_plan(&mut self, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.setup.repair_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.setup.repair_loading = true;
+        self.setup.repair_error = None;
+        let invocation = self
+            .project_invocation(["doctor", "fix", "--plan"])
+            .timeout(Duration::from_secs(120));
+        self.spawn_event(ctx, move || {
+            AppEvent::RepairPlan(run_result::<RepairPlan>(&runner, invocation))
         });
     }
 

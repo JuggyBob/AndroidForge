@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/ui-diff.schema.json",
+  "title": "AndroidForge semantic UI diff",
+  "type": "object",
+  "required": ["schema_version", "from", "to", "session_id", "device_serial", "changes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "from": { "type": "string" },
+    "to": { "type": "string" },
+    "session_id": { "type": "string" },
+    "device_serial": { "type": "string" },
+    "changes": {
+      "type": "object",
+      "required": [
+        "added",
+        "removed",
+        "modified",
+        "added_total",
+        "removed_total",
+        "modified_total",
+        "truncated",
+        "focus_changed",
+        "package_changed",
+        "activity_changed"
+      ],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+        "modified": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "changes"],
+            "properties": {
+              "path": { "type": "string" },
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["field", "before", "after"],
+                  "properties": {
+                    "field": { "type": "string" },
+                    "before": { "type": "string" },
+                    "after": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "added_total": { "type": "integer", "minimum": 0 },
+        "removed_total": { "type": "integer", "minimum": 0 },
+        "modified_total": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "focus_changed": { "type": "boolean" },
+        "focus_before": { "type": "string" },
+        "focus_after": { "type": "string" },
+        "foreground_package_before": { "type": "string" },
+        "foreground_package_after": { "type": "string" },
+        "foreground_activity_before": { "type": "string" },
+        "foreground_activity_after": { "type": "string" },
+        "package_changed": { "type": "boolean" },
+        "activity_changed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["path", "depth", "bounds"],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

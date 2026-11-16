@@ -2,6 +2,186 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
+## 0. The v0.4.0 agent loop
+
+The shortest reliable loop is:
+
+```powershell
+androidforge doctor --json
+androidforge context --project . --json
+androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
+androidforge ui observe --session ses-... --json
+androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --timeout 10 --json
+androidforge report explain latest --json
+androidforge context --session ses-... --json
+androidforge session release --session ses-... --owner MyAgent --json
+```
+
+The commands answer, in order: is the host ready, what is the project/device state, which session do I
+own, what is on screen, did my action produce the expected result, why did the last run fail, and what
+changed since I started.
+
+### 0.1 Command safety classes
+
+Read-only commands (safe to run for discovery; `context` may still capture and persist a screen
+observation unless `--dry-run` is used):
+
+- `doctor`, `capabilities`, `devices list|inspect`, `session list|inspect|status`, `context`,
+  `ui observe`, `ui diff`, `ui inspect`, `ui dump`, `report list|show|path|explain`, `doctor fix
+  --plan|--check`, `apk inspect|verify`, `diagnostics logcat peek`.
+- `session ensure --dry-run` and `agent test --dry-run` make no device or session changes.
+
+Device-modifying commands:
+
+- `session start|ensure|attach|restart`, `app install` (plain install preserves app data), `ui
+  tap|long-press|text|clear|scroll|swipe|back|home|keyevent`, `fixture run`, `conformance run`,
+  `agent test` without `--dry-run`.
+
+Potentially destructive commands (require `--yes` or an explicit confirmation flag):
+
+- `app install --fresh --yes` deletes application data.
+- `app clear-data`, `app uninstall`, `app data-restore`, `snapshot load`, `session prune`, `session
+  gc --reclaim --stop`, and `maintenance clean`.
+- `agent test` never passes `--fresh`, never clears data and never uninstalls. It installs only when
+  `--install` is supplied and only with a normal, data-preserving install.
+
+### 0.2 `context`
+
+```powershell
+androidforge context --project . --json
+androidforge context --session ses-... --json
+androidforge context --session ses-... --include project,session,device,app --json
+androidforge context --session ses-... --refresh-screen --json
+androidforge context --session ses-... --full --json
+```
+
+`context` returns `project`, `environment`, `session`, `device`, `app`, `screen`, `last_run` and
+`next_actions`. Missing sections are explicit objects with `available: false` and a reason, never
+silently omitted. The screen section carries `observed_at`, `age_ms` and `stale`; a screen observation
+younger than five seconds is reused unless `--refresh-screen` is passed. Use `--include` to fetch only
+the sections you need. `--full` returns complete available data, including the parsed hierarchy.
+
+Every `next_actions` entry is a suggestion:
+
+```json
+{
+  "reason": "The screen has not been observed recently.",
+  "priority": "high",
+  "command": { "argv": ["androidforge", "ui", "observe", "--session", "ses-...", "--json"] }
+}
+```
+
+Never execute an action blindly. The argv is exact, but it is not run automatically.
+
+### 0.3 Session acquisition and leases
+
+```powershell
+androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
+androidforge session ensure --project . --serial emulator-5554 --owner MyAgent --json
+```
+
+`session ensure` is idempotent for the same owner/project/target. It reuses a healthy compatible
+session, attaches to a warm unowned emulator instead of starting a second one, or launches the
+requested AVD. It never steals a device owned by another session. The response includes
+`session_id`, `owner`, `device_serial`, `avd`, `acquisition_mode`, `readiness`, `lease_expires_at`,
+`lease_expired`, `needs_reconciliation`, `recovery` and `warnings`.
+
+TTL is advisory metadata. Expiry never stops an emulator or interrupts an active operation. Without
+`--ttl`, an expired lease is reported as `needs_reconciliation: true`; with `--ttl`, ensure renews it
+and reports `expired_lease_renewed`. Release a session explicitly when finished:
+
+```powershell
+androidforge session release --session ses-... --owner MyAgent --json
+```
+
+### 0.4 Semantic observation and diffs
+
+```powershell
+androidforge ui observe --session ses-... --json
+androidforge ui observe --session ses-... --package com.example.app --json
+androidforge ui observe --session ses-... --since obs-... --json
+androidforge ui observe --session ses-... --full --json
+androidforge ui diff --session ses-... --from obs-... --json
+androidforge ui diff --session ses-... --from obs-... --to obs-... --json
+```
+
+A compact observation returns the foreground package/activity, display, focus, actionable and
+scrollable nodes, visible text, freshness and a token such as `obs-...`. Default output is intentionally
+filtered and capped; `actionable_total` and `actionable_truncated` tell you whether more nodes exist.
+`--full` returns the complete parsed hierarchy.
+
+Tokens are scoped to one session and one device boot. They expire after 24 hours, after the per-session
+retention limit, or when the device reboots. Cross-session use returns
+`E_OBSERVATION_SESSION_MISMATCH`; a reboot or expiry returns `E_OBSERVATION_EXPIRED`. Create a fresh
+observation instead of guessing.
+
+`ui diff` reports semantic added, removed and modified nodes, focus/package/activity changes and
+meaningful bounds changes. Pure pixel movement is ignored. Large diffs are truncated with explicit
+counts.
+
+### 0.5 UI actions with postconditions
+
+```powershell
+androidforge ui tap --session ses-... --text "Save" --wait-for-text "Saved" --timeout 10 --json
+androidforge ui tap --session ses-... --text "Settings" --wait-for-package com.example.app --json
+androidforge ui tap --session ses-... --text "Item" --wait-for-absent-text "Item" --json
+androidforge ui type "Example query" --session ses-... --wait-for-value "Example query" --json
+androidforge ui scroll --session ses-... --direction down --wait-for-text "More" --json
+```
+
+Multiple conditions are ANDed. The action is executed once; only observations are polled. Success
+means both the action executed and the postcondition was satisfied. A timeout returns
+`E_POSTCONDITION_TIMEOUT` (exit 7) with `action_executed: true`, the unsatisfied conditions, current
+foreground package/activity, timeout, observation token and failure artifacts. Do not repeat a
+potentially destructive action just because the postcondition timed out; inspect the observation and
+evidence first.
+
+### 0.6 Diagnosing failures
+
+```powershell
+androidforge report explain latest --json
+androidforge report explain <RUN_ID> --json
+androidforge report explain <RUN_ID> --full --json
+androidforge report explain <RUN_ID> --markdown
+```
+
+The explanation contains `diagnosis.category`, `diagnosis.code`, `diagnosis.confidence`, a summary,
+curated evidence references, alternatives, `next_actions` with exact argv, a stable `sha256:` fingerprint
+and `project_root`. Categories include environment, device, emulator, install, signature, application,
+process, task, ANR, selector, selector_ambiguous, timeout, assertion, permission, configuration,
+cancelled, interrupted and unknown. Confidence is `high`, `medium`, `low` or `insufficient_evidence`;
+there is no fake percentage.
+
+Run next actions from `project_root`, or pass that path with `--project`. The same failure produces the
+same fingerprint across timestamps, run IDs, temporary paths and dynamic numeric IDs. Different
+failures are not collapsed by a generic timeout or message.
+
+### 0.7 Repair planning
+
+```powershell
+androidforge doctor fix --plan --json
+androidforge doctor fix --check --json
+```
+
+This is strictly read-only. It never installs SDK packages, edits PATH or the registry, downloads
+executables or changes Java/emulator configuration. Each issue reports its severity, detected state,
+component, reason, repair command (when one can be stated exactly), confirmation, network and
+permission requirements. `mutations_performed` is always empty.
+
+### 0.8 Transparent `agent test`
+
+```powershell
+androidforge --project . agent test --apk .\app-debug.apk --flow conformance --install --json
+androidforge --project . agent test --apk .\app-debug.apk --flow conformance --dry-run --json
+```
+
+Without `--install`, the pipeline compares the candidate APK with the recorded installed build. If it
+cannot prove the installed build is current, it stops at `install_apk` and tells you to pass
+`--install`; it does not silently modify the device. A plain install preserves app data. `--dry-run`
+lists every planned stage, required confirmations, target session/target acquisition and state-changing
+operations without executing them. The result records per-stage status, duration, equivalent command
+argv, failure stage/code, explanation and artifact paths, plus a consolidated report path.
+
 ## 1. The operating model
 
 Every meaningful test is a **run** with a **session** and a **device**.

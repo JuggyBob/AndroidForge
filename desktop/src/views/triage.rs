@@ -74,6 +74,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         signals_panel(app, &mut columns[1], &report);
     });
     ui.add_space(12.0);
+    diagnosis_panel(app, ui);
+    ui.add_space(12.0);
     artifacts_panel(app, ui, &report, &path);
     ui.add_space(12.0);
     if let Some(flaky) = app.triage.flaky.clone() {
@@ -146,6 +148,162 @@ fn failure_panel(app: &mut App, ui: &mut egui::Ui, report: &crate::models::RunRe
                 let _ = open::that(path);
             }
         });
+    });
+}
+
+fn diagnosis_panel(app: &mut App, ui: &mut egui::Ui) {
+    let explanation = app.triage.explanation.clone();
+    let loading = app.triage.explanation_loading;
+    let error = app.triage.explanation_error.clone();
+    let run_id = app.triage.run_id.clone();
+    card(ui, |ui| {
+        ui.horizontal(|ui| {
+            section_title(ui, "Agent explanation");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if secondary_button(ui, "Refresh explanation").clicked()
+                    && let Some(run_id) = &run_id
+                {
+                    app.refresh_explanation(run_id, ui.ctx());
+                }
+                if let Some(explanation) = &explanation {
+                    copy_button(ui, &explanation.fingerprint, "Copy fingerprint");
+                }
+            });
+        });
+        if loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                muted(
+                    ui,
+                    "Deriving a deterministic explanation from the stored report...",
+                );
+            });
+            return;
+        }
+        if let Some(error) = &error {
+            error_banner(ui, error);
+        }
+        let Some(explanation) = explanation else {
+            muted(
+                ui,
+                "No explanation loaded yet. Refresh to classify this failure without an LLM.",
+            );
+            return;
+        };
+        let diagnosis = &explanation.diagnosis;
+        let color = match diagnosis.confidence.as_str() {
+            "high" => theme::GREEN,
+            "medium" => theme::YELLOW,
+            "low" => theme::RED,
+            _ => theme::MUTED,
+        };
+        ui.horizontal_wrapped(|ui| {
+            status_pill(ui, &diagnosis.category, theme::BLUE);
+            status_pill(ui, &diagnosis.confidence, color);
+            if let Some(code) = &diagnosis.code {
+                ui.label(
+                    RichText::new(code)
+                        .size(10.0)
+                        .monospace()
+                        .color(theme::MUTED),
+                );
+            }
+        });
+        ui.add_space(3.0);
+        ui.label(RichText::new(&diagnosis.summary).size(11.0));
+        kv_grid(
+            ui,
+            "triage-explanation",
+            &[
+                (
+                    "Failed operation",
+                    diagnosis
+                        .failed_operation
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                (
+                    "Project root",
+                    if explanation.project_root.is_empty() {
+                        "-".to_string()
+                    } else {
+                        explanation.project_root.clone()
+                    },
+                ),
+                ("Fingerprint", explanation.fingerprint.clone()),
+            ],
+        );
+        if !explanation.uncertainty.is_empty() {
+            ui.add_space(3.0);
+            for line in &explanation.uncertainty {
+                ui.label(
+                    RichText::new(format!("Uncertainty: {line}"))
+                        .size(9.5)
+                        .color(theme::YELLOW),
+                );
+            }
+        }
+        if !explanation.alternatives.is_empty() {
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new("Alternative explanations")
+                    .size(10.0)
+                    .strong(),
+            );
+            for alternative in &explanation.alternatives {
+                ui.label(
+                    RichText::new(format!(
+                        "{} ({}) - {}",
+                        alternative.category, alternative.confidence, alternative.summary
+                    ))
+                    .size(9.5)
+                    .color(theme::MUTED),
+                );
+            }
+        }
+        if !explanation.evidence.is_empty() {
+            ui.add_space(5.0);
+            ui.label(RichText::new("Relevant evidence").size(10.0).strong());
+            for evidence in explanation.evidence.iter().take(6) {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&evidence.source)
+                            .size(9.5)
+                            .monospace()
+                            .color(theme::BLUE),
+                    );
+                    ui.label(
+                        RichText::new(&evidence.description)
+                            .size(9.5)
+                            .color(theme::MUTED),
+                    );
+                    copy_button(ui, &evidence.source, "Copy path");
+                });
+            }
+        }
+        if !explanation.next_actions.is_empty() {
+            ui.add_space(5.0);
+            ui.label(
+                RichText::new("Next actions (never auto-executed)")
+                    .size(10.0)
+                    .strong(),
+            );
+            for action in explanation.next_actions.iter().take(6) {
+                ui.add_space(2.0);
+                ui.label(RichText::new(&action.reason).size(9.5).color(theme::MUTED));
+                ui.horizontal(|ui| {
+                    let command = action.command.display();
+                    ui.label(RichText::new(&command).size(9.5).monospace());
+                    copy_button(ui, &command, "Copy command");
+                    if action.destructive {
+                        status_pill(ui, "destructive", theme::RED);
+                    }
+                });
+                if let Some(warning) = &action.warning {
+                    ui.label(RichText::new(warning).size(9.0).color(theme::RED));
+                }
+            }
+        }
     });
 }
 

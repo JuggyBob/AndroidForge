@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/session-ensure.schema.json",
+  "title": "AndroidForge session ensure result",
+  "type": "object",
+  "required": [
+    "session_id",
+    "session",
+    "owner",
+    "kind",
+    "state",
+    "acquisition_mode",
+    "ready",
+    "readiness",
+    "lease_expired",
+    "needs_reconciliation",
+    "recovery",
+    "warnings"
+  ],
+  "properties": {
+    "session_id": { "type": "string" },
+    "session": { "type": "object", "additionalProperties": true },
+    "owner": { "type": "string" },
+    "device_serial": { "type": "string" },
+    "avd": { "type": "string" },
+    "profile": { "type": "string" },
+    "kind": { "enum": ["emulator", "attached"] },
+    "state": { "enum": ["starting", "ready", "stopping", "released", "failed", "abandoned"] },
+    "acquisition_mode": {
+      "enum": ["reused_session", "launched_emulator", "attached_existing"]
+    },
+    "ready": { "type": "boolean" },
+    "readiness": { "enum": ["ready", "device_unavailable"] },
+    "lease_expires_at": { "type": "string", "format": "date-time" },
+    "lease_ttl_seconds": { "type": "integer", "minimum": 1 },
+    "lease_expired": { "type": "boolean" },
+    "needs_reconciliation": { "type": "boolean" },
+    "recovery": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "device": { "type": ["object", "null"], "additionalProperties": true }
+  },
+  "additionalProperties": true
+}

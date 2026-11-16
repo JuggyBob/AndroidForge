@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.3.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.4.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -72,24 +72,28 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Evidence | Screenshots, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
 | Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time |
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
-| Desktop | Native egui/eframe cockpit: onboarding, overview, devices, sessions, runs, triage, comparison, live logcat, device preview/inspector, maintenance and updates |
+| Agent context | `context`, compact observation tokens, `ui diff`, action postconditions and exact next-action argv |
+| Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints and `report explain` |
+| Orchestration | Idempotent `session ensure`, read-only `doctor fix --plan`, transparent `agent test` pipeline |
+| Desktop | Native egui/eframe cockpit: onboarding, overview, devices, sessions, runs, triage with explanations, comparison, live logcat, device preview/inspector, repair planning, maintenance and updates |
 | Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 
-## What is new in v0.3.0
+## What is new in v0.4.0
 
-- **First-run setup wizard** with real CLI, Android SDK, ADB, emulator and AVD checks, plus a safe device verification step.
-- **Actionable diagnostics** from `doctor`, including required/optional status, blocking impact and suggested fixes.
-- **Update awareness and CLI repair** from GitHub Releases, with SHA-256 verification and rollback-safe sidecar replacement.
-- **Failure triage, run comparison and flaky-step analysis** with transparent matching rules and evidence links.
-- **Live logcat** with local filtering, search, pause/follow, bounded buffers, crash/ANR highlighting and export.
-- **Device preview and semantic inspector** with periodic screenshots, parsed hierarchy, bounds highlighting and semantic tap/type/scroll/back actions.
-- **Maintenance center** with storage accounting and confirmed, terminal-only cleanup.
-- **Substantially redesigned desktop UI** with a consistent design system, keyboard-friendly navigation and validated 1280×720, 1366×768 and 1920×1080 layouts.
-- **Portable ZIP and per-user Windows installer**, both unsigned.
+- **`context`**: one compact snapshot of project, environment, owned session, device, app, screen and last run, plus exact next-action argv. Partial results and freshness are explicit.
+- **`report explain`**: deterministic failure category, confidence, evidence, stable fingerprint and exact next commands. No LLM, network or invented cause.
+- **`ui observe` and `ui diff`**: compact semantic observations with session-scoped, reboot-aware tokens; semantic added/removed/modified changes without pixel-noise.
+- **UI postconditions**: `--wait-for-text`, `--wait-for-value`, `--wait-for-package`, `--wait-for-activity`, `--wait-for-absent-text` and `--timeout` turn action-plus-verify into one command. Actions execute once.
+- **`session ensure`**: idempotent ownership-safe acquisition with warm-emulator attachment, project binding, advisory lease metadata and clear reconciliation.
+- **`doctor fix --plan`**: a strictly read-only repair plan with exact component names and commands. Nothing is installed or edited.
+- **`agent test`**: a transparent ensure/inspect/install/fixture/conformance/explain pipeline with `--dry-run`, stage timings, exact commands, failure evidence and no hidden destructive actions.
+- **Desktop integration**: Triage shows deterministic explanations and copyable next commands, Setup shows the read-only repair plan, Sessions shows lease and project binding.
 
-Screenshots of the released application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/).
+Previous desktop work from v0.3.0 is unchanged: setup, runs, triage, comparison, live logcat, device preview, semantic inspector, maintenance and update repair.
+
+Screenshots of the desktop application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/); the v0.4.0 desktop keeps the same design system with the new explanation, repair-plan and lease panels.
 
 ![AndroidForge desktop overview](docs/screenshots/v0.3.0/overview-1280x720.png)
 
@@ -125,7 +129,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.3.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.4.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -171,6 +175,36 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 
 # 7. Stop and release. The owner label is required.
 androidforge session stop --session ses-... --owner MyAgent --json
+```
+
+### Agent loop quick start (v0.4.0)
+
+```powershell
+# One snapshot instead of several discovery commands.
+androidforge context --project . --json
+
+# Acquire or reuse one owned session, idempotently.
+androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
+
+# Observe compact semantics and keep the token.
+androidforge ui observe --session ses-... --json
+
+# Act and verify in one command. The tap happens once.
+androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --timeout 10 --json
+
+# Name the semantic change since the token.
+androidforge ui observe --session ses-... --since obs-... --json
+androidforge ui diff --session ses-... --from obs-... --json
+
+# Explain a failure from stored evidence and get exact argv.
+androidforge report explain latest --json
+
+# Plan repairs without changing the environment.
+androidforge doctor fix --plan --json
+
+# Compose the same primitives transparently, or preview them first.
+androidforge --project . agent test --apk .\app-debug.apk --flow conformance --install --json
+androidforge --project . agent test --apk .\app-debug.apk --flow conformance --dry-run --json
 ```
 
 For a multi-step report:
@@ -277,12 +311,14 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.3.0`.** The CLI has been exercised against real apps on an Android 16 emulator, and the
-`0.3.0` desktop was validated against a real emulator session and the CalcSuite project. Validation
-covered onboarding screens, environment diagnostics, session start/restart, APK inspection and verified
-install, conformance execution, cancellation/reconciliation, live logcat, device preview and semantic
-hierarchy actions, run comparison and safe maintenance preview/cleanup. See
-[VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.4.0`.** The CLI has been exercised against real apps on an Android 16 emulator, and the
+`0.4.0` desktop was validated against a real emulator session and the CalcSuite project. v0.4.0
+validation covered compact context (warm and cold), semantic observation and diffs, successful and
+timed-out postconditions, reboot invalidation, idempotent session ensure and lease renewal, read-only
+repair planning, stable failure explanations, and the full `agent test` pipeline against CalcSuite,
+DiscountHunter and IronPulse. The v0.3.0 desktop validation (onboarding, diagnostics, session restart,
+install, conformance, cancellation, live logcat, preview/inspector, comparison and maintenance) remains
+applicable. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -295,6 +331,11 @@ Validated:
 - Build identity inheritance from installs into later runs.
 - Native desktop onboarding, triage, comparison, flaky analysis, logcat, preview/inspector, maintenance
   and controlled P1 actions, including process-tree cancellation and run reconciliation.
+- Compact `context`, semantic `ui observe`/`ui diff`, action postconditions, observation-token security,
+  deterministic `report explain`, idempotent `session ensure`, read-only `doctor fix --plan` and the
+  `agent test` dry-run/execute pipeline.
+- v0.4.0 pipeline validation on CalcSuite, DiscountHunter and IronPulse (including a real install-skip
+  decision based on recorded SHA-256 identity).
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
@@ -353,3 +394,4 @@ Bug reports, focused pull requests and real-app reproductions are welcome. Read
 MIT. See [LICENSE](LICENSE).
 
 Copyright (c) 2026 JuggyBob.
+

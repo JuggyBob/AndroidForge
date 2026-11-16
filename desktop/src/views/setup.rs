@@ -259,6 +259,9 @@ fn environment(app: &mut App, ui: &mut egui::Ui) {
             if secondary_button(ui, "Recheck").clicked() {
                 app.manual_refresh(ui.ctx());
             }
+            if secondary_button(ui, "Build repair plan").clicked() {
+                app.refresh_repair_plan(ui.ctx());
+            }
         });
     });
     if app.doctor.value.checks.is_empty() {
@@ -268,6 +271,12 @@ fn environment(app: &mut App, ui: &mut egui::Ui) {
             "Connect the CLI and recheck to inspect SDK, ADB, emulator and Java.",
         );
         return;
+    }
+    if app.setup.repair_plan.is_none()
+        && !app.setup.repair_loading
+        && app.setup.repair_error.is_none()
+    {
+        app.refresh_repair_plan(ui.ctx());
     }
     if !app.doctor.value.avds.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -315,6 +324,72 @@ fn environment(app: &mut App, ui: &mut egui::Ui) {
             });
         ui.add_space(4.0);
     }
+    ui.add_space(6.0);
+    repair_plan_panel(app, ui);
+}
+
+fn repair_plan_panel(app: &mut App, ui: &mut egui::Ui) {
+    let plan = app.setup.repair_plan.clone();
+    let loading = app.setup.repair_loading;
+    let error = app.setup.repair_error.clone();
+    if loading {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            muted(ui, "Building a read-only repair plan...");
+        });
+        return;
+    }
+    if let Some(error) = &error {
+        error_banner(ui, error);
+        return;
+    }
+    let Some(plan) = plan else {
+        return;
+    };
+    card(ui, |ui| {
+        ui.horizontal(|ui| {
+            section_title(ui, "Repair plan");
+            status_pill(ui, "read-only", theme::GREEN);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                copy_button(ui, &plan.generated_at, "Copy timestamp");
+            });
+        });
+        small(
+            ui,
+            "AndroidForge detected these conditions but made no changes. Commands are suggestions; review them before running.",
+        );
+        if plan.issues.is_empty() {
+            muted(ui, "No repairs are needed.");
+            return;
+        }
+        ui.add_space(4.0);
+        for issue in &plan.issues {
+            ui.horizontal_wrapped(|ui| {
+                let color = match issue.severity.as_str() {
+                    "blocking" => theme::RED,
+                    "recommended" => theme::YELLOW,
+                    _ => theme::MUTED,
+                };
+                status_pill(ui, &issue.severity, color);
+                ui.label(RichText::new(&issue.description).size(10.5).strong());
+            });
+            ui.label(
+                RichText::new(format!("{} - {}", issue.detected, issue.reason))
+                    .size(9.5)
+                    .color(theme::MUTED),
+            );
+            if let Some(command) = issue.repair.command_display() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&command).size(9.5).monospace());
+                    copy_button(ui, &command, "Copy command");
+                });
+            }
+            if let Some(notes) = &issue.notes {
+                ui.label(RichText::new(notes).size(9.0).color(theme::BLUE));
+            }
+            ui.add_space(4.0);
+        }
+    });
 }
 
 fn project(app: &mut App, ui: &mut egui::Ui) {

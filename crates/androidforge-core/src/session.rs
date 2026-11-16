@@ -95,6 +95,15 @@ pub struct Session {
     pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Project root recorded when the session is acquired by `session ensure`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
+    /// Advisory lease expiry. An expired lease marks the session as requiring
+    /// reconciliation; it never stops the emulator or interrupts work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_ttl_seconds: Option<u64>,
 }
 
 impl Session {
@@ -130,6 +139,9 @@ impl Session {
             snapshots: Vec::new(),
             notes: Vec::new(),
             last_error: None,
+            project_root: None,
+            lease_expires_at: None,
+            lease_ttl_seconds: None,
         }
     }
 
@@ -399,6 +411,63 @@ impl Session {
         self.age_seconds() > DEFAULT_STALE_AFTER_SECS
     }
 
+    /// An expired lease is advisory: it marks the session as needing
+    /// reconciliation. It never stops the emulator or interrupts a run.
+    pub fn lease_expired(&self) -> bool {
+        self.lease_expired_at(Utc::now())
+    }
+
+    pub fn lease_expired_at(&self, now: DateTime<Utc>) -> bool {
+        self.lease_expires_at
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|expiry| now >= expiry.with_timezone(&Utc))
+            .unwrap_or(false)
+    }
+
+    pub fn lease_remaining_seconds(&self) -> Option<i64> {
+        self.lease_expires_at
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|expiry| {
+                expiry
+                    .with_timezone(&Utc)
+                    .signed_duration_since(Utc::now())
+                    .num_seconds()
+                    .max(0)
+            })
+    }
+
+    /// Record an advisory lease and persist it. `None` clears the lease.
+    pub fn set_lease(&mut self, paths: &ForgePaths, ttl: Option<Duration>) -> Result<()> {
+        match ttl {
+            Some(ttl) => {
+                if ttl.is_zero() {
+                    return Err(ForgeError::invalid_argument(
+                        "lease duration must be greater than zero",
+                    ));
+                }
+                let seconds = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+                let expiry = Utc::now()
+                    .checked_add_signed(chrono::Duration::seconds(seconds))
+                    .ok_or_else(|| ForgeError::invalid_argument("lease duration is too large"))?;
+                self.lease_ttl_seconds = Some(ttl.as_secs());
+                self.lease_expires_at =
+                    Some(expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+            }
+            None => {
+                self.lease_ttl_seconds = None;
+                self.lease_expires_at = None;
+            }
+        }
+        self.touch(paths)
+    }
+
+    pub fn bind_project(&mut self, paths: &ForgePaths, project_root: &str) -> Result<()> {
+        self.project_root = Some(project_root.to_string());
+        self.touch(paths)
+    }
+
     pub fn operation_active(&self) -> bool {
         self.operation
             .as_ref()
@@ -441,6 +510,13 @@ pub struct SessionListEntry {
     pub emulator_process_alive: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_ttl_seconds: Option<u64>,
+    pub lease_expired: bool,
 }
 
 impl From<&Session> for SessionListEntry {
@@ -469,6 +545,10 @@ impl From<&Session> for SessionListEntry {
                 .map(androidforge_process::process_exists)
                 .unwrap_or(false),
             last_error: session.last_error.clone(),
+            project_root: session.project_root.clone(),
+            lease_expires_at: session.lease_expires_at.clone(),
+            lease_ttl_seconds: session.lease_ttl_seconds,
+            lease_expired: session.lease_expired(),
         }
     }
 }
@@ -1031,5 +1111,57 @@ mod tests {
         session.acquire_device(&paths, "serial").unwrap();
         session.release(&paths).unwrap();
         assert!(check_serial_ownership(&paths, "serial", None).is_ok());
+    }
+
+    #[test]
+    fn lease_is_advisory_and_persisted() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let mut session = Session::new(
+            "TestAgent",
+            SessionKind::Emulator,
+            Some("emulator-5556".to_string()),
+            Some("test_avd".to_string()),
+            Some(5556),
+            true,
+        );
+        session.create(&paths).unwrap();
+        session.mark_ready(&paths).unwrap();
+        session
+            .set_lease(&paths, Some(Duration::from_secs(60)))
+            .unwrap();
+        assert!(!session.lease_expired());
+        assert!(session.lease_remaining_seconds().unwrap() > 0);
+        let loaded = Session::load(&paths, &session.id).unwrap();
+        assert_eq!(loaded.lease_ttl_seconds, Some(60));
+        assert!(loaded.lease_expires_at.is_some());
+
+        let mut expired = loaded;
+        expired.lease_expires_at = Some(
+            (Utc::now() - chrono::Duration::seconds(5))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
+        assert!(expired.lease_expired());
+        expired
+            .set_lease(&paths, Some(Duration::from_secs(30)))
+            .unwrap();
+        assert!(!expired.lease_expired());
+        expired.set_lease(&paths, None).unwrap();
+        assert!(expired.lease_expires_at.is_none());
+        assert!(!expired.lease_expired());
+        // Expiry is metadata only: the emulator PID is never touched by lease logic.
+        assert_eq!(expired.state, SessionState::Ready);
+    }
+
+    #[test]
+    fn project_binding_persists_without_changing_owner() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let mut session = Session::new("AgentA", SessionKind::Attached, None, None, None, true);
+        session.create(&paths).unwrap();
+        session.bind_project(&paths, "C:\\work\\app").unwrap();
+        let loaded = Session::load(&paths, &session.id).unwrap();
+        assert_eq!(loaded.project_root.as_deref(), Some("C:\\work\\app"));
+        assert_eq!(loaded.owner, "AgentA");
     }
 }

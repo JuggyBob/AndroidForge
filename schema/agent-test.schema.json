@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/agent-test.schema.json",
+  "title": "AndroidForge transparent agent test pipeline result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "pipeline",
+    "dry_run",
+    "generated_at",
+    "project",
+    "stages",
+    "final_status"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "pipeline": { "const": "agent.test" },
+    "dry_run": { "type": "boolean" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "project": { "type": "object", "additionalProperties": true },
+    "session": { "type": ["object", "null"], "additionalProperties": true },
+    "device": { "type": ["object", "null"], "additionalProperties": true },
+    "apk": { "type": ["object", "null"], "additionalProperties": true },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "duration_ms", "command_argv", "details"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": {
+            "enum": ["passed", "failed", "skipped", "planned", "warning"]
+          },
+          "duration_ms": { "type": "integer", "minimum": 0 },
+          "command_argv": { "type": "array", "items": { "type": "string" } },
+          "details": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "installed_build_matches_apk": { "type": ["boolean", "null"] },
+    "final_status": { "enum": ["success", "failed", "dry_run", "blocked"] },
+    "failure": { "type": ["object", "null"], "additionalProperties": true },
+    "run_id": { "type": "string" },
+    "artifacts": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "next_actions": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "report_path": { "type": "string" },
+    "required_confirmations": { "type": "array", "items": { "type": "string" } },
+    "destructive_operations": { "type": "array", "items": { "type": "string" } },
+    "blocking_issues": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

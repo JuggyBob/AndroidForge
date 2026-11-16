@@ -1,11 +1,14 @@
 pub mod adb;
+pub mod agent;
 pub mod app;
 pub mod automation;
 pub mod common;
+pub mod context;
 pub mod devices;
 pub mod diagnostics;
 pub mod doctor;
 pub mod maintenance;
+pub mod observation;
 pub mod report;
 pub mod session;
 pub mod system;
@@ -23,7 +26,12 @@ use crate::context::CliContext;
 
 pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
     match &cli.command {
-        Command::Doctor => doctor::doctor(cli).await,
+        Command::Doctor { command } => match command {
+            Some(crate::cli::DoctorCommand::Fix(args)) => doctor::fix_plan(cli, args).await,
+            None => doctor::doctor(cli).await,
+        },
+        Command::Context(args) => context::context(cli, args).await,
+        Command::Agent { command } => agent::agent(cli, command).await,
         Command::Capabilities => doctor::capabilities(cli).await,
         Command::Schema { command } => doctor::schema(command),
         Command::Init(args) => doctor::init(cli, args),
@@ -153,7 +161,14 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
 
 pub fn canonical_name(command: &Command) -> String {
     match command {
-        Command::Doctor => "doctor".to_string(),
+        Command::Doctor { command } => match command {
+            Some(crate::cli::DoctorCommand::Fix(_)) => "doctor.fix".to_string(),
+            None => "doctor".to_string(),
+        },
+        Command::Context(_) => "context".to_string(),
+        Command::Agent { command } => match command {
+            crate::cli::AgentCommand::Test(_) => "agent.test".to_string(),
+        },
         Command::Capabilities => "capabilities".to_string(),
         Command::Schema { .. } => "schema".to_string(),
         Command::Init(_) => "init".to_string(),
@@ -206,6 +221,7 @@ pub fn canonical_name(command: &Command) -> String {
 fn session_name(command: &SessionCommand) -> &'static str {
     match command {
         SessionCommand::Start(_) => "start",
+        SessionCommand::Ensure(_) => "ensure",
         SessionCommand::Attach(_) => "attach",
         SessionCommand::Claim(_) => "claim",
         SessionCommand::List { .. } => "list",
@@ -270,6 +286,8 @@ fn ui_name(command: &UiCommand) -> &'static str {
     match command {
         UiCommand::Dump(_) => "dump",
         UiCommand::Inspect(_) => "inspect",
+        UiCommand::Observe(_) => "observe",
+        UiCommand::Diff(_) => "diff",
         UiCommand::Find(_) => "find",
         UiCommand::Tap(_) => "tap",
         UiCommand::LongPress(_) => "long-press",
@@ -347,6 +365,7 @@ fn report_name(command: &ReportCommand) -> &'static str {
         ReportCommand::Reconcile(_) => "reconcile",
         ReportCommand::Compare(_) => "compare",
         ReportCommand::Flaky(_) => "flaky",
+        ReportCommand::Explain(_) => "explain",
         ReportCommand::Import { .. } => "import",
     }
 }

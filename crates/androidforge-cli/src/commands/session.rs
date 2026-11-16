@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::Device;
@@ -7,14 +10,14 @@ use androidforge_core::session::{
     Session, SessionKind, SessionState, gc_sessions, list_sessions, owner_of_serial,
     prune_sessions, set_current_session,
 };
-use androidforge_core::util::{now_rfc3339, parse_duration};
+use androidforge_core::util::{ensure_dir, now_rfc3339, parse_duration, sha256_hex};
 use androidforge_emulator::{DevicePrepareOptions, DevicePreparer};
 use serde_json::Value;
 
 use crate::cli::{
-    AvdCommand, EmulatorCommand, SessionAttachArgs, SessionCommand, SessionGcArgs,
-    SessionPruneArgs, SessionReleaseArgs, SessionRestartArgs, SessionStartArgs, SessionStopArgs,
-    SnapshotCommand,
+    AvdCommand, EmulatorCommand, SessionAttachArgs, SessionCommand, SessionEnsureArgs,
+    SessionGcArgs, SessionPruneArgs, SessionReleaseArgs, SessionRestartArgs, SessionStartArgs,
+    SessionStopArgs, SnapshotCommand,
 };
 use crate::commands::common::{default_owner, success};
 use crate::context::CliContext;
@@ -22,6 +25,7 @@ use crate::context::CliContext;
 pub async fn session(ctx: &CliContext, command: &SessionCommand) -> Result<CommandSuccess> {
     match command {
         SessionCommand::Start(args) => start(ctx, args).await,
+        SessionCommand::Ensure(args) => ensure(ctx, args).await,
         SessionCommand::Attach(args) | SessionCommand::Claim(args) => attach(ctx, args).await,
         SessionCommand::List { active } => list(ctx, *active),
         SessionCommand::Inspect => inspect(ctx, false).await,
@@ -244,10 +248,504 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
     Ok(success)
 }
 
+fn success_session_id(success: &CommandSuccess) -> Result<String> {
+    success
+        .result
+        .get("session")
+        .and_then(|session| session.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ForgeError::internal("session command completed without returning a session id")
+        })
+}
+
+fn success_warnings(success: &CommandSuccess) -> Vec<String> {
+    success
+        .result
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map(|warnings| {
+            warnings
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn device_operational(device: &Device) -> bool {
+    device.state.is_operational() && device.boot_completed != Some(false)
+}
+
+fn ensure_response(
+    command: &str,
+    session: &Session,
+    device: Option<&Device>,
+    acquisition_mode: &str,
+    readiness: &str,
+    recovery: Vec<String>,
+    warnings: Vec<String>,
+) -> Result<CommandSuccess> {
+    let lease_expired = session.lease_expired();
+    let result = serde_json::json!({
+        "session_id": session.id,
+        "session": session,
+        "owner": session.owner,
+        "device_serial": session.serial,
+        "avd": session.avd,
+        "profile": session.profile,
+        "kind": session.kind,
+        "state": session.state,
+        "acquisition_mode": acquisition_mode,
+        "ready": readiness == "ready",
+        "readiness": readiness,
+        "lease_expires_at": session.lease_expires_at,
+        "lease_ttl_seconds": session.lease_ttl_seconds,
+        "lease_expired": lease_expired,
+        "needs_reconciliation": lease_expired,
+        "recovery": recovery,
+        "warnings": warnings,
+        "device": device.map(|device| device.compact()),
+    });
+    let human = format!(
+        "Session {} ({acquisition_mode})\nowner: {}\nserial: {}\navd: {}\nreadiness: {}\nlease: {}{}\n",
+        session.id,
+        session.owner,
+        session.serial.as_deref().unwrap_or("-"),
+        session.avd.as_deref().unwrap_or("-"),
+        readiness,
+        session.lease_expires_at.as_deref().unwrap_or("none"),
+        if lease_expired {
+            " (expired; reconcile or renew with --ttl)"
+        } else {
+            ""
+        }
+    );
+    let mut response = success(command, result, human);
+    response.session_id = Some(session.id.clone());
+    response.device_serial = session.serial.clone();
+    Ok(response)
+}
+
+struct EnsureLock {
+    path: PathBuf,
+}
+
+impl EnsureLock {
+    async fn acquire(paths: &androidforge_core::paths::ForgePaths, identity: &str) -> Result<Self> {
+        let dir = paths.state_dir.join("locks");
+        ensure_dir(&dir)?;
+        let digest = sha256_hex(identity.as_bytes());
+        let path = dir.join(format!("ensure-{}.lock", &digest[..16]));
+        let started = Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => {
+                    let _ = writeln!(file, "{}", std::process::id());
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if ensure_lock_is_stale(&path) {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    if started.elapsed() > Duration::from_secs(180) {
+                        return Err(ForgeError::new(
+                            ErrorCode::DeviceBusy,
+                            "another `session ensure` for this owner, project and target is still running",
+                        )
+                        .with_context_string("lock", path.to_string_lossy())
+                        .with_suggestion(
+                            "Wait for the other ensure operation to finish, then retry.",
+                        )
+                        .with_suggestion(
+                            "If it crashed, remove the stale lock file shown in the context.",
+                        ));
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(error) => {
+                    return Err(ForgeError::internal(format!(
+                        "could not create ensure lock {}: {error}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for EnsureLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn ensure_lock_is_stale(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    let age = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .unwrap_or_default();
+    let pid = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| contents.trim().parse::<u32>().ok());
+    match pid {
+        Some(pid) => !androidforge_process::process_exists(pid) && age > Duration::from_secs(5),
+        None => age > Duration::from_secs(300),
+    }
+}
+
+async fn ensure_serial_not_owned(ctx: &CliContext, serial: &str, owner: &str) -> Result<()> {
+    let Some(existing) = owner_of_serial(&ctx.paths, serial)? else {
+        return Ok(());
+    };
+    if existing.owner != owner {
+        let alternatives = alternative_serials(ctx).await.unwrap_or_default();
+        return Err(ForgeError::new(
+            ErrorCode::DeviceBusy,
+            format!(
+                "device {serial} is owned by session {} (owner '{}', state {:?})",
+                existing.id, existing.owner, existing.state
+            ),
+        )
+        .with_context_string("owner", existing.owner.clone())
+        .with_context_string("session_id", existing.id.clone())
+        .with_context("alternatives", serde_json::json!(alternatives))
+        .with_suggestion(format!(
+            "Do not steal this device. Use `--session {}` only if you are that owner.",
+            existing.id
+        ))
+        .with_suggestion(
+            "Choose an available serial from the `alternatives` context or another AVD.",
+        )
+        .session(existing.id.clone())
+        .device(serial.to_string()));
+    }
+    Err(ForgeError::new(
+        ErrorCode::DeviceBusy,
+        format!(
+            "device {serial} is already used by your session {} with different project, AVD or profile settings",
+            existing.id
+        ),
+    )
+    .with_context_string("session_id", existing.id.clone())
+    .with_suggestion("Use the existing session as-is, release it explicitly, or choose another AVD.")
+    .session(existing.id)
+    .device(serial.to_string()))
+}
+
+async fn alternative_serials(ctx: &CliContext) -> Result<Vec<String>> {
+    let adb = ctx.adb()?;
+    let mut alternatives = Vec::new();
+    for device in adb.devices_raw().await? {
+        if !device.state.is_operational() {
+            continue;
+        }
+        if owner_of_serial(&ctx.paths, &device.serial)?.is_none() {
+            alternatives.push(device.serial);
+        }
+    }
+    Ok(alternatives)
+}
+
+pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result<CommandSuccess> {
+    if args.avd.is_none() && args.serial.is_none() {
+        return Err(ForgeError::invalid_argument(
+            "session ensure needs --avd <AVD> or --serial <SERIAL>",
+        )
+        .with_suggestion("Run `androidforge avd list` to see local AVDs.")
+        .with_suggestion("Run `androidforge devices list` to see connected devices.")
+        .with_suggestion("Use `androidforge context --json` to reuse a configured AVD."));
+    }
+    if args.avd.is_some() && args.serial.is_some() {
+        return Err(
+            ForgeError::invalid_argument("choose either --avd or --serial, not both")
+                .with_suggestion(
+                    "An AVD is launched if needed; a serial attaches to an existing device.",
+                ),
+        );
+    }
+    let owner = caller_owner(args.owner.as_deref());
+    let ttl = args
+        .ttl
+        .as_deref()
+        .map(parse_duration)
+        .transpose()
+        .map_err(ForgeError::invalid_argument)?;
+    if let Some(ttl) = ttl
+        && ttl.is_zero()
+    {
+        return Err(ForgeError::invalid_argument(
+            "lease duration must be greater than zero",
+        ));
+    }
+    let project_root = ctx.paths.project_root.to_string_lossy().into_owned();
+    if ctx.dry_run {
+        let mut would = vec!["reuse a compatible session owned by the same owner and project"];
+        if args.serial.is_some() {
+            would.push("attach to the requested serial only if it is unowned");
+        } else {
+            would.push("attach to a running emulator for the requested AVD if unowned");
+            would.push("otherwise launch the requested AVD headless");
+        }
+        would.push("wait for device readiness and record the lease");
+        return Ok(success(
+            "session.ensure",
+            serde_json::json!({
+                "dry_run": true,
+                "owner": owner,
+                "project_root": project_root,
+                "avd": args.avd,
+                "serial": args.serial,
+                "profile": args.profile,
+                "headless": true,
+                "prepare": args.prepare,
+                "lease_ttl_seconds": ttl.map(|ttl| ttl.as_secs()),
+                "would": would,
+                "destructive": false,
+            }),
+            format!(
+                "Would ensure a session for {} as {owner} (no changes).\n",
+                args.avd
+                    .as_deref()
+                    .or(args.serial.as_deref())
+                    .unwrap_or("-")
+            ),
+        ));
+    }
+
+    let identity = format!(
+        "{}|{}|{}|{}",
+        owner,
+        project_root,
+        args.avd.as_deref().unwrap_or("-"),
+        args.serial.as_deref().unwrap_or("-")
+    );
+    let _lock = EnsureLock::acquire(&ctx.paths, &identity).await?;
+    let adb = ctx.adb()?;
+    let mut legacy_warning = None;
+
+    for entry in list_sessions(&ctx.paths)? {
+        if matches!(
+            entry.state,
+            SessionState::Released | SessionState::Failed | SessionState::Abandoned
+        ) {
+            continue;
+        }
+        let mut session = match Session::load(&ctx.paths, &entry.id) {
+            Ok(session) => session,
+            Err(_) => continue,
+        };
+        if session.owner != owner {
+            continue;
+        }
+        let legacy = session.project_root.is_none();
+        if let Some(root) = &session.project_root
+            && root != &project_root
+        {
+            continue;
+        }
+        if let Some(serial) = &args.serial
+            && session.serial.as_deref() != Some(serial.as_str())
+        {
+            continue;
+        }
+        if let Some(avd) = &args.avd
+            && session.avd.as_deref() != Some(avd.as_str())
+        {
+            continue;
+        }
+        if let Some(profile) = &args.profile
+            && session.profile.as_deref() != Some(profile.as_str())
+        {
+            continue;
+        }
+        if legacy {
+            legacy_warning = Some(format!(
+                "Session {} predates project binding and was reused by owner/project compatibility heuristics; it is now bound to this project.",
+                session.id
+            ));
+        }
+        let Some(serial) = session.serial.clone() else {
+            continue;
+        };
+        let inspected = adb.inspect(&serial).await.ok();
+        if let Some(device) = inspected.as_ref()
+            && device_operational(device)
+        {
+            let mut recovery = Vec::new();
+            let mut warnings = Vec::new();
+            if let Some(warning) = legacy_warning.take() {
+                warnings.push(warning);
+            }
+            if session.lease_expired() {
+                match ttl {
+                    Some(ttl) => {
+                        session.set_lease(&ctx.paths, Some(ttl))?;
+                        recovery.push("expired_lease_renewed".to_string());
+                    }
+                    None => warnings.push(
+                        "The session lease has expired. It was not renewed because no --ttl was supplied; reconcile or pass --ttl to renew it."
+                            .to_string(),
+                    ),
+                }
+            } else if let Some(ttl) = ttl {
+                session.set_lease(&ctx.paths, Some(ttl))?;
+            }
+            if session.project_root.is_none() {
+                session.bind_project(&ctx.paths, &project_root)?;
+            }
+            if let Some(profile) = &args.profile
+                && session.profile.as_deref() != Some(profile.as_str())
+            {
+                session.profile = Some(profile.clone());
+                session.save(&ctx.paths)?;
+            }
+            if !matches!(session.state, SessionState::Ready) {
+                session.mark_ready(&ctx.paths)?;
+            }
+            set_current_session(&ctx.paths, &session.id)?;
+            return ensure_response(
+                "session.ensure",
+                &session,
+                Some(device),
+                "reused_session",
+                "ready",
+                recovery,
+                warnings,
+            );
+        }
+
+        let dead_emulator = session.kind == SessionKind::Emulator
+            && session
+                .emulator_pid
+                .map(|pid| !androidforge_process::process_exists(pid))
+                .unwrap_or(true);
+        if dead_emulator {
+            let _ = session.mark_failed(
+                &ctx.paths,
+                format!("emulator process for {serial} is no longer running"),
+            );
+            continue;
+        }
+
+        let mut warnings = Vec::new();
+        if let Some(warning) = legacy_warning.take() {
+            warnings.push(warning);
+        }
+        warnings.push(format!(
+            "The compatible session {} exists but device {serial} is not currently operational; no device was stolen or restarted.",
+            session.id
+        ));
+        set_current_session(&ctx.paths, &session.id)?;
+        return ensure_response(
+            "session.ensure",
+            &session,
+            None,
+            "reused_session",
+            "device_unavailable",
+            Vec::new(),
+            warnings,
+        );
+    }
+
+    let (acquisition_mode, created, mut warnings) = if let Some(serial) = &args.serial {
+        ensure_serial_not_owned(ctx, serial, &owner).await?;
+        let attach_args = SessionAttachArgs {
+            owner: Some(owner.clone()),
+            avd: None,
+            prepare: args.prepare,
+            no_wake: false,
+        };
+        let created = attach_with_serial(ctx, &attach_args, Some(serial)).await?;
+        let warnings = success_warnings(&created);
+        ("attached_existing", created, warnings)
+    } else {
+        let avd = args.avd.as_deref().unwrap_or_default();
+        if let Some((serial, _)) = find_running_avd(ctx, avd).await? {
+            ensure_serial_not_owned(ctx, &serial, &owner).await?;
+            let attach_args = SessionAttachArgs {
+                owner: Some(owner.clone()),
+                avd: Some(avd.to_string()),
+                prepare: args.prepare,
+                no_wake: false,
+            };
+            let created = attach_with_serial(ctx, &attach_args, Some(&serial)).await?;
+            let warnings = success_warnings(&created);
+            ("attached_existing", created, warnings)
+        } else {
+            let start_args = SessionStartArgs {
+                avd: avd.to_string(),
+                owner: Some(owner.clone()),
+                port: None,
+                headless: true,
+                windowed: false,
+                memory: None,
+                cores: None,
+                cold_boot: false,
+                reuse: true,
+                prepare: args.prepare,
+                no_wake: false,
+                timeout: None,
+            };
+            let created = start(ctx, &start_args).await?;
+            let warnings = success_warnings(&created);
+            ("launched_emulator", created, warnings)
+        }
+    };
+
+    let id = success_session_id(&created)?;
+    let mut session = Session::load(&ctx.paths, &id)?;
+    session.bind_project(&ctx.paths, &project_root)?;
+    if let Some(profile) = &args.profile {
+        session.profile = Some(profile.clone());
+        session.save(&ctx.paths)?;
+    }
+    if let Some(ttl) = ttl {
+        session.set_lease(&ctx.paths, Some(ttl))?;
+    }
+    if let Some(warning) = legacy_warning {
+        warnings.push(warning);
+    }
+    set_current_session(&ctx.paths, &session.id)?;
+    let inspected = match session.serial.as_deref() {
+        Some(serial) => adb.inspect(serial).await.ok(),
+        None => None,
+    };
+    let readiness = if inspected.as_ref().is_some_and(device_operational) {
+        "ready"
+    } else {
+        "device_unavailable"
+    };
+    ensure_response(
+        "session.ensure",
+        &session,
+        inspected.as_ref(),
+        acquisition_mode,
+        readiness,
+        Vec::new(),
+        warnings,
+    )
+}
+
 async fn attach(ctx: &CliContext, args: &SessionAttachArgs) -> Result<CommandSuccess> {
-    let serial = ctx
-        .serial_arg
-        .clone()
+    attach_with_serial(ctx, args, None).await
+}
+
+async fn attach_with_serial(
+    ctx: &CliContext,
+    args: &SessionAttachArgs,
+    serial_override: Option<&str>,
+) -> Result<CommandSuccess> {
+    let serial = serial_override
+        .map(str::to_string)
+        .or_else(|| ctx.serial_arg.clone())
         .or_else(|| std::env::var("ANDROIDFORGE_SERIAL").ok())
         .ok_or_else(|| {
             ForgeError::invalid_argument("session attach requires --serial <SERIAL>")
