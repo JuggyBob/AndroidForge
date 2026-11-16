@@ -58,18 +58,29 @@ inside the AndroidForge example adapters. Two claims were checked and not reprod
 ### Packaging validation
 
 - `.\packaging\package.ps1 -SkipBuild` produced:
-  - `androidforge-cli-windows-x86_64.zip` (3,878,377 bytes), SHA-256
-    `b9ae358d4adeb7cb613520f843e242a0c018864dd27b766f1bc2abbda5ad7e38`.
-  - `androidforge-desktop-windows-x86_64.zip` (10,487,600 bytes), SHA-256
-    `c31b80b0b84bd9b8c9a9b9a1e7f96a1aaade73d4851a58b46cbb043fec2e4ac1`.
-  - `androidforge-windows-x86_64-setup.exe` (8,977,635 bytes), SHA-256
-    `7ad4d2167f7250be98c7cd6dfde76785379e30cc51da6e9243c3ddd63de0a46c`.
+  - `androidforge-cli-windows-x86_64.zip` (3,877,887 bytes), SHA-256
+    `011e9fef8f57ae27a484214b547b0198031446901d882139aafa803943e5c9af`.
+  - `androidforge-desktop-windows-x86_64.zip` (10,488,877 bytes), SHA-256
+    `0464d36b57dc6eb2a7f7dc46a9fe0269789003ac7e08a8f5f5a61fb052ea4772`.
+  - `androidforge-windows-x86_64-setup.exe` (8,978,868 bytes), SHA-256
+    `2e0fbf6361ac2e37ab682c9080118153249abcf075f374f7bb0e505de8e99ef2`.
 - The portable ZIP was extracted into a clean directory; CLI and desktop both reported `0.5.0`; the new
   `--port`, `ui observe` and `ui diff` help pages loaded; the desktop launched with title
   `AndroidForge` and stayed responsive.
 - The installer ran silently, installed CLI/desktop `0.5.0`, and uninstalled cleanly while removing the
   install directory.
 - All three packaged asset SHA-256 values matched `SHA256SUMS.txt`.
+
+### Published release
+
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.5.0>
+- Tag: `v0.5.0`, tag object `61bf9bd9afa180472130bfc6c94796f4f19aacfa`, commit
+  `dccd6be733817287055a5e364b8d6525fab7a636`.
+- The tag-triggered Release workflow (`43961438287`) passed and uploaded the CI-built assets.
+- All three assets were downloaded from the published release and matched `SHA256SUMS.txt`.
+- The downloaded portable ZIP reported CLI/desktop `0.5.0`; `--help`/`--version` were non-interactive;
+  the desktop launched with title `AndroidForge`.
+- The downloaded installer installed CLI/desktop `0.5.0` and uninstalled cleanly.
 
 ### Not exercised
 
@@ -307,6 +318,7 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
 
 
 

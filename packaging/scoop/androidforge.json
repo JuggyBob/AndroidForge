@@ -6,7 +6,7 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/JuggyBob/AndroidForge/releases/download/v0.5.0/androidforge-desktop-windows-x86_64.zip",
-      "hash": "c31b80b0b84bd9b8c9a9b9a1e7f96a1aaade73d4851a58b46cbb043fec2e4ac1"
+      "hash": "0464d36b57dc6eb2a7f7dc46a9fe0269789003ac7e08a8f5f5a61fb052ea4772"
     }
   },
   "bin": [
@@ -31,6 +31,7 @@
     }
   }
 }
+
 
 
 
