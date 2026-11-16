@@ -407,10 +407,10 @@ fn resolve_conformance_path(config: &ForgeConfig, override_path: Option<&Path>) 
             "Pass a .toml conformance manifest or a directory containing conformance.toml.",
         ));
     }
-    if let Some(path) = config.conformance_path(None) {
-        if path.is_file() {
-            return Ok(path);
-        }
+    if let Some(path) = config.conformance_path(None)
+        && path.is_file()
+    {
+        return Ok(path);
     }
     for candidate in [
         ".androidforge/conformance/release-smoke.toml",

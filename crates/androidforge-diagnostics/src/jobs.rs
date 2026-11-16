@@ -223,15 +223,15 @@ impl Jobs {
 }
 
 fn job_matches(job: &JobInfo, selector: &JobSelector) -> bool {
-    if let Some(package) = &selector.package {
-        if &job.package != package {
-            return false;
-        }
+    if let Some(package) = &selector.package
+        && &job.package != package
+    {
+        return false;
     }
-    if let Some(job_id) = &selector.job_id {
-        if job.job_id.as_deref() != Some(job_id.as_str()) {
-            return false;
-        }
+    if let Some(job_id) = &selector.job_id
+        && job.job_id.as_deref() != Some(job_id.as_str())
+    {
+        return false;
     }
     if let Some(state) = &selector.state {
         match state.as_str() {
@@ -308,27 +308,26 @@ fn parse_jobs(raw: &str) -> JobList {
                 if let Some(rest) = trimmed.strip_prefix("Pending:") {
                     job.pending = rest.trim().parse::<bool>().ok();
                 }
-                if job.package.is_empty() {
-                    if let Some(captures) = package_regex.captures(trimmed) {
-                        if let Some(value) = captures.get(1) {
-                            job.package = value.as_str().trim_matches('"').to_string();
-                        }
+                if job.package.is_empty()
+                    && let Some(captures) = package_regex.captures(trimmed)
+                    && let Some(value) = captures.get(1)
+                {
+                    job.package = value.as_str().trim_matches('"').to_string();
+                }
+                if job.service.is_none()
+                    && let Some(rest) = trimmed.strip_prefix("Service:")
+                {
+                    let service = rest.trim();
+                    if !service.is_empty() {
+                        job.service = Some(service.to_string());
                     }
                 }
-                if job.service.is_none() {
-                    if let Some(rest) = trimmed.strip_prefix("Service:") {
-                        let service = rest.trim();
-                        if !service.is_empty() {
-                            job.service = Some(service.to_string());
-                        }
-                    }
-                }
-                if let Some(captures) = constraint_regex.captures(trimmed) {
-                    if let Some(value) = captures.get(1) {
-                        let value = value.as_str().trim();
-                        if !value.is_empty() {
-                            job.constraints.push(value.to_string());
-                        }
+                if let Some(captures) = constraint_regex.captures(trimmed)
+                    && let Some(value) = captures.get(1)
+                {
+                    let value = value.as_str().trim();
+                    if !value.is_empty() {
+                        job.constraints.push(value.to_string());
                     }
                 }
             }

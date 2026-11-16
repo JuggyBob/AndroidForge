@@ -178,15 +178,15 @@ fn parse_appop(package: &str, operation: &str, stdout: &str, stderr: &str) -> Ap
         } else {
             None
         };
-        if let Some(value) = value {
-            if matches!(
+        if let Some(value) = value
+            && matches!(
                 value,
                 "allow" | "deny" | "ignore" | "default" | "foreground"
-            ) {
-                mode = Some(value.to_string());
-                determined = true;
-                break;
-            }
+            )
+        {
+            mode = Some(value.to_string());
+            determined = true;
+            break;
         }
     }
     AppOpState {

@@ -265,10 +265,10 @@ async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<CommandSucce
         if let Some(package) = ctx.config.package() {
             allowed.push(package.to_string());
         }
-        if let Some(package) = ctx.config.debug_package() {
-            if !allowed.iter().any(|value| value == package) {
-                allowed.push(package.to_string());
-            }
+        if let Some(package) = ctx.config.debug_package()
+            && !allowed.iter().any(|value| value == package)
+        {
+            allowed.push(package.to_string());
         }
         options.allowed_packages = allowed;
     }
@@ -356,15 +356,14 @@ async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<CommandSucce
         },
     )
     .await?;
-    if let Some(session) = session.as_ref() {
-        if let Some(build) = outcome
+    if let Some(session) = session.as_ref()
+        && let Some(build) = outcome
             .result
             .get("build")
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
-        {
-            androidforge_core::session::record_build(&ctx.paths, &session.id, build)?;
-        }
+    {
+        androidforge_core::session::record_build(&ctx.paths, &session.id, build)?;
     }
     Ok(outcome)
 }

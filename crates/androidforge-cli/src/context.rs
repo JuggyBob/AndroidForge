@@ -182,10 +182,10 @@ impl CliContext {
         if let Some(serial) = &self.serial_arg {
             return Ok(serial.clone());
         }
-        if let Ok(serial) = std::env::var("ANDROIDFORGE_SERIAL") {
-            if !serial.trim().is_empty() {
-                return Ok(serial.trim().to_string());
-            }
+        if let Ok(serial) = std::env::var("ANDROIDFORGE_SERIAL")
+            && !serial.trim().is_empty()
+        {
+            return Ok(serial.trim().to_string());
         }
         if let Some(serial) = &self.config.file.project.default_device {
             return Ok(serial.clone());

@@ -216,10 +216,10 @@ pub fn canonicalize_or_self(path: &Path) -> PathBuf {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     // Windows canonicalization may add the extended-length prefix. Keep paths
     // readable in JSON and logs while retaining the canonical location.
-    if let Some(value) = canonical.to_str() {
-        if let Some(stripped) = value.strip_prefix(r"\\?\") {
-            return PathBuf::from(stripped);
-        }
+    if let Some(value) = canonical.to_str()
+        && let Some(stripped) = value.strip_prefix(r"\\?\")
+    {
+        return PathBuf::from(stripped);
     }
     canonical
 }

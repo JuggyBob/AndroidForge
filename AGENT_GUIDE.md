@@ -274,3 +274,26 @@ androidforge session stop --session ses-3457532120af --owner CalcSuiteAgent --js
 The actual command surface and current verified status are in [CAPABILITIES.md](CAPABILITIES.md) and
 [VERIFICATION.md](VERIFICATION.md). If a command is not listed as supported, expect a structured
 `E_UNSUPPORTED_OPERATION` rather than a fake success.
+
+## 12. Desktop cockpit
+
+`androidforge-desktop.exe` is the human operator console. Agents should continue to use the CLI and JSON
+contract; the desktop is not a second automation API and does not expose a plugin or RPC surface.
+
+If a human may have the desktop open:
+
+- Do not assume you are the only actor. The desktop uses the same sessions, owner label, device locks,
+  runs and artifacts as the CLI. `E_DEVICE_BUSY` means a real session owns the device.
+- Do not kill an emulator owned by another session. Use `session list`, `session inspect` and the
+  documented owner/reclaim paths.
+- A desktop operation runs the CLI as a child process. `session start`/`attach`/`release`/`stop`/`restart`
+  cannot be cancelled from the desktop and run to completion.
+- Cancelling a desktop install/fixture/conformance/hook terminates the child tree and leaves the
+  emulator/session intact, but may leave an unfinalized `running` report. Reconcile with `report list`,
+  `report show` and `session status`.
+- Closing the desktop does not release or stop a session. Clean up with the CLI and the recorded owner.
+- Use the aligned desktop/CLI pair. The desktop checks the report schema and refuses an unknown contract
+  instead of guessing.
+
+The desktop reads the same `report.json`, `metadata.json`, `manifest.json` and artifact paths described in
+[SCHEMA.md](SCHEMA.md); it never produces a separate report format.

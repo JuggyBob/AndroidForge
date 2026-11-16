@@ -210,64 +210,64 @@ pub fn emit_error(
             // Human output only: a failing run can carry the entire report
             // (including artifact lists) in context. The report path is
             // printed separately and JSON mode keeps the full object.
-            if key == "report" {
-                if let Some(report) = value.as_object() {
-                    let status = report
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown");
-                    let steps = report.get("steps").and_then(Value::as_array);
-                    let failed = steps
-                        .map(|steps| {
-                            steps
-                                .iter()
-                                .filter(|step| {
-                                    step.get("status").and_then(Value::as_str) == Some("failed")
-                                })
-                                .count()
-                        })
-                        .unwrap_or(0);
-                    let total = steps.map(Vec::len).unwrap_or(0);
-                    let _ = writeln!(
-                        stderr,
-                        "  report: {status}, {failed} failed of {total} step(s)"
-                    );
-                    continue;
-                }
+            if key == "report"
+                && let Some(report) = value.as_object()
+            {
+                let status = report
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let steps = report.get("steps").and_then(Value::as_array);
+                let failed = steps
+                    .map(|steps| {
+                        steps
+                            .iter()
+                            .filter(|step| {
+                                step.get("status").and_then(Value::as_str) == Some("failed")
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0);
+                let total = steps.map(Vec::len).unwrap_or(0);
+                let _ = writeln!(
+                    stderr,
+                    "  report: {status}, {failed} failed of {total} step(s)"
+                );
+                continue;
             }
-            if key == "junit" {
-                if let Some(junit) = value.as_object() {
-                    let _ = writeln!(
-                        stderr,
-                        "  junit: {} test(s), {} failure(s), {} error(s), {} skipped",
-                        junit.get("tests").and_then(Value::as_u64).unwrap_or(0),
-                        junit.get("failures").and_then(Value::as_u64).unwrap_or(0),
-                        junit.get("errors").and_then(Value::as_u64).unwrap_or(0),
-                        junit.get("skipped").and_then(Value::as_u64).unwrap_or(0),
-                    );
-                    continue;
-                }
+            if key == "junit"
+                && let Some(junit) = value.as_object()
+            {
+                let _ = writeln!(
+                    stderr,
+                    "  junit: {} test(s), {} failure(s), {} error(s), {} skipped",
+                    junit.get("tests").and_then(Value::as_u64).unwrap_or(0),
+                    junit.get("failures").and_then(Value::as_u64).unwrap_or(0),
+                    junit.get("errors").and_then(Value::as_u64).unwrap_or(0),
+                    junit.get("skipped").and_then(Value::as_u64).unwrap_or(0),
+                );
+                continue;
             }
-            if key == "external_result" {
-                if let Some(result) = value.as_object() {
-                    let _ = writeln!(
-                        stderr,
-                        "  external_result: exit={}, timed_out={}, duration_ms={}",
-                        result
-                            .get("exit_code")
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        result
-                            .get("timed_out")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                        result
-                            .get("duration_ms")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0),
-                    );
-                    continue;
-                }
+            if key == "external_result"
+                && let Some(result) = value.as_object()
+            {
+                let _ = writeln!(
+                    stderr,
+                    "  external_result: exit={}, timed_out={}, duration_ms={}",
+                    result
+                        .get("exit_code")
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    result
+                        .get("timed_out")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    result
+                        .get("duration_ms")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                );
+                continue;
             }
             let _ = writeln!(stderr, "  {key}: {value}");
         }

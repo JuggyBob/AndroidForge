@@ -235,10 +235,8 @@ impl AppManager {
             .device(serial.to_string()));
         }
         let mut warnings = Vec::new();
-        if wake {
-            if let Err(error) = self.adb.wake(serial).await {
-                warnings.push(format!("device wake failed: {}", error.message()));
-            }
+        if wake && let Err(error) = self.adb.wake(serial).await {
+            warnings.push(format!("device wake failed: {}", error.message()));
         }
         let component = match activity {
             Some(activity) => Some(normalize_component(package, activity)),
@@ -797,11 +795,11 @@ fn activity_snapshot(text: &str, package: &str) -> ActivitySnapshot {
         if trimmed.contains("ActivityRecord{") && trimmed.contains(package) {
             snapshot.activity_exists = true;
         }
-        if trimmed.contains("topResumedActivity=") || trimmed.contains("mResumedActivity=") {
-            if let Some(component) = extract_component(trimmed) {
-                snapshot.top_resumed_package = Some(component.0);
-                snapshot.top_resumed_activity = Some(component.1);
-            }
+        if (trimmed.contains("topResumedActivity=") || trimmed.contains("mResumedActivity="))
+            && let Some(component) = extract_component(trimmed)
+        {
+            snapshot.top_resumed_package = Some(component.0);
+            snapshot.top_resumed_activity = Some(component.1);
         }
     }
     snapshot

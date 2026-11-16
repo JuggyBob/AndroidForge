@@ -557,17 +557,16 @@ pub fn gc_sessions(paths: &ForgePaths, reclaim: bool, dry_run: bool) -> Result<S
         };
         let mut changed = false;
 
-        if let Some(operation) = session.operation.clone() {
-            if !androidforge_process::process_exists(operation.pid)
-                && age_secs(&operation.started_at) > DEAD_OPERATION_GRACE_SECS
-            {
-                report
-                    .cleared_operations
-                    .push(format!("{}:{}", session.id, operation.operation));
-                if !dry_run {
-                    session.operation = None;
-                    changed = true;
-                }
+        if let Some(operation) = session.operation.clone()
+            && !androidforge_process::process_exists(operation.pid)
+            && age_secs(&operation.started_at) > DEAD_OPERATION_GRACE_SECS
+        {
+            report
+                .cleared_operations
+                .push(format!("{}:{}", session.id, operation.operation));
+            if !dry_run {
+                session.operation = None;
+                changed = true;
             }
         }
 
@@ -733,18 +732,18 @@ fn release_device_lock_unlocked(
     if !lock_path.is_file() {
         return Ok(());
     }
-    if let Ok(lock) = read_json::<DeviceLock>(&lock_path) {
-        if lock.session_id == session_id {
-            fs::remove_file(&lock_path).map_err(|error| {
-                ForgeError::new(
-                    ErrorCode::DeviceBusy,
-                    format!(
-                        "could not release device lock {}: {error}",
-                        lock_path.display()
-                    ),
-                )
-            })?;
-        }
+    if let Ok(lock) = read_json::<DeviceLock>(&lock_path)
+        && lock.session_id == session_id
+    {
+        fs::remove_file(&lock_path).map_err(|error| {
+            ForgeError::new(
+                ErrorCode::DeviceBusy,
+                format!(
+                    "could not release device lock {}: {error}",
+                    lock_path.display()
+                ),
+            )
+        })?;
     }
     Ok(())
 }

@@ -21,20 +21,56 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --release
 
-      - name: Package binary
+      - name: Verify version and package binaries
         shell: pwsh
         run: |
+          $tag = $env:GITHUB_REF_NAME
+          if (-not $tag.StartsWith("v")) {
+            throw "Release workflow must run from a v* tag, got '$tag'"
+          }
+          $expected = $tag.Substring(1)
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          if ($version -ne $expected) {
+            throw "Tag $tag does not match workspace version $version"
+          }
+          $cliVersion = (.\target\release\androidforge.exe --version).Trim()
+          if ($cliVersion -ne "androidforge $version") {
+            throw "CLI reported '$cliVersion', expected 'androidforge $version'"
+          }
+
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path target\release\androidforge.exe -DestinationPath dist\androidforge-windows-x86_64.zip -Force
-          $hash = (Get-FileHash dist\androidforge-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  androidforge-windows-x86_64.zip" | Set-Content dist\SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path target\release\androidforge.exe -DestinationPath dist\androidforge-cli-windows-x86_64.zip -Force
+
+          $portable = Join-Path $env:RUNNER_TEMP "androidforge-portable"
+          New-Item -ItemType Directory -Force -Path $portable | Out-Null
+          Copy-Item target\release\androidforge.exe $portable
+          Copy-Item target\release\androidforge-desktop.exe $portable
+          Copy-Item LICENSE $portable
+          @"
+          AndroidForge $version (Alpha) portable desktop + CLI
+
+          Run androidforge-desktop.exe for the native cockpit. It locates androidforge.exe beside it.
+          Use the CLI for automation and the JSON contract. See README.md, USER_GUIDE.md and
+          VERIFICATION.md in the repository for scope and known limitations.
+
+          This is alpha software. Windows 10/11 x86_64 is the validated host.
+          "@ | Set-Content (Join-Path $portable "PORTABLE.txt") -Encoding utf8
+          Compress-Archive -Path (Join-Path $portable "*") -DestinationPath dist\androidforge-desktop-windows-x86_64.zip -Force
+
+          $lines = @()
+          foreach ($name in @("androidforge-cli-windows-x86_64.zip", "androidforge-desktop-windows-x86_64.zip")) {
+            $hash = (Get-FileHash (Join-Path dist $name) -Algorithm SHA256).Hash.ToLower()
+            $lines += "$hash  $name"
+          }
+          $lines | Set-Content dist\SHA256SUMS.txt -Encoding ascii
           Get-Content dist\SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: androidforge-windows-x86_64
+          name: androidforge-windows-x86_64-release
           path: |
-            dist/androidforge-windows-x86_64.zip
+            dist/androidforge-cli-windows-x86_64.zip
+            dist/androidforge-desktop-windows-x86_64.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -44,11 +80,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:GITHUB_REF_NAME
-          if (-not $tag.StartsWith("v")) {
-            throw "Release workflow must run from a v* tag, got '$tag'"
-          }
           gh release create $tag `
-            dist/androidforge-windows-x86_64.zip `
+            dist/androidforge-cli-windows-x86_64.zip `
+            dist/androidforge-desktop-windows-x86_64.zip `
             dist/SHA256SUMS.txt `
             --title "AndroidForge $tag (Alpha)" `
             --prerelease `

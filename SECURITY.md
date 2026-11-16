@@ -32,6 +32,17 @@ Fixtures, hooks and conformance flows execute project-authored commands with the
 - `androidforge adb` is explicitly unsafe: it preserves argument boundaries but bypasses AndroidForge's higher-level safety and returns raw output.
 - `--dry-run` is the intended way to inspect a fixture before execution.
 
+## Desktop cockpit
+
+- The desktop has no network listener, cloud sync, telemetry or embedded browser. It invokes the local
+  CLI and renders its files.
+- The CLI path is user-configurable and is executed with the user's privileges. Point it only at an
+  `androidforge.exe` you trust.
+- Evidence artifacts are resolved inside the selected run directory; parent-directory escapes are
+  rejected. Image decoding uses the native `image` crate and text previews are bounded.
+- Cancellation terminates the child process tree for cancellable runs and never issues a session stop or
+  release. Session lifecycle operations are not cancellable.
+
 ## Device ownership
 
 - Session and device locks coordinate AndroidForge processes only. They do not stop an unrelated ADB client, IDE or script from using the same device.
@@ -68,8 +79,8 @@ Older pre-release builds may not receive fixes.
 ## Scope
 
 In scope: path traversal, unsafe artifact writes, command/argument injection in AndroidForge itself,
-unintended device ownership bypass, secret leakage in reports, and privilege boundaries around
-`run-as`, hooks, fixtures and raw ADB.
+unintended device ownership bypass, secret leakage in reports, desktop artifact path escapes or unsafe
+CLI-path execution, and privilege boundaries around `run-as`, hooks, fixtures and raw ADB.
 
 Out of scope: behavior caused by a project-authored command that the user explicitly runs, an
 unrelated ADB client modifying the same device, an already-compromised host, and physical access to an

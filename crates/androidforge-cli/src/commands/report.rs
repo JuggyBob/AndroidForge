@@ -563,10 +563,10 @@ fn resolve_report_dir(ctx: &CliContext, spec: &str) -> Result<PathBuf> {
     roots.dedup();
     let mut matches = Vec::new();
     for root in &roots {
-        if let Ok(dir) = resolve_run_dir(root, spec) {
-            if !matches.contains(&dir) {
-                matches.push(dir);
-            }
+        if let Ok(dir) = resolve_run_dir(root, spec)
+            && !matches.contains(&dir)
+        {
+            matches.push(dir);
         }
     }
     match matches.len() {
@@ -633,10 +633,10 @@ fn resolve_active_run(ctx: &CliContext) -> Result<(String, Option<String>, Optio
     if let Some(run) = &ctx.run_arg {
         return Ok((run.clone(), session_id.clone(), session_id));
     }
-    if let Ok(run) = std::env::var("ANDROIDFORGE_RUN_ID") {
-        if !run.trim().is_empty() {
-            return Ok((run, session_id.clone(), session_id));
-        }
+    if let Ok(run) = std::env::var("ANDROIDFORGE_RUN_ID")
+        && !run.trim().is_empty()
+    {
+        return Ok((run, session_id.clone(), session_id));
     }
     let active = get_active_run(&ctx.paths, session_id.as_deref())?.ok_or_else(|| {
         ForgeError::new(ErrorCode::InvalidArgument, "no active run was found")
@@ -650,10 +650,10 @@ fn resolve_optional_run(ctx: &CliContext) -> Result<Option<String>> {
     if let Some(run) = &ctx.run_arg {
         return Ok(Some(run.clone()));
     }
-    if let Ok(run) = std::env::var("ANDROIDFORGE_RUN_ID") {
-        if !run.trim().is_empty() {
-            return Ok(Some(run));
-        }
+    if let Ok(run) = std::env::var("ANDROIDFORGE_RUN_ID")
+        && !run.trim().is_empty()
+    {
+        return Ok(Some(run));
     }
     let session_id = ctx.session_id()?;
     let Some(active) = get_active_run(&ctx.paths, session_id.as_deref())? else {
@@ -663,11 +663,11 @@ fn resolve_optional_run(ctx: &CliContext) -> Result<Option<String>> {
     // make every later command fail against a finished run: clear the stale
     // pointer and let the command start an implicit run instead.
     let report_path = ctx.paths.run_dir(&active.run_id).join("report.json");
-    if let Ok(report) = androidforge_core::util::read_json::<RunReport>(&report_path) {
-        if report.status != RunStatus::Running {
-            clear_active_run(&ctx.paths, session_id.as_deref())?;
-            return Ok(None);
-        }
+    if let Ok(report) = androidforge_core::util::read_json::<RunReport>(&report_path)
+        && report.status != RunStatus::Running
+    {
+        clear_active_run(&ctx.paths, session_id.as_deref())?;
+        return Ok(None);
     }
     Ok(Some(active.run_id))
 }

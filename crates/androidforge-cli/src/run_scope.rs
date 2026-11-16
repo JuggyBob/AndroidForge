@@ -39,11 +39,11 @@ impl RunScope {
         };
         if let Some(active_run) = &active {
             let report_path = ctx.paths.run_dir(&active_run.run_id).join("report.json");
-            if let Ok(report) = androidforge_core::util::read_json::<RunReport>(&report_path) {
-                if report.status != RunStatus::Running {
-                    clear_active_run(&ctx.paths, session.map(|session| session.id.as_str()))?;
-                    active = None;
-                }
+            if let Ok(report) = androidforge_core::util::read_json::<RunReport>(&report_path)
+                && report.status != RunStatus::Running
+            {
+                clear_active_run(&ctx.paths, session.map(|session| session.id.as_str()))?;
+                active = None;
             }
         }
         let run_id = explicit
@@ -221,27 +221,25 @@ pub async fn finish_scope(
         }
         Err(mut error) => {
             let mut evidence = Vec::new();
-            if should_capture_failure(ctx, &error) {
-                if let Some(serial) = device.map(|device| device.serial.as_str()) {
-                    if let Ok(app) = ctx.app_manager() {
-                        if let Ok(ui) = ctx.ui_manager() {
-                            let package = ctx.config.package().map(str::to_string);
-                            let bundle = capture_failure_bundle(
-                                &app.adb,
-                                Some(&ui),
-                                Some(&app),
-                                &mut scope.run,
-                                serial,
-                                package.as_deref(),
-                                &format!("{command} failed: {}", error.message()),
-                                ctx.config.file.diagnostics.include_dumps,
-                            )
-                            .await;
-                            evidence.extend(bundle.artifacts.clone());
-                            error = error.with_artifacts(bundle.artifacts);
-                        }
-                    }
-                }
+            if should_capture_failure(ctx, &error)
+                && let Some(serial) = device.map(|device| device.serial.as_str())
+                && let Ok(app) = ctx.app_manager()
+                && let Ok(ui) = ctx.ui_manager()
+            {
+                let package = ctx.config.package().map(str::to_string);
+                let bundle = capture_failure_bundle(
+                    &app.adb,
+                    Some(&ui),
+                    Some(&app),
+                    &mut scope.run,
+                    serial,
+                    package.as_deref(),
+                    &format!("{command} failed: {}", error.message()),
+                    ctx.config.file.diagnostics.include_dumps,
+                )
+                .await;
+                evidence.extend(bundle.artifacts.clone());
+                error = error.with_artifacts(bundle.artifacts);
             }
             let finish = scope.finish_failure(&error, evidence);
             if let Err(finish_error) = finish {

@@ -173,24 +173,23 @@ fn preprocess(mut args: Vec<OsString>) -> Vec<OsString> {
         if !is_subcommand {
             args.insert(index + 1, OsString::from("exec"));
         }
-    } else if top == "diagnostics" {
-        if let Some(logcat_index) = args
+    } else if top == "diagnostics"
+        && let Some(logcat_index) = args
             .iter()
             .enumerate()
             .skip(index + 1)
             .find(|(_, arg)| arg.to_string_lossy() == "logcat")
             .map(|(index, _)| index)
-        {
-            let next = args
-                .get(logcat_index + 1)
-                .map(|arg| arg.to_string_lossy().to_string());
-            let is_subcommand = matches!(
-                next.as_deref(),
-                Some("tail" | "start" | "stop" | "status" | "--help" | "-h")
-            );
-            if !is_subcommand {
-                args.insert(logcat_index + 1, OsString::from("tail"));
-            }
+    {
+        let next = args
+            .get(logcat_index + 1)
+            .map(|arg| arg.to_string_lossy().to_string());
+        let is_subcommand = matches!(
+            next.as_deref(),
+            Some("tail" | "start" | "stop" | "status" | "--help" | "-h")
+        );
+        if !is_subcommand {
+            args.insert(logcat_index + 1, OsString::from("tail"));
         }
     }
     args

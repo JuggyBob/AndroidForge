@@ -36,6 +36,22 @@
 | `visual.diff` | unsupported | none | Screenshot evidence is supported; automated comparison is deferred. |
 | `cloud` | unsupported | none | No telemetry or upload. |
 
+## Desktop cockpit
+
+`androidforge-desktop.exe` is a separate native executable, so it is not reported by
+`androidforge capabilities --json`. Its scope is deliberately narrower than the CLI:
+
+- P0 read-only: project selection, environment/doctor summary, devices, sessions, report-backed runs,
+  run details/build identity/steps/failure, evidence (screenshots, hierarchy/log text), raw
+  `report.json`/`metadata.json`/`manifest.json` and manifest verification.
+- P1 controlled actions: session start/attach/release/stop/restart, APK inspect/dry-run/install,
+  fixture/conformance/hook launch, streamed output, and cancellation for installs/fixtures/conformance/
+  hooks. Session lifecycle operations run to completion.
+- CLI resolution and schema probing: explicit path, sidecar, workspace build, then `PATH`; unknown report
+  schemas are refused.
+- Native Rust/egui/eframe/glow only; no WebView, HTML, JavaScript, Node or bundled browser.
+- Windows-validated. It is not a project editor, device mirror, HTML report or automation API.
+
 ## Command coverage
 
 ### Environment and configuration
@@ -94,7 +110,7 @@
 
 ## Not implemented
 
-- A GUI or interactive TUI beyond CLI help and human output.
+- A TUI, plugin system or automation API beyond the CLI and the native desktop cockpit.
 - A mandatory daemon or background scheduler.
 - Cloud device farms, telemetry, crash upload, accounts or LLM calls.
 - Release publishing, APK signing, keystore/password handling.
@@ -105,4 +121,4 @@
 
 ## Verified versus unverified
 
-The delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. Physical-device, Maestro, instrumentation-package, snapshot-restore and root-only time paths were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.
+The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery reran the CLI gates and exercised the native desktop against CalcSuite: project discovery, session start/attach/release/restart/stop, APK inspect/dry-run/install, conformance and hook runs, run details, screenshot/log/manifest evidence, output streaming, cancellation and structured error display. Physical-device, Maestro, instrumentation-package, snapshot-restore and root-only time paths were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.

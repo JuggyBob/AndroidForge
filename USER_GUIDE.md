@@ -4,8 +4,8 @@ This guide is for a human setting up AndroidForge and for scripts that prefer a 
 
 ## 1. Requirements
 
-- Windows 10/11 x64 for the delivered binary. The Rust workspace is portable in principle; process-tree cleanup is Windows-focused.
-- Rust stable with Edition 2024 support (`rust-toolchain.toml` pins it).
+- Windows 10/11 x64 for the delivered binaries. The Rust workspace is portable in principle; process-tree cleanup is Windows-focused.
+- Rust `1.95` or newer with Edition 2024 support (`rust-toolchain.toml` pins the channel).
 - Android SDK with:
   - platform-tools (`adb`)
   - emulator
@@ -19,16 +19,92 @@ AndroidForge discovers the SDK from `ANDROIDFORGE_SDK_ROOT`, `ANDROID_HOME` or `
 ## 2. Build and first check
 
 ```powershell
-cargo build --release
+cargo build --workspace --release
 .\target\release\androidforge.exe --version
 .\target\release\androidforge.exe doctor --json
 .\target\release\androidforge.exe capabilities --json
 .\target\release\androidforge.exe schema list --json
+.\target\release\androidforge-desktop.exe
 ```
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
-## 3. Project adapter
+## 3. Desktop cockpit
+
+`androidforge-desktop.exe` is the optional native cockpit. It is a separate executable built with Rust,
+egui/eframe and glow; it does not embed a browser, WebView, HTML, JavaScript or Node runtime. The CLI
+remains authoritative: every screen and action invokes `androidforge --json` and reads the same sessions,
+reports and evidence.
+
+### Launch and connection
+
+```powershell
+.\target\release\androidforge-desktop.exe
+```
+
+On startup it looks for the CLI in this order: the executable beside the desktop, an explicit path saved
+in Settings, the workspace `target/debug` or `target/release` build, then `PATH`. The top bar shows the
+resolved CLI version and connection state. Settings lets you change the CLI path, workspace, owner and
+light/dark/system theme.
+
+If the CLI is offline, run `androidforge doctor --json` in the same environment. The desktop refuses a
+CLI with an unknown report schema rather than guessing. A missing or incompatible CLI is shown in the
+Overview error banner and in Settings.
+
+### Pages
+
+- **Overview** — environment status, devices/sessions/runs counters, recent runs and CLI resolution.
+- **Devices** — selectable device table with serial, model, Android version, state, battery and owner;
+  details include boot state, AVD, port, architecture and resolution.
+- **Sessions** — selectable session table with owner, heartbeat and state; details show prepared
+  settings and expose `Release`, `Stop`, `Restart`, `Use as target` and `Install APK`. Released/abandoned
+  tombstones are read-only.
+- **Runs** — report-backed runs, project hooks and `Run project flow`. Selecting `Open` or a row shows
+  build identity, steps, failure details and evidence.
+
+The project picker refreshes discovered adapters. Use `Refresh` or wait for the automatic interval; a
+stale timestamp is shown when the last refresh failed.
+
+### Evidence
+
+The run detail has three tabs:
+
+- **Summary** — build identity (package/version, APK and installed SHA-256, certificate, verification),
+  session/device, failure code/suggestions and every step.
+- **Evidence** — filterable artifact list. Screenshots render with Fit/100%/zoom; hierarchy and log text
+  render with line numbers and a search filter. `Open` opens the artifact with the OS, and the path can
+  be copied.
+- **Raw files** — `report.json`, `metadata.json`, raw `manifest.json` and manifest verification counts
+  (`ok`, `missing`, `mismatched`). Artifact paths are joined safely inside the run directory.
+
+### Controlled actions
+
+- **APK install** — choose an APK, inspect package/version/size/SHA-256/certificate, choose a ready or
+  attached target session, optionally `Dry run`, then `Install...`. Fresh installs are explicit and
+  destructive. The install dialog closes for confirmation and reopens with the measured result.
+- **Run project flow** — fixture or conformance, with the project/target summary, destructive-step
+  checkbox and confirmation. Hooks have their own `Run...` confirmation.
+- **Session lifecycle** — start, attach, release, stop and restart, with a confirmation that names the
+  session, device and owner. Stop and restart explain what is lost. Attached sessions show the attached
+  stop warning.
+- **Output** — the bottom panel streams stdout/stderr, shows elapsed time, exit status, truncation and a
+  copy button. `Dismiss` clears a finished panel.
+
+Session lifecycle operations run to completion and do not show `Cancel`. Cancellation is limited
+to installs, fixtures, conformance and hooks: it terminates the AndroidForge child process tree, writes a
+warning that the final report may be incomplete, and never calls `session stop` or `session release`. The
+emulator remains available. A cancelled run may appear as `running` in the report list until you inspect
+or clean it; its report was not finalized.
+
+### Safety rules for desktop users
+
+- Read the confirmation target before clicking; the desktop uses the session selected in the picker.
+- A released session is a tombstone: start or attach a new session before running actions.
+- Closing the desktop does not stop the CLI, emulator or session. Use the CLI or the Sessions page to
+  release/stop explicitly.
+- The desktop is an operator console, not an editor for adapters, fixtures or scripts.
+
+## 4. Project adapter
 
 Run `init` inside a project, or create `.androidforge/project.toml` manually:
 
@@ -64,7 +140,7 @@ The adapter is optional for `doctor`, `devices`, `avd` and raw ADB, but required
 
 Configuration precedence: CLI > environment contract > project adapter > global config > defaults. `--project <dir>` chooses a project explicitly. Without it, AndroidForge walks upward for `.androidforge/project.toml`, `.androidforge/config.toml`, or a root `project.toml` containing `adapter_version`.
 
-## 4. Devices
+## 5. Devices
 
 ```powershell
 androidforge devices list --json
@@ -83,7 +159,7 @@ androidforge devices restore --session <ID> --json
 
 Preparation records previous values. `devices restore`, `session release` and `session stop` restore only what AndroidForge changed. Use `--keep-prepared` if you deliberately want to keep test settings.
 
-## 5. Emulators and snapshots
+## 6. Emulators and snapshots
 
 ```powershell
 androidforge avd list --json
@@ -110,7 +186,7 @@ androidforge snapshot delete <name> --session <ID> --json
 
 Snapshot support varies by emulator build. Load is destructive and always requires `--yes`.
 
-## 6. Sessions
+## 7. Sessions
 
 A session is the unit of ownership and the most reliable way to target a device.
 
@@ -133,7 +209,7 @@ androidforge session stop --session ses-... --owner MyAgent --json
 
 If another session owns the device, you get `E_DEVICE_BUSY`. Do not kill the emulator. Check `session list`; use `session gc --reclaim` only when the owner is genuinely dead. `session gc --help` also has `--stop` for stale owned emulators.
 
-## 7. APKs
+## 8. APKs
 
 ```powershell
 androidforge apk inspect .\app-debug.apk --json
@@ -168,7 +244,7 @@ androidforge app data-backup com.example.app .\backup.tar --session <ID> --json
 
 Use `--no-verify` only when you explicitly need to skip post-install hash verification; it weakens evidence.
 
-## 8. App control
+## 9. App control
 
 ```powershell
 androidforge app launch com.example.app --session <ID> --json
@@ -191,7 +267,7 @@ androidforge app file-pull files/seed.json .\pulled.json --package com.example.a
 
 Remote paths are relative to the app's private data directory and may not contain `..`.
 
-## 9. UI work
+## 10. UI work
 
 Start with a dump or a find, not coordinates.
 
@@ -240,7 +316,7 @@ Rules:
 - Avoid fixed sleeps. Use `wait`, `settle` and `scroll-to`.
 - Compose test tags are not visible unless the app exposes them as accessibility resource IDs. Use instrumentation for internal tags.
 
-## 10. Evidence
+## 11. Evidence
 
 ### Screenshots and recordings
 
@@ -298,7 +374,7 @@ Short permission names are normalized to `android.permission.*`. `SCHEDULE_EXACT
 
 Interactive toggles (`doze force`, `network airplane`, `time set`) require `--yes`. Time changes usually require root, which AndroidForge will not provide.
 
-## 11. Runs and reports
+## 12. Runs and reports
 
 For a multi-step flow:
 
@@ -353,7 +429,7 @@ androidforge report prune --older-than 30d --keep-last 20 --dry-run --json
 androidforge report prune --older-than 30d --keep-last 20 --yes --json
 ```
 
-## 12. Fixtures, hooks and conformance
+## 13. Fixtures, hooks and conformance
 
 ```powershell
 androidforge --project .\examples\DiscountHunter fixture list --json
@@ -394,7 +470,7 @@ checks appear in the conformance step's details in `report.json`; the flow exit 
 pass/fail. Local install preflight failures (expected package or certificate) skip the full device
 evidence bundle because no device state changed.
 
-## 13. Raw ADB
+## 14. Raw ADB
 
 ```powershell
 androidforge adb -s emulator-5554 shell dumpsys battery --json
@@ -402,7 +478,7 @@ androidforge adb -s emulator-5554 shell dumpsys battery --json
 
 Raw ADB preserves argument boundaries and returns stdout/stderr/exit status. It is explicitly unsafe and bypasses AndroidForge's higher-level checks. Prefer a typed command when one exists.
 
-## 14. Environment variables
+## 15. Environment variables
 
 | Variable | Purpose |
 | --- | --- |
@@ -420,7 +496,7 @@ Raw ADB preserves argument boundaries and returns stdout/stderr/exit status. It 
 
 Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contract above.
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 | Symptom | Action |
 | --- | --- |
@@ -437,8 +513,11 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_HOOK_NOT_FOUND` | `hook list`; the adapter must define it. |
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
+| Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.2.0` pair or a compatible release. |
+| Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
-## 16. Safety checklist for agents
+## 17. Safety checklist for agents
 
 1. `doctor --json` and `capabilities --json`.
 2. Claim one session; never borrow another owner's device.
@@ -448,3 +527,5 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 6. Keep evidence; failure bundles are automatic.
 7. Release the session and stop only owned emulators.
 8. Treat `--yes`, `--fresh`, `clear-data`, snapshot load, time/network changes and raw ADB as destructive.
+9. In the desktop, check the selected project/session in every confirmation; closing the app does not
+   release or stop anything. Cancelling a run preserves the emulator.

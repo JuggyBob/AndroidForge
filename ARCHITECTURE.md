@@ -1,6 +1,6 @@
 # Architecture
 
-AndroidForge is a single-process, no-daemon Rust CLI. Every invocation performs discovery, claims or checks a session, does bounded work, records evidence, and exits. Long-lived things (emulators, screen recordings, continuous logcat) are explicit managed subprocesses with status and stop commands.
+AndroidForge is a single-process, no-daemon Rust CLI plus a separate native desktop sidecar. Every CLI invocation performs discovery, claims or checks a session, does bounded work, records evidence, and exits. Long-lived things (emulators, screen recordings, continuous logcat) are explicit managed subprocesses with status and stop commands. The desktop never owns state of its own beyond UI preferences; it reads and writes through the CLI.
 
 ## Workspace
 
@@ -15,9 +15,10 @@ AndroidForge is a single-process, no-daemon Rust CLI. Every invocation performs 
 | `androidforge-ui` | UIAutomator XML parsing, selectors, actions, waits, settle, verified text entry. |
 | `androidforge-diagnostics` | Screenshots, recordings, logcat lifecycle, crashes/ANRs, dumpsys, failure bundle. |
 | `androidforge-automation` | Fixtures, hooks, conformance, Maestro, instrumentation, external processes. |
+| `androidforge-desktop` | Native egui/eframe cockpit, CLI locator/runner, typed models, evidence viewer, P1 operations. |
 | `androidforge-test-support` | Test-only helpers (not part of the runtime dependency graph). |
 
-Dependency direction is acyclic: `cli` is the composition root; feature crates depend on `core`, `process`, `adb` and each other only in the direction of their responsibility. No feature crate depends on `cli`.
+Dependency direction is acyclic: `cli` is the composition root; feature crates depend on `core`, `process`, `adb` and each other only in the direction of their responsibility. No feature crate depends on `cli`. `androidforge-desktop` depends on none of the runtime feature crates; it invokes the CLI executable through its JSON contract.
 
 ## Startup
 
@@ -37,6 +38,42 @@ The merged config precedence is CLI/profile > environment contract > project ada
 All meaningful commands build a `CommandSuccess` with a command name, JSON `result`, human text and optional artifacts. The output layer serializes one envelope when `--json` is active; otherwise it prints human text. Diagnostics/progress/trace go to stderr.
 
 Errors carry a stable `ErrorCode`, message, recoverability, suggestions, context map, optional command/device/session and artifacts. The process exit code comes from the code, not from a generic `1`.
+
+## Desktop cockpit
+
+`androidforge-desktop` is a separate binary, not a library dependency of the CLI. It has four layers:
+
+1. **Backend** — CLI resolution, compatibility probe, runner, JSON envelope parser, evidence reader,
+   project discovery and process manager. All CLI calls go through `std::process::Command` with argv
+   arrays, hidden consoles, bounded timeouts and typed envelopes.
+2. **Models/state** — serde models of CLI results, cached `DataState` values, selection, forms,
+   confirmations, toasts and operation state. The desktop does not invent success: a run passes only when
+   the report says it passed.
+3. **Workers** — background threads run CLI calls and send typed events over `mpsc`; the egui frame only
+   drains events and renders. Refreshes are interval-driven and pinned while an operation is running.
+4. **Views/dialogs** — Overview, Devices, Sessions, Runs, run details/evidence and operation output.
+   Confirmation and error dialogs render above ordinary windows.
+
+CLI resolution order is explicit settings path, executable beside the desktop, workspace `target/debug`
+or `target/release` during development, then `PATH`. The compatibility probe checks `--version` and the
+report schema before enabling actions. Unknown schemas are refused with a desktop error instead of
+mis-parsing.
+
+P0 is read-only. P1 actions are start/attach/release/stop/restart, APK inspect/dry-run/install,
+fixture/conformance/hook launch, output streaming and cancellation. Every destructive action has an
+explicit confirmation. Install closes the install window before confirming and reopens it with measured
+identity; run details request `report show`/`report path` and never infer from process exit codes.
+
+Cancellation is limited to operations that can be terminated safely: installs, fixtures, conformance flows and
+hooks. Session lifecycle operations (start/attach/release/stop/restart) run to completion because killing
+their child tree could leave a half-owned emulator or an inconsistent lock. For cancellable operations the
+desktop walks the Windows process snapshot, terminates descendants deepest-first, and falls back to
+`taskkill /T /F`. It never calls `session stop` or `session release`; the emulator is not a child of a
+cancelled run and stays alive. The UI keeps a session reminder and explains that the final report may be
+incomplete.
+
+The desktop uses eframe 0.37 with the glow renderer and embedded PNG/ICO assets. There is no WebView,
+HTML, JavaScript, Node, React or browser frontend, and no network service.
 
 ## Runs and reports
 

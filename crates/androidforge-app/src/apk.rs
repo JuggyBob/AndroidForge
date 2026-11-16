@@ -496,10 +496,10 @@ fn parse_badging(output: &str) -> Badging {
         } else if let Some(rest) = line.strip_prefix("application-label:") {
             badging.label = first_quoted(rest);
         } else if let Some(rest) = line.strip_prefix("application-label-") {
-            if badging.label.is_none() {
-                if let Some((_, value)) = rest.split_once(':') {
-                    badging.label = first_quoted(value);
-                }
+            if badging.label.is_none()
+                && let Some((_, value)) = rest.split_once(':')
+            {
+                badging.label = first_quoted(value);
             }
         } else if let Some(rest) = line.strip_prefix("launchable-activity:") {
             badging.launchable_activity = parse_key_values(rest).get("name").cloned();

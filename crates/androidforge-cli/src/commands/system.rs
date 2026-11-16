@@ -645,15 +645,14 @@ async fn time_restore(ctx: &CliContext) -> Result<CommandSuccess> {
             error.message()
         ));
     }
-    if !auto_time {
-        if let Some(epoch) = epoch {
-            if let Err(error) = manager.set_time(&device.serial, epoch, true).await {
-                warnings.push(format!(
-                    "could not restore previous time: {}",
-                    error.message()
-                ));
-            }
-        }
+    if !auto_time
+        && let Some(epoch) = epoch
+        && let Err(error) = manager.set_time(&device.serial, epoch, true).await
+    {
+        warnings.push(format!(
+            "could not restore previous time: {}",
+            error.message()
+        ));
     }
     for key in ["time:epoch", "time:auto_time", "time:auto_time_zone"] {
         session.device_settings.remove(key);

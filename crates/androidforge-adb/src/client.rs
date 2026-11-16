@@ -183,10 +183,9 @@ impl AdbClient {
                 None,
             )
             .await
+            && let Some((width, height)) = parse_wm_size(&output.stdout_text())
         {
-            if let Some((width, height)) = parse_wm_size(&output.stdout_text()) {
-                device.resolution = Some(format!("{width}x{height}"));
-            }
+            device.resolution = Some(format!("{width}x{height}"));
         }
         if let Ok(output) = self
             .shell_args(
@@ -196,10 +195,9 @@ impl AdbClient {
                 None,
             )
             .await
+            && let Some(density) = parse_wm_density(&output.stdout_text())
         {
-            if let Some(density) = parse_wm_density(&output.stdout_text()) {
-                device.density = Some(density);
-            }
+            device.density = Some(density);
         }
 
         if let Ok(output) = self
@@ -825,10 +823,10 @@ fn fill_from_properties(
     } else {
         "booting".to_string()
     });
-    if let Some(kind) = properties.get("ro.kernel.qemu") {
-        if kind == "1" {
-            device.kind = DeviceKind::Emulator;
-        }
+    if let Some(kind) = properties.get("ro.kernel.qemu")
+        && kind == "1"
+    {
+        device.kind = DeviceKind::Emulator;
     }
 }
 

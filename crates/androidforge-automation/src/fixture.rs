@@ -914,14 +914,13 @@ async fn execute_step(
             if let Some(package) = config.package() {
                 install.allowed_packages.push(package.to_string());
             }
-            if let Some(package) = config.debug_package() {
-                if !install
+            if let Some(package) = config.debug_package()
+                && !install
                     .allowed_packages
                     .iter()
                     .any(|value| value == package)
-                {
-                    install.allowed_packages.push(package.to_string());
-                }
+            {
+                install.allowed_packages.push(package.to_string());
             }
             install.expected_cert_sha256 = config.file.project.expected_cert_sha256.clone();
             install.verify_installed = config.file.project.verify_installed_apk;

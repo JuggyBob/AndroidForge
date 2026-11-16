@@ -143,44 +143,44 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
         manager.boot_timeout = ctx.parse_timeout(Some(timeout), manager.boot_timeout.as_secs())?;
     }
     let adb = ctx.adb()?;
-    if args.reuse {
-        if let Some((serial, port)) = find_running_avd(ctx, &args.avd).await? {
-            let mut session = Session::new(
-                owner,
-                SessionKind::Attached,
-                Some(serial.clone()),
-                Some(args.avd.clone()),
-                Some(port),
-                true,
-            );
-            session.create(&ctx.paths)?;
-            if let Err(error) = session.acquire_device(&ctx.paths, &serial) {
-                let _ = session.mark_failed(&ctx.paths, error.message());
-                return Err(error.session(session.id.clone()));
-            }
-            if let Err(error) = adb
-                .wait_for_device(
-                    Some(&serial),
-                    true,
-                    ctx.parse_timeout(args.timeout.as_deref(), manager.boot_timeout.as_secs())?,
-                )
-                .await
-            {
-                let _ = session.mark_failed(&ctx.paths, error.message());
-                return Err(error.session(session.id.clone()));
-            }
-            let device = adb.inspect(&serial).await?;
-            let warnings =
-                prepare_session(ctx, &mut session, &device, args.prepare, args.no_wake).await?;
-            session.mark_ready(&ctx.paths)?;
-            return session_success(
-                "session.start",
-                &session,
-                &device,
-                warnings,
-                Some("attached to a warm emulator"),
-            );
+    if args.reuse
+        && let Some((serial, port)) = find_running_avd(ctx, &args.avd).await?
+    {
+        let mut session = Session::new(
+            owner,
+            SessionKind::Attached,
+            Some(serial.clone()),
+            Some(args.avd.clone()),
+            Some(port),
+            true,
+        );
+        session.create(&ctx.paths)?;
+        if let Err(error) = session.acquire_device(&ctx.paths, &serial) {
+            let _ = session.mark_failed(&ctx.paths, error.message());
+            return Err(error.session(session.id.clone()));
         }
+        if let Err(error) = adb
+            .wait_for_device(
+                Some(&serial),
+                true,
+                ctx.parse_timeout(args.timeout.as_deref(), manager.boot_timeout.as_secs())?,
+            )
+            .await
+        {
+            let _ = session.mark_failed(&ctx.paths, error.message());
+            return Err(error.session(session.id.clone()));
+        }
+        let device = adb.inspect(&serial).await?;
+        let warnings =
+            prepare_session(ctx, &mut session, &device, args.prepare, args.no_wake).await?;
+        session.mark_ready(&ctx.paths)?;
+        return session_success(
+            "session.start",
+            &session,
+            &device,
+            warnings,
+            Some("attached to a warm emulator"),
+        );
     }
 
     let reservation = androidforge_emulator::allocate_port(args.port)?;
@@ -484,20 +484,19 @@ async fn stop(ctx: &CliContext, args: &SessionStopArgs) -> Result<CommandSuccess
             if session.kind != SessionKind::Emulator || session.state != SessionState::Released {
                 return Err(error);
             }
-            if let Some(serial) = &session.serial {
-                if let Some(owner) = owner_of_serial(&ctx.paths, serial)? {
-                    if owner.id != session.id {
-                        return Err(ForgeError::new(
-                            ErrorCode::DeviceBusy,
-                            format!("{serial} is now owned by session {}", owner.id),
-                        )
-                        .with_suggestion(
-                            "Stop it through the current owner instead of the released tombstone.",
-                        )
-                        .device(serial.clone())
-                        .session(owner.id));
-                    }
-                }
+            if let Some(serial) = &session.serial
+                && let Some(owner) = owner_of_serial(&ctx.paths, serial)?
+                && owner.id != session.id
+            {
+                return Err(ForgeError::new(
+                    ErrorCode::DeviceBusy,
+                    format!("{serial} is now owned by session {}", owner.id),
+                )
+                .with_suggestion(
+                    "Stop it through the current owner instead of the released tombstone.",
+                )
+                .device(serial.clone())
+                .session(owner.id));
             }
             session
         }
@@ -582,26 +581,21 @@ async fn gc(ctx: &CliContext, args: &SessionGcArgs) -> Result<CommandSuccess> {
             let Some(entry) = before.iter().find(|entry| &entry.id == id) else {
                 continue;
             };
-            if let Some(pid) = entry.emulator_pid {
-                if androidforge_process::process_exists(pid) {
-                    if let Ok(manager) = ctx.emulator_manager() {
-                        if let Some(serial) = &entry.serial {
-                            match manager.stop(serial, Some(pid)).await {
-                                Ok(result) => {
-                                    if !result.process_exited {
-                                        warnings.push(format!(
-                                            "abandoned emulator {} did not stop",
-                                            serial
-                                        ));
-                                    }
-                                }
-                                Err(error) => warnings.push(format!(
-                                    "could not stop abandoned emulator: {}",
-                                    error.message()
-                                )),
-                            }
+            if let Some(pid) = entry.emulator_pid
+                && androidforge_process::process_exists(pid)
+                && let Ok(manager) = ctx.emulator_manager()
+                && let Some(serial) = &entry.serial
+            {
+                match manager.stop(serial, Some(pid)).await {
+                    Ok(result) => {
+                        if !result.process_exited {
+                            warnings.push(format!("abandoned emulator {} did not stop", serial));
                         }
                     }
+                    Err(error) => warnings.push(format!(
+                        "could not stop abandoned emulator: {}",
+                        error.message()
+                    )),
                 }
             }
         }
@@ -759,10 +753,10 @@ async fn find_running_avd(ctx: &CliContext, avd: &str) -> Result<Option<(String,
                     .find(|line| !line.is_empty() && *line != "OK" && *line != "KO")
                     .map(str::to_string)
             });
-        if name.as_deref() == Some(avd) {
-            if let Some(port) = parse_emulator_port(&device.serial) {
-                return Ok(Some((device.serial, port)));
-            }
+        if name.as_deref() == Some(avd)
+            && let Some(port) = parse_emulator_port(&device.serial)
+        {
+            return Ok(Some((device.serial, port)));
         }
     }
     Ok(None)

@@ -6,17 +6,19 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.1.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.2.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
 
-AndroidForge is a single native Rust CLI. It gives an AI coding agent a reliable way to acquire an
-Android device, install a build, inspect and drive the UI, prepare fixture state, collect evidence and
-return machine-readable results — without Android Studio, fragile coordinate scripts, a daemon or a
-cloud service.
+AndroidForge is a local-first Rust toolkit: a single native CLI for automation plus an optional native
+desktop cockpit for humans. The CLI gives an AI coding agent a reliable way to acquire an Android
+device, install a build, inspect and drive the UI, prepare fixture state, collect evidence and return
+machine-readable results — without Android Studio, fragile coordinate scripts, a daemon or a cloud
+service. The desktop app is a separate `androidforge-desktop.exe` that drives the same CLI and its JSON
+contract; it never reimplements or replaces the CLI.
 
-The same binary runs every project. Project-specific behavior lives in `.androidforge/project.toml`,
+The same CLI binary runs every project. Project-specific behavior lives in `.androidforge/project.toml`,
 fixtures, hooks, conformance manifests and scripts. The Rust core contains no app names, package ids or
 project branches.
 
@@ -70,12 +72,14 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Evidence | Screenshots, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
 | Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time |
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
+| Desktop | Native egui/eframe cockpit: read-only overview, devices, sessions, runs, evidence and controlled P1 actions |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 
 ## Requirements
 
 - **Host:** Windows 10/11 is the tested host. macOS and Linux are not yet validated.
-- **Rust:** stable toolchain with Edition 2024 support (`rust-toolchain.toml`).
+- **Rust:** `1.95` or newer with Edition 2024 support (`rust-toolchain.toml`). The desktop crate uses
+  eframe 0.37 and the glow renderer; there is no WebView, browser, Node or frontend toolchain.
 - **Android SDK:** platform-tools, emulator and build-tools (`aapt2`, `apksigner`).
 - **Java:** a JDK usable by `apksigner` (the SDK-bundled JDK is fine).
 - **Device:** an emulator or a USB-debugging Android device.
@@ -88,14 +92,22 @@ environment failure; missing Maestro is a warning.
 ### Download a release
 
 1. Open [Releases](https://github.com/JuggyBob/AndroidForge/releases).
-2. Download the Windows x86_64 zip and `SHA256SUMS.txt`.
-3. Verify the hash, extract `androidforge.exe`, and put it on `PATH`.
-4. Run:
+2. Choose an asset and verify it with `SHA256SUMS.txt`:
+   - `androidforge-cli-windows-x86_64.zip` — standalone `androidforge.exe`;
+   - `androidforge-desktop-windows-x86_64.zip` — portable `androidforge.exe` + `androidforge-desktop.exe`.
+3. Extract the CLI zip, put `androidforge.exe` on `PATH`, and run:
 
 ```powershell
 androidforge --version
 androidforge doctor --json
 ```
+
+4. For the desktop cockpit, extract the combined zip and launch `androidforge-desktop.exe`. It locates
+   the CLI beside itself first, then a configured path, then the workspace build, then `PATH`. Open
+   Settings to point at a different CLI or workspace.
+
+Both executables follow the same `0.2.0` version line. The desktop refuses a CLI whose JSON schema it
+does not understand rather than guessing.
 
 ### Build from source
 
@@ -104,6 +116,7 @@ git clone https://github.com/JuggyBob/AndroidForge.git
 cd AndroidForge
 cargo build --workspace --release
 .\target\release\androidforge.exe doctor --json
+.\target\release\androidforge-desktop.exe
 ```
 
 The workspace has no runtime dependency on Python, Node, .NET or PowerShell. Java is only needed by
@@ -152,6 +165,35 @@ androidforge report show latest --json
 `run end` derives `passed`/`failed` from its steps. A failed step exits non-zero; an explicit
 `--status passed` is refused unless `--allow-failures` is deliberate.
 
+## Desktop cockpit
+
+`androidforge-desktop.exe` is an optional native companion for people who want to see and control the
+same sessions, runs and evidence the CLI produces. It is built with Rust, egui/eframe and glow; there is
+no WebView, JavaScript, HTML, Node or browser runtime.
+
+The cockpit has four pages:
+
+- **Overview** — environment health, device/session counts, recent runs and project context.
+- **Devices** — serial, model, Android version, boot state, battery and current owner.
+- **Sessions** — owner, heartbeat, prepared settings and validated `Release`, `Stop` and `Restart`
+  actions behind explicit confirmations.
+- **Runs** — report-backed run table, build identity, steps, failure details, screenshots, hierarchy,
+  logs, raw files and checksum-manifest verification.
+
+P1 actions are intentionally narrow: start an emulator, attach a device, choose and inspect an APK,
+dry-run or install it, run fixtures/conformance flows/hooks, stream output and cancel a run. Cancellation
+terminates the AndroidForge child process tree (never a session command) and never stops or releases the
+emulator; the session reminder stays visible. Session lifecycle operations cannot be cancelled and run to
+completion. A completed operation still occupies the output panel until dismissed, but no longer blocks
+the next action.
+
+The desktop is a sidecar client, not a second implementation. Every refresh and action invokes
+`androidforge --json`, parses the typed envelope and shows the CLI's own error code, message,
+suggestions and artifacts. Closing the desktop does not stop the CLI, an emulator or a session.
+
+See [USER_GUIDE.md](USER_GUIDE.md#3-desktop-cockpit) for the workflow and
+[ARCHITECTURE.md](ARCHITECTURE.md#desktop-cockpit) for the design.
+
 ## Configuration
 
 A project opts into AndroidForge with `.androidforge/project.toml`:
@@ -192,6 +234,7 @@ walks upward for `.androidforge/project.toml` when omitted.
 | `androidforge-ui` | UIAutomator hierarchy, selectors, semantic actions, waits |
 | `androidforge-diagnostics` | Logcat, crashes/ANRs, dumpsys, screenshots, recordings, evidence |
 | `androidforge-automation` | Fixtures, hooks, conformance, Maestro, instrumentation, run exec |
+| `androidforge-desktop` | Native egui cockpit, CLI locator/sidecar runner, typed models, evidence viewer, P1 actions |
 
 Reports live under `.artifacts/runs/<run-id>/` by default and contain `report.json`, `metadata.json`
 and a checksummed `manifest.json`. See [ARCHITECTURE.md](ARCHITECTURE.md) and [SCHEMA.md](SCHEMA.md).
@@ -203,6 +246,10 @@ and a checksummed `manifest.json`. See [ARCHITECTURE.md](ARCHITECTURE.md) and [S
 - Destructive app/device operations require `--yes`.
 - `--dry-run` previews fixtures, installs and other meaningful operations.
 - APK signatures are verified; AndroidForge never signs or auto-uninstalls on mismatch.
+- The desktop confirms release/stop/restart/install/fixture/conformance/hook actions and shows the
+  destructive parts in plain language.
+- Cancelling a desktop run walks and terminates the AndroidForge child process tree; it does not stop,
+  restart or release the emulator or session. Session lifecycle operations are not cancellable.
 - No cloud, telemetry, account, API key or LLM integration.
 - Raw ADB is intentionally unsafe and labelled as such.
 
@@ -210,10 +257,13 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.1.0`.** The binary was exercised against three real apps on an Android 16 emulator:
+**Alpha `v0.2.0`.** The CLI was exercised against three real apps on an Android 16 emulator:
 CalcSuite 3.0.3, DiscountHunter debug and IronPulse 4.4.0. The same release binary installed apps,
 drove semantic UI, ran fixtures and conformance flows, verified APK identity, collected evidence and
-produced structured reports. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+produced structured reports. The `0.2.0` native desktop cockpit was then exercised against CalcSuite:
+project discovery, session start/attach/release/restart/stop, APK inspect/dry-run/install, conformance
+runs, hook runs, run details, screenshot/log/manifest evidence, output streaming, cancellation and error
+inspection. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -224,15 +274,17 @@ Validated:
 - Fixtures, hooks with postconditions, conformance flows, JUnit import.
 - Screenshots, logcat, dumpsys, notifications/jobs/alarms evidence.
 - Build identity inheritance from installs into later runs.
+- Native desktop P0 cockpit and P1 controlled actions, including process-tree cancellation.
 
 Not yet validated:
 
 - Physical devices and vendor ROMs (MIUI, Samsung, etc.).
 - Maestro execution and instrumentation test APKs.
 - Snapshot load/restore and root-only time changes.
-- macOS and Linux.
+- macOS and Linux hosts (the desktop is Windows-validated; the CLI is not validated there either).
 - Very large test suites or long-duration stress runs.
-- A graphical interface; `v0.1.0` is CLI-only.
+- Desktop editing of project adapters/fixtures or an embedded device mirror; the cockpit is an operator
+  console, not an IDE.
 
 Unsupported features return `E_UNSUPPORTED_OPERATION` with a reason and alternatives. A capability
 that was not exercised is not claimed as verified.
@@ -242,6 +294,7 @@ that was not exercised is not claimed as verified.
 - [AGENT_GUIDE.md](AGENT_GUIDE.md) — operating model for autonomous agents
 - [USER_GUIDE.md](USER_GUIDE.md) — setup, devices, sessions, diagnostics, troubleshooting
 - [ARCHITECTURE.md](ARCHITECTURE.md) — crates, data flow, locking, process and report model
+- [desktop/README.md](desktop/README.md) — building and testing the native desktop cockpit
 - [PROJECT_ADAPTER.md](PROJECT_ADAPTER.md) — project config, fixtures, hooks and conformance
 - [SCHEMA.md](SCHEMA.md) — report, metadata, manifest and JSON shapes
 - [EXIT_CODES.md](EXIT_CODES.md) — stable exit codes and error codes
@@ -261,8 +314,10 @@ cargo test --workspace
 cargo build --workspace --release
 ```
 
-CI runs formatting, clippy, tests and a release build on Windows. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for branch naming, PR expectations and design rules.
+Run the desktop in development with `cargo run -p androidforge-desktop`. It discovers the workspace CLI
+debug build first, so no extra configuration is needed. CI runs formatting, clippy, tests and a release
+build for both executables on Windows. See [CONTRIBUTING.md](CONTRIBUTING.md) for branch naming, PR
+expectations and design rules.
 
 ## Contributing
 

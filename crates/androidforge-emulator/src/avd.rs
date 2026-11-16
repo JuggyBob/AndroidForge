@@ -33,35 +33,35 @@ pub async fn list_avds(toolchain: &Toolchain, trace: bool) -> Result<Vec<AvdInfo
             .timeout(Duration::from_secs(20))
             .trace(trace)
             .hide_window(true);
-        if let Ok(output) = runner.run(spec).await {
-            if output.success {
-                let names = output
-                    .stdout_text()
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty() && !line.starts_with("INFO"))
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
-                if !names.is_empty() {
-                    return Ok(names
-                        .into_iter()
-                        .map(|name| {
-                            configs.get(&name).cloned().unwrap_or_else(|| AvdInfo {
-                                name: name.clone(),
-                                path: toolchain.avd_home.as_ref().map(|home| {
-                                    home.join(format!("{name}.avd"))
-                                        .to_string_lossy()
-                                        .into_owned()
-                                }),
-                                target: None,
-                                abi: None,
-                                device: None,
-                                tag: None,
-                                ram_mb: None,
-                            })
+        if let Ok(output) = runner.run(spec).await
+            && output.success
+        {
+            let names = output
+                .stdout_text()
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with("INFO"))
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if !names.is_empty() {
+                return Ok(names
+                    .into_iter()
+                    .map(|name| {
+                        configs.get(&name).cloned().unwrap_or_else(|| AvdInfo {
+                            name: name.clone(),
+                            path: toolchain.avd_home.as_ref().map(|home| {
+                                home.join(format!("{name}.avd"))
+                                    .to_string_lossy()
+                                    .into_owned()
+                            }),
+                            target: None,
+                            abi: None,
+                            device: None,
+                            tag: None,
+                            ram_mb: None,
                         })
-                        .collect());
-                }
+                    })
+                    .collect());
             }
         }
     }

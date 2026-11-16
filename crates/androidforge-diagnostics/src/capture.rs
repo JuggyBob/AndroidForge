@@ -72,12 +72,12 @@ pub async fn capture_screenshot(
         run.write_binary_artifact(&relative, "screenshot", Some(label.as_str()), &bytes)?;
     let mut notes = Vec::new();
     let display_size = adb.display_size(serial).await;
-    if let Some((display_width, display_height)) = display_size {
-        if display_width != width || display_height != height {
-            notes.push(format!(
+    if let Some((display_width, display_height)) = display_size
+        && (display_width != width || display_height != height)
+    {
+        notes.push(format!(
                 "screenshot dimensions {width}x{height} differ from display size {display_width}x{display_height}; do not scale tap coordinates from this image"
             ));
-        }
     }
     let metadata = serde_json::json!({
         "schema_version": 1,

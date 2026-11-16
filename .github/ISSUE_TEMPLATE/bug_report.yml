@@ -21,7 +21,7 @@ body:
     attributes:
       label: AndroidForge version and binary hash
       description: Output of `androidforge --version`, plus SHA-256 if self-built.
-      placeholder: "0.1.0 / 9832c11b..."
+      placeholder: "0.2.0 / 9832c11b..."
     validations:
       required: true
   - type: textarea

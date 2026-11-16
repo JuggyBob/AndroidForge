@@ -57,45 +57,43 @@ pub struct NotificationSelector {
 
 impl NotificationSelector {
     pub fn matches(&self, notification: &NotificationInfo) -> bool {
-        if let Some(package) = &self.package {
-            if notification.package.as_deref() != Some(package.as_str()) {
-                return false;
-            }
+        if let Some(package) = &self.package
+            && notification.package.as_deref() != Some(package.as_str())
+        {
+            return false;
         }
-        if let Some(tag) = &self.tag {
-            if notification.tag.as_deref() != Some(tag.as_str()) {
-                return false;
-            }
+        if let Some(tag) = &self.tag
+            && notification.tag.as_deref() != Some(tag.as_str())
+        {
+            return false;
         }
-        if let Some(channel) = &self.channel {
-            if notification.channel.as_deref() != Some(channel.as_str()) {
-                return false;
-            }
+        if let Some(channel) = &self.channel
+            && notification.channel.as_deref() != Some(channel.as_str())
+        {
+            return false;
         }
-        if let Some(id) = self.id {
-            if notification.id != Some(id) {
-                return false;
-            }
+        if let Some(id) = self.id
+            && notification.id != Some(id)
+        {
+            return false;
         }
-        if let Some(title) = &self.title_contains {
-            if !notification
+        if let Some(title) = &self.title_contains
+            && !notification
                 .title
                 .as_deref()
                 .map(|value| value.contains(title))
                 .unwrap_or(false)
-            {
-                return false;
-            }
+        {
+            return false;
         }
-        if let Some(text) = &self.text_contains {
-            if !notification
+        if let Some(text) = &self.text_contains
+            && !notification
                 .text
                 .as_deref()
                 .map(|value| value.contains(text))
                 .unwrap_or(false)
-            {
-                return false;
-            }
+        {
+            return false;
         }
         true
     }
@@ -542,30 +540,29 @@ pub fn parse_notifications(raw: &str) -> NotificationList {
         } else if current.is_some() {
             block.push(line.to_string());
             if let Some(notification) = current.as_mut() {
-                if notification.title.is_none() {
-                    if let Some(captures) = title_regex.captures(line) {
-                        notification.title = clean_extra(captures.get(1).unwrap().as_str());
+                if notification.title.is_none()
+                    && let Some(captures) = title_regex.captures(line)
+                {
+                    notification.title = clean_extra(captures.get(1).unwrap().as_str());
+                }
+                if notification.text.is_none()
+                    && let Some(captures) = text_regex.captures(line)
+                {
+                    notification.text = clean_extra(captures.get(1).unwrap().as_str());
+                }
+                if notification.channel.is_none()
+                    && let Some(captures) = channel_regex.captures(line)
+                {
+                    let channel = captures.get(1).unwrap().as_str().trim_matches('"');
+                    if channel != "null" {
+                        notification.channel = Some(channel.to_string());
+                        channels.entry(channel.to_string()).or_insert(None);
                     }
                 }
-                if notification.text.is_none() {
-                    if let Some(captures) = text_regex.captures(line) {
-                        notification.text = clean_extra(captures.get(1).unwrap().as_str());
-                    }
-                }
-                if notification.channel.is_none() {
-                    if let Some(captures) = channel_regex.captures(line) {
-                        let channel = captures.get(1).unwrap().as_str().trim_matches('"');
-                        if channel != "null" {
-                            notification.channel = Some(channel.to_string());
-                            channels.entry(channel.to_string()).or_insert(None);
-                        }
-                    }
-                }
-                if notification.importance.is_none() {
-                    if let Some(captures) = importance_regex.captures(line) {
-                        notification.importance =
-                            Some(captures.get(1).unwrap().as_str().to_string());
-                    }
+                if notification.importance.is_none()
+                    && let Some(captures) = importance_regex.captures(line)
+                {
+                    notification.importance = Some(captures.get(1).unwrap().as_str().to_string());
                 }
             }
             if line.trim().is_empty() {
@@ -575,10 +572,10 @@ pub fn parse_notifications(raw: &str) -> NotificationList {
     }
     flush(&mut current, &mut block, &mut notifications);
     for notification in &notifications {
-        if let Some(channel) = &notification.channel {
-            if let Some(importance) = &notification.importance {
-                channels.insert(channel.clone(), Some(importance.clone()));
-            }
+        if let Some(channel) = &notification.channel
+            && let Some(importance) = &notification.importance
+        {
+            channels.insert(channel.clone(), Some(importance.clone()));
         }
     }
     NotificationList {

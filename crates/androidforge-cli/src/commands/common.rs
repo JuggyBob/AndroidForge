@@ -28,18 +28,18 @@ pub fn require_selector(args: &SelectorArgs) -> Result<Selector> {
 
 pub fn device_json(device: &Device, owner: Option<&Session>) -> serde_json::Value {
     let mut value = serde_json::to_value(device.compact()).unwrap_or(serde_json::Value::Null);
-    if let Some(owner) = owner {
-        if let Some(object) = value.as_object_mut() {
-            object.insert(
-                "owner".to_string(),
-                serde_json::json!({
-                    "session_id": owner.id,
-                    "owner": owner.owner,
-                    "kind": owner.kind,
-                    "state": owner.state,
-                }),
-            );
-        }
+    if let Some(owner) = owner
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert(
+            "owner".to_string(),
+            serde_json::json!({
+                "session_id": owner.id,
+                "owner": owner.owner,
+                "kind": owner.kind,
+                "state": owner.state,
+            }),
+        );
     }
     value
 }

@@ -368,15 +368,15 @@ impl ForgeConfig {
             .with_suggestion("Update AndroidForge or migrate .androidforge/project.toml."));
         }
 
-        if let Some(required) = &file.min_androidforge_version {
-            if !version_at_least(CURRENT_TOOL_VERSION, required) {
-                return Err(ForgeError::new(
-                    ErrorCode::AdapterInvalid,
-                    format!(
-                        "this project requires AndroidForge {required} or newer; running {CURRENT_TOOL_VERSION}"
-                    ),
-                ));
-            }
+        if let Some(required) = &file.min_androidforge_version
+            && !version_at_least(CURRENT_TOOL_VERSION, required)
+        {
+            return Err(ForgeError::new(
+                ErrorCode::AdapterInvalid,
+                format!(
+                    "this project requires AndroidForge {required} or newer; running {CURRENT_TOOL_VERSION}"
+                ),
+            ));
         }
 
         let artifact_dir = {
@@ -484,33 +484,33 @@ impl ForgeConfig {
             ));
         }
 
-        if let Some(required) = &file.min_androidforge_version {
-            if !version_at_least(CURRENT_TOOL_VERSION, required) {
-                issues.push(issue(
-                    Severity::Error,
-                    "min_androidforge_version",
-                    format!("project requires {required}, running {CURRENT_TOOL_VERSION}"),
-                ));
-            }
+        if let Some(required) = &file.min_androidforge_version
+            && !version_at_least(CURRENT_TOOL_VERSION, required)
+        {
+            issues.push(issue(
+                Severity::Error,
+                "min_androidforge_version",
+                format!("project requires {required}, running {CURRENT_TOOL_VERSION}"),
+            ));
         }
 
-        if let Some(package) = &file.project.package {
-            if !valid_package_name(package) {
-                issues.push(issue(
-                    Severity::Error,
-                    "project.package",
-                    format!("'{package}' is not a valid Android package name"),
-                ));
-            }
+        if let Some(package) = &file.project.package
+            && !valid_package_name(package)
+        {
+            issues.push(issue(
+                Severity::Error,
+                "project.package",
+                format!("'{package}' is not a valid Android package name"),
+            ));
         }
-        if let Some(package) = &file.project.debug_package {
-            if !valid_package_name(package) {
-                issues.push(issue(
-                    Severity::Error,
-                    "project.debug_package",
-                    format!("'{package}' is not a valid Android package name"),
-                ));
-            }
+        if let Some(package) = &file.project.debug_package
+            && !valid_package_name(package)
+        {
+            issues.push(issue(
+                Severity::Error,
+                "project.debug_package",
+                format!("'{package}' is not a valid Android package name"),
+            ));
         }
         if file.project.retention_days == 0 {
             issues.push(issue(
@@ -591,14 +591,14 @@ impl ForgeConfig {
                 ),
             ));
         }
-        if let Some(path) = self.conformance_path(None) {
-            if !path.is_file() {
-                issues.push(issue(
-                    Severity::Warning,
-                    "conformance.flow",
-                    format!("conformance flow {} does not exist", path.display()),
-                ));
-            }
+        if let Some(path) = self.conformance_path(None)
+            && !path.is_file()
+        {
+            issues.push(issue(
+                Severity::Warning,
+                "conformance.flow",
+                format!("conformance flow {} does not exist", path.display()),
+            ));
         }
 
         for (name, hook) in &file.hooks {

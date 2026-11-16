@@ -67,7 +67,7 @@ pub fn allocate_port(requested: Option<u16>) -> Result<PortReservation> {
 }
 
 fn validate_port(port: u16) -> Result<()> {
-    if !(MIN_REQUESTED_PORT..=MAX_REQUESTED_PORT).contains(&port) || port % 2 != 0 {
+    if !(MIN_REQUESTED_PORT..=MAX_REQUESTED_PORT).contains(&port) || !port.is_multiple_of(2) {
         return Err(ForgeError::invalid_argument(format!(
             "emulator console port must be an even number between {MIN_REQUESTED_PORT} and {MAX_REQUESTED_PORT}; got {port}"
         ))

@@ -263,9 +263,10 @@ impl UiManager {
 
     pub async fn tap_xy(&self, serial: &str, x: i32, y: i32) -> Result<Option<(u32, u32)>> {
         let display = self.display_size(serial, None).await;
-        if let Some((width, height)) = display {
-            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-                return Err(ForgeError::new(
+        if let Some((width, height)) = display
+            && (x < 0 || y < 0 || x >= width as i32 || y >= height as i32)
+        {
+            return Err(ForgeError::new(
                     ErrorCode::InvalidArgument,
                     format!("tap coordinate ({x}, {y}) is outside the current display {width}x{height}"),
                 )
@@ -274,7 +275,6 @@ impl UiManager {
                 )
                 .with_suggestion("Prefer semantic selectors such as --text or --resource-id.")
                 .device(serial.to_string()));
-            }
         }
         self.adb.input_tap(serial, x as u32, y as u32).await?;
         Ok(display)
@@ -851,12 +851,11 @@ impl UiManager {
         if node.visible() && node.clickable {
             return Ok((node, None));
         }
-        if self.tap_clickable_ancestor {
-            if let Some(ancestor) = hierarchy.clickable_ancestor(node) {
-                if ancestor.visible() {
-                    return Ok((ancestor, Some(ancestor)));
-                }
-            }
+        if self.tap_clickable_ancestor
+            && let Some(ancestor) = hierarchy.clickable_ancestor(node)
+            && ancestor.visible()
+        {
+            return Ok((ancestor, Some(ancestor)));
         }
         if node.visible() {
             return Ok((node, None));
@@ -889,9 +888,10 @@ impl UiManager {
         y: i32,
         display: Option<(u32, u32)>,
     ) -> Result<()> {
-        if let Some((width, height)) = display {
-            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-                return Err(ForgeError::new(
+        if let Some((width, height)) = display
+            && (x < 0 || y < 0 || x >= width as i32 || y >= height as i32)
+        {
+            return Err(ForgeError::new(
                     ErrorCode::InvalidArgument,
                     format!(
                         "coordinate ({x}, {y}) is outside the current display {width}x{height}"
@@ -901,7 +901,6 @@ impl UiManager {
                     "Coordinates are real device pixels in the current display orientation. Never scale from an unrelated screenshot.",
                 )
                 .device(serial.to_string()));
-            }
         }
         Ok(())
     }

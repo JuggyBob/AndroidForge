@@ -120,15 +120,15 @@ impl Permissions {
         let appop = self
             .appop_mode(serial, package, appop_for_permission(&permission))
             .await;
-        if granted.is_none() {
-            if let Some(mode) = &appop {
-                source = "appops".to_string();
-                granted = match mode.as_str() {
-                    "allow" => Some(true),
-                    "deny" | "ignore" => Some(false),
-                    _ => None,
-                };
-            }
+        if granted.is_none()
+            && let Some(mode) = &appop
+        {
+            source = "appops".to_string();
+            granted = match mode.as_str() {
+                "allow" => Some(true),
+                "deny" | "ignore" => Some(false),
+                _ => None,
+            };
         }
 
         Ok(PermissionState {
@@ -169,10 +169,10 @@ impl Permissions {
             Ok(output) => output.combined_text(),
             Err(error) => error.message().to_string(),
         };
-        if let Some(appop) = appop_for_permission(&permission) {
-            if self.check(serial, package, &permission).await?.granted != Some(true) {
-                let _ = self.set_appop(serial, package, appop, "allow").await;
-            }
+        if let Some(appop) = appop_for_permission(&permission)
+            && self.check(serial, package, &permission).await?.granted != Some(true)
+        {
+            let _ = self.set_appop(serial, package, appop, "allow").await;
         }
         let after = self.check(serial, package, &permission).await?;
         if after.granted != Some(true) {
@@ -215,10 +215,10 @@ impl Permissions {
             Ok(output) => output.combined_text(),
             Err(error) => error.message().to_string(),
         };
-        if let Some(appop) = appop_for_permission(&permission) {
-            if self.check(serial, package, &permission).await?.granted != Some(false) {
-                let _ = self.set_appop(serial, package, appop, "deny").await;
-            }
+        if let Some(appop) = appop_for_permission(&permission)
+            && self.check(serial, package, &permission).await?.granted != Some(false)
+        {
+            let _ = self.set_appop(serial, package, appop, "deny").await;
         }
         let after = self.check(serial, package, &permission).await?;
         if after.granted == Some(true) {
@@ -347,15 +347,15 @@ fn parse_permission_from_dumpsys(text: &str, permission: &str) -> Option<bool> {
 fn parse_appop_mode(text: &str, operation: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();
-        if let Some((name, value)) = line.split_once(':') {
-            if name.trim().eq_ignore_ascii_case(operation) {
-                let value = value.trim();
-                if matches!(
-                    value,
-                    "allow" | "deny" | "ignore" | "default" | "foreground"
-                ) {
-                    return Some(value.to_string());
-                }
+        if let Some((name, value)) = line.split_once(':')
+            && name.trim().eq_ignore_ascii_case(operation)
+        {
+            let value = value.trim();
+            if matches!(
+                value,
+                "allow" | "deny" | "ignore" | "default" | "foreground"
+            ) {
+                return Some(value.to_string());
             }
         }
     }

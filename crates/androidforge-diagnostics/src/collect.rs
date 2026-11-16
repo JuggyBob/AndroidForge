@@ -194,26 +194,26 @@ pub async fn collect_diagnostics(
         }
     }
 
-    if let Some(app) = app {
-        if let Some(package) = package {
-            match app.status(serial, package).await {
-                Ok(states) => {
-                    if let Ok(text) = serde_json::to_string_pretty(&states) {
-                        match run.write_text_artifact(
-                            &format!("diagnostics/app-status-{stamp}.json"),
-                            "app_status",
-                            Some("Process, task, activity and foreground state"),
-                            &text,
-                        ) {
-                            Ok(artifact) => artifacts.push(artifact),
-                            Err(error) => warnings
-                                .push(format!("could not write app status: {}", error.message())),
-                        }
+    if let Some(app) = app
+        && let Some(package) = package
+    {
+        match app.status(serial, package).await {
+            Ok(states) => {
+                if let Ok(text) = serde_json::to_string_pretty(&states) {
+                    match run.write_text_artifact(
+                        &format!("diagnostics/app-status-{stamp}.json"),
+                        "app_status",
+                        Some("Process, task, activity and foreground state"),
+                        &text,
+                    ) {
+                        Ok(artifact) => artifacts.push(artifact),
+                        Err(error) => warnings
+                            .push(format!("could not write app status: {}", error.message())),
                     }
-                    app_states = Some(states);
                 }
-                Err(error) => warnings.push(format!("app status failed: {}", error.message())),
+                app_states = Some(states);
             }
+            Err(error) => warnings.push(format!("app status failed: {}", error.message())),
         }
     }
 

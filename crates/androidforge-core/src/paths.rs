@@ -116,12 +116,11 @@ fn find_project_config(root: &Path) -> Option<PathBuf> {
     // Only accept it when it clearly is an AndroidForge adapter, not an
     // unrelated file with the same name.
     let root_project = root.join("project.toml");
-    if root_project.is_file() {
-        if let Ok(text) = std::fs::read_to_string(&root_project) {
-            if text.contains("adapter_version") {
-                return Some(root_project);
-            }
-        }
+    if root_project.is_file()
+        && let Ok(text) = std::fs::read_to_string(&root_project)
+        && text.contains("adapter_version")
+    {
+        return Some(root_project);
     }
     None
 }

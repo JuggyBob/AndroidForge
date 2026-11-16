@@ -30,7 +30,7 @@ it cannot complete the operation. Unsupported capabilities must return a useful
 
 Requirements:
 
-- Rust stable, Edition 2024 (see `rust-toolchain.toml`).
+- Rust `1.95` or newer, Edition 2024 (see `rust-toolchain.toml`).
 - Windows 10/11 for the currently supported host workflow.
 - Android SDK platform-tools, emulator and build-tools for device/APK features.
 
@@ -42,7 +42,8 @@ cargo build --workspace --release
 ```
 
 A real device is not required for the unit and CLI test suite. If you change device behavior, include
-the emulator image and a short validation note in the PR.
+the emulator image and a short validation note in the PR. The desktop can be run with
+`cargo run -p androidforge-desktop`; it uses the workspace CLI build when present.
 
 ## Design rules
 
@@ -54,6 +55,8 @@ the emulator image and a short validation note in the PR.
 - Destructive operations need explicit confirmation (`--yes`) and a meaningful `--dry-run` where possible.
 - A feature that is not implemented must say so honestly, with alternatives.
 - Evidence is part of the product: a failure should explain what happened and where to look.
+- The desktop is a sidecar client. It must not reimplement Android behavior or invent a second report
+  model; add CLI commands/results first, then consume them from `desktop/`.
 
 ## Branches and commits
 

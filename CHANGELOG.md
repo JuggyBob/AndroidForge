@@ -8,6 +8,57 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.2.0] - 2026-11-16
+
+Second alpha. Adds the native AndroidForge Desktop cockpit while keeping the CLI as the authoritative
+automation surface.
+
+### Added
+
+- `androidforge-desktop.exe`, a native Rust egui/eframe companion with the AndroidForge icon embedded in
+  the window and executable. It uses the glow renderer and has no WebView, browser, HTML, JavaScript,
+  Node or frontend build.
+- P0 read-only cockpit: project discovery, environment overview, devices, sessions, report-backed runs,
+  run details, build identity, steps, failure details, evidence tabs, raw report/metadata/manifest
+  views and checksum-manifest verification.
+- Evidence viewer for screenshots (fit/100%/zoom), hierarchy and log previews with line numbers and
+  search, safe artifact joining and external-open shortcuts.
+- P1 controlled actions: emulator session start, device attach, session release/stop/restart, APK
+  selection and inspection, install dry-run and verified install, fixture/conformance/hook launch,
+  streamed output and process-tree cancellation.
+- Session-target selection, prepared-settings inspection and explicit destructive confirmations.
+- Native Windows process-tree termination for cancellable desktop operations (installs, fixtures,
+  conformance and hooks); session lifecycle operations run to completion because they must not leave a
+  half-owned emulator. Cancelling a run never stops, restarts or releases the emulator, and the UI says
+  so. A cancelled run leaves an incomplete report and a clear explanation instead of a parser error.
+- CLI locator with explicit path, sidecar, workspace-build and `PATH` resolution, compatibility probing,
+  schema refusal for unknown contracts, structured CLI error display and in-app Settings.
+- Desktop integration tests with a compiled mock CLI covering version probing, typed results, structured
+  errors, invalid JSON, timeouts, streamed output and cancellation.
+- Documentation for the desktop cockpit, including architecture, user guide, capabilities, verification
+  and portable distribution.
+
+### Changed
+
+- Workspace version is `0.2.0`; MSRV is `1.95`.
+- CI builds and uploads both executables. Release assets now include a standalone CLI zip, a combined
+  desktop+CLI portable zip and `SHA256SUMS.txt`.
+- Busy-state checks use only a running operation, so completed output no longer disables new actions.
+- Session actions are disabled for released/abandoned tombstones.
+- Clippy `collapsible_if` edits across the workspace for the current stable toolchain.
+
+### Fixed
+
+- Desktop version probing invokes `androidforge --version` directly, matching the CLI contract.
+- Run detail requests use `report show` and `report path` instead of ambiguous top-level verbs.
+- Confirmations render above settings/install/run dialogs; installing closes the install dialog before
+  confirming and reopens it with the measured result.
+- Table row selection works reliably and explicit `Select`/`Open` buttons are available.
+- Long commands no longer overlap operation buttons.
+- Cancelled operations explain the missing final JSON report instead of showing a raw parser error.
+- Artifact path checks normalize Windows verbatim prefixes and report XML uses the document root
+  element.
+
 ## [0.1.0] - 2026-11-15
 
 First public alpha of the local-first AndroidForge CLI.
@@ -78,5 +129,6 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.1.0

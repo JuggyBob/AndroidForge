@@ -107,20 +107,18 @@ pub async fn install(
     }
     let apk = inspector.inspect(&options.apk_path, false).await?;
     let package = apk.package_or_error()?.to_string();
-    if let Some(expected) = &options.expected_package {
-        if expected != &package {
-            return Err(ForgeError::new(
-                ErrorCode::InstallVerificationFailed,
-                format!(
-                    "the APK declares package '{package}', but the adapter expects '{expected}'"
-                ),
-            )
-            .with_context("preflight", true)
-            .with_suggestion(
-                "Install the APK for the package configured in .androidforge/project.toml.",
-            )
-            .with_suggestion("Or pass the correct --expected-package value."));
-        }
+    if let Some(expected) = &options.expected_package
+        && expected != &package
+    {
+        return Err(ForgeError::new(
+            ErrorCode::InstallVerificationFailed,
+            format!("the APK declares package '{package}', but the adapter expects '{expected}'"),
+        )
+        .with_context("preflight", true)
+        .with_suggestion(
+            "Install the APK for the package configured in .androidforge/project.toml.",
+        )
+        .with_suggestion("Or pass the correct --expected-package value."));
     }
     if !options.allowed_packages.is_empty()
         && !options
@@ -235,56 +233,56 @@ pub async fn install(
         .device(serial.to_string()));
     };
 
-    if let Some(expected) = &options.expected_package {
-        if &installed.package != expected {
-            return Err(ForgeError::new(
-                ErrorCode::InstallVerificationFailed,
-                format!(
-                    "device reports package '{}' but '{}' was requested",
-                    installed.package, expected
-                ),
-            )
-            .device(serial.to_string()));
-        }
+    if let Some(expected) = &options.expected_package
+        && &installed.package != expected
+    {
+        return Err(ForgeError::new(
+            ErrorCode::InstallVerificationFailed,
+            format!(
+                "device reports package '{}' but '{}' was requested",
+                installed.package, expected
+            ),
+        )
+        .device(serial.to_string()));
     }
-    if let (Some(expected), Some(actual)) = (apk.version_code, installed.version_code) {
-        if expected != actual {
-            return Err(ForgeError::new(
-                ErrorCode::InstallVerificationFailed,
-                format!(
-                    "incoming APK versionCode {expected} does not match installed versionCode {actual}"
-                ),
-            )
-            .with_suggestion("Verify that the device did not keep an older package.")
-            .with_suggestion("Inspect `androidforge app info <package>` and logcat.")
-            .device(serial.to_string()));
-        }
+    if let (Some(expected), Some(actual)) = (apk.version_code, installed.version_code)
+        && expected != actual
+    {
+        return Err(ForgeError::new(
+            ErrorCode::InstallVerificationFailed,
+            format!(
+                "incoming APK versionCode {expected} does not match installed versionCode {actual}"
+            ),
+        )
+        .with_suggestion("Verify that the device did not keep an older package.")
+        .with_suggestion("Inspect `androidforge app info <package>` and logcat.")
+        .device(serial.to_string()));
     }
 
     let mut warnings = Vec::new();
     let mut installed_apk_sha256 = None;
     let mut installed_cert = None;
     let mut installed_cert_error = None;
-    if options.verify_installed {
-        if let Some(remote) = &installed.base_apk_path {
-            match pull_and_inspect_installed(adb, inspector, serial, remote).await {
-                Ok((sha256, cert)) => {
-                    installed_apk_sha256 = Some(sha256.clone());
-                    installed_cert = cert;
-                    if sha256 != apk.sha256 {
-                        warnings.push(
+    if options.verify_installed
+        && let Some(remote) = &installed.base_apk_path
+    {
+        match pull_and_inspect_installed(adb, inspector, serial, remote).await {
+            Ok((sha256, cert)) => {
+                installed_apk_sha256 = Some(sha256.clone());
+                installed_cert = cert;
+                if sha256 != apk.sha256 {
+                    warnings.push(
                             "the installed base APK hash differs from the local APK; this can happen on split/optimized installs"
                                 .to_string(),
                         );
-                    }
                 }
-                Err(error) => {
-                    installed_cert_error = Some(error.message().to_string());
-                    warnings.push(format!(
-                        "installed APK could not be verified: {}",
-                        error.message()
-                    ));
-                }
+            }
+            Err(error) => {
+                installed_cert_error = Some(error.message().to_string());
+                warnings.push(format!(
+                    "installed APK could not be verified: {}",
+                    error.message()
+                ));
             }
         }
     }

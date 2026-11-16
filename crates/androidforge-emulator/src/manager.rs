@@ -278,13 +278,11 @@ impl EmulatorManager {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        if !process_exited {
-            if let Some(pid) = pid {
-                kill_tree(pid);
-                method = "taskkill_tree".to_string();
-                tokio::time::sleep(Duration::from_millis(400)).await;
-                process_exited = !process_exists(pid);
-            }
+        if !process_exited && let Some(pid) = pid {
+            kill_tree(pid);
+            method = "taskkill_tree".to_string();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            process_exited = !process_exists(pid);
         }
         if !process_exited || !adb_disconnected {
             notes.push(

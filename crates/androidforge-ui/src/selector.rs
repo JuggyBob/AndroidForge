@@ -60,75 +60,73 @@ impl Selector {
     }
 
     pub fn matches(&self, node: &UiNode) -> bool {
-        if let Some(text) = &self.text {
-            if node.text.as_deref() != Some(text.as_str()) {
-                return false;
-            }
+        if let Some(text) = &self.text
+            && node.text.as_deref() != Some(text.as_str())
+        {
+            return false;
         }
-        if let Some(text) = &self.text_contains {
-            if !node
+        if let Some(text) = &self.text_contains
+            && !node
                 .text
                 .as_deref()
                 .map(|value| value.contains(text))
                 .unwrap_or(false)
-            {
-                return false;
-            }
+        {
+            return false;
         }
-        if let Some(desc) = &self.content_desc {
-            if node.content_desc.as_deref() != Some(desc.as_str()) {
-                return false;
-            }
+        if let Some(desc) = &self.content_desc
+            && node.content_desc.as_deref() != Some(desc.as_str())
+        {
+            return false;
         }
-        if let Some(desc) = &self.content_desc_contains {
-            if !node
+        if let Some(desc) = &self.content_desc_contains
+            && !node
                 .content_desc
                 .as_deref()
                 .map(|value| value.contains(desc))
                 .unwrap_or(false)
-            {
-                return false;
-            }
+        {
+            return false;
         }
-        if let Some(id) = &self.resource_id {
-            if node.resource_id.as_deref() != Some(id.as_str()) {
-                return false;
-            }
+        if let Some(id) = &self.resource_id
+            && node.resource_id.as_deref() != Some(id.as_str())
+        {
+            return false;
         }
-        if let Some(class) = &self.class {
-            if node.class.as_deref() != Some(class.as_str()) {
-                return false;
-            }
+        if let Some(class) = &self.class
+            && node.class.as_deref() != Some(class.as_str())
+        {
+            return false;
         }
-        if let Some(clickable) = self.clickable {
-            if node.clickable != clickable {
-                return false;
-            }
+        if let Some(clickable) = self.clickable
+            && node.clickable != clickable
+        {
+            return false;
         }
-        if let Some(enabled) = self.enabled {
-            if node.enabled != enabled {
-                return false;
-            }
+        if let Some(enabled) = self.enabled
+            && node.enabled != enabled
+        {
+            return false;
         }
-        if let Some(focused) = self.focused {
-            if node.focused != focused {
-                return false;
-            }
+        if let Some(focused) = self.focused
+            && node.focused != focused
+        {
+            return false;
         }
-        if let Some(scrollable) = self.scrollable {
-            if node.scrollable != scrollable {
-                return false;
-            }
+        if let Some(scrollable) = self.scrollable
+            && node.scrollable != scrollable
+        {
+            return false;
         }
-        if let Some(checked) = self.checked {
-            if node.checked != checked {
-                return false;
-            }
+        if let Some(checked) = self.checked
+            && node.checked != checked
+        {
+            return false;
         }
-        if let Some(visible) = self.visible {
-            if node.visible() != visible {
-                return false;
-            }
+        if let Some(visible) = self.visible
+            && node.visible() != visible
+        {
+            return false;
         }
         true
     }

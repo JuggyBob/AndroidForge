@@ -552,10 +552,10 @@ impl RunContext {
         self.report.exit_code = exit_code;
         self.report.ended_at = Some(now_rfc3339());
         self.report.duration_ms = duration_from(&self.report.started_at);
-        if self.report.failure.is_none() {
-            if let Some(step) = self.report.steps.iter().find(|step| step.failure.is_some()) {
-                self.report.failure = step.failure.clone();
-            }
+        if self.report.failure.is_none()
+            && let Some(step) = self.report.steps.iter().find(|step| step.failure.is_some())
+        {
+            self.report.failure = step.failure.clone();
         }
         self.save()
     }
