@@ -91,6 +91,26 @@ reachability, card alignment and table column fit were checked. Final screenshot
 - `SHA256SUMS.txt` was generated for the CLI ZIP, portable ZIP and installer and used to verify the
   portable and installed assets.
 
+## Published release verification
+
+Published as `v0.3.0` at
+<https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0> (release tag commit `8945b21`).
+The release workflow completed successfully on GitHub Actions.
+
+Downloaded assets and verified their published SHA-256 values:
+
+| Asset | SHA-256 |
+| --- | --- |
+| `androidforge-cli-windows-x86_64.zip` | `c660cf5bf6533880fa2b547bc75f084272b77960833d5d3744ceff424fb5d914` |
+| `androidforge-desktop-windows-x86_64.zip` | `7c2706b083bf3937b87d67a170bb4b465340dad6d76d5e585b1f701e163b0e39` |
+| `androidforge-windows-x86_64-setup.exe` | `103ba045930c71075bdb02a23a048f54950dd19a1ac60a06b31f142cbd009a8c` |
+
+The downloaded portable ZIP extracted with both executables, docs and license; its CLI reported
+`androidforge 0.3.0`. Launching the published portable desktop showed `CLI connected` and resolved the
+adjacent published `androidforge.exe` at version `0.3.0`. The downloaded installer installed silently,
+reported CLI `0.3.0`, preserved a sentinel user-data file and uninstalled cleanly while preserving that
+data.
+
 ## Not validated
 
 - Physical Android devices and vendor ROMs.
