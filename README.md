@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.4.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.5.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -80,6 +80,16 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 
+## What is new in v0.5.0
+
+- **Honest pipeline status:** a failed `agent test` now returns envelope `status: "failed"` with its nonzero exit code, while preserving the full stage result. Blocked dry runs use `status: "blocked"`.
+- **Shared-host session acquisition:** `session ensure` avoids ports already used by connected emulators, adds `--port`, binds the project on start/attach, and no longer creates misleading failed tombstones for port collisions.
+- **UIAutomator recovery:** a stuck helper is detected, cleaned up and retried automatically; persistent failures use the specific `E_UI_AUTOMATOR_UNAVAILABLE` code.
+- **Better diagnosis:** `report explain` classifies UIAutomator infrastructure failures as `ui_automation`, prefers the newest failed run for `latest`, and searches current/ancestor artifact stores so project-scoped calls can find unprojected runs.
+- **Clearer observations:** `ui observe` now exposes `token`, separates interactive `actionable` nodes from non-interactive `context` text, always includes `clickable` and `enabled`, filters empty resource ids, and redacts password text.
+- **Smaller diffs:** `ui diff` returns compact node summaries capped at 12 per category by default; `--full` raises the cap to 100. Totals and truncation remain explicit.
+- **CLI/desktop polish:** `report list --all` discovers runs across artifact stores, selector errors suggest scrolling or `--clickable`, `doctor` counts active sessions instead of noisy tombstones, and the desktop answers `--help`/`--version` without opening its GUI.
+
 ## What is new in v0.4.0
 
 - **`context`**: one compact snapshot of project, environment, owned session, device, app, screen and last run, plus exact next-action argv. Partial results and freshness are explicit.
@@ -93,7 +103,7 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 
 Previous desktop work from v0.3.0 is unchanged: setup, runs, triage, comparison, live logcat, device preview, semantic inspector, maintenance and update repair.
 
-Screenshots of the desktop application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/); the v0.4.0 desktop keeps the same design system with the new explanation, repair-plan and lease panels.
+Screenshots of the desktop application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/); the v0.5.0 desktop keeps the same design system with the new explanation, repair-plan and lease panels.
 
 ![AndroidForge desktop overview](docs/screenshots/v0.3.0/overview-1280x720.png)
 
@@ -129,7 +139,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.4.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.5.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -177,7 +187,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.4.0)
+### Agent loop quick start (v0.5.0)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -311,14 +321,12 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.4.0`.** The CLI has been exercised against real apps on an Android 16 emulator, and the
-`0.4.0` desktop was validated against a real emulator session and the CalcSuite project. v0.4.0
-validation covered compact context (warm and cold), semantic observation and diffs, successful and
-timed-out postconditions, reboot invalidation, idempotent session ensure and lease renewal, read-only
-repair planning, stable failure explanations, and the full `agent test` pipeline against CalcSuite,
-DiscountHunter and IronPulse. The v0.3.0 desktop validation (onboarding, diagnostics, session restart,
-install, conformance, cancellation, live logcat, preview/inspector, comparison and maintenance) remains
-applicable. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.5.0`.** The CLI has been exercised against real apps on an Android 16 emulator, and the
+`0.5.0` desktop was validated against a real emulator session and the CalcSuite project. v0.5.0 fixes
+the issues found by three independent app agents (CalcSuite, DiscountHunter and IronPulse) and re-ran
+the affected workflows: shared-host session acquisition, UIAutomator recovery, project/run scoping,
+pipeline status, observation shape, diff size, selector guidance, desktop argument handling and
+session ownership. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -336,6 +344,9 @@ Validated:
   `agent test` dry-run/execute pipeline.
 - v0.4.0 pipeline validation on CalcSuite, DiscountHunter and IronPulse (including a real install-skip
   decision based on recorded SHA-256 identity).
+- v0.5.0 regression validation of the agent-reported issues: port selection on a shared host,
+  UIAutomator recovery/classification, project-scoped run discovery, failed pipeline envelope status,
+  observation token/actionable split, compact diffs, session owner flags, and desktop help/version.
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
@@ -394,4 +405,5 @@ Bug reports, focused pull requests and real-app reproductions are welcome. Read
 MIT. See [LICENSE](LICENSE).
 
 Copyright (c) 2026 JuggyBob.
+
 

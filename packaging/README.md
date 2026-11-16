@@ -25,7 +25,7 @@ searches `PATH`, `%LOCALAPPDATA%\Programs\Inno Setup 6|7`, and the usual Program
 - Start Menu shortcuts, optional desktop shortcut and uninstaller.
 - User configuration (`%APPDATA%\AndroidForge`, `%LOCALAPPDATA%\AndroidForge`) and project artifacts are
   outside `{app}` and are preserved by upgrade and uninstall.
-- Version metadata is `0.4.0` for this release.
+- Version metadata is `0.5.0` for this release.
 
 ## Signing
 
@@ -33,3 +33,4 @@ The release assets are **unsigned**. No code-signing certificate or trusted publ
 available, so SmartScreen may warn on first launch. Do not claim a verified publisher. To sign later,
 sign both executables and the installer after packaging, then publish a new checksum file; the packaging
 layout does not need to change.
+

@@ -283,16 +283,32 @@ pub async fn context(cli: &Cli, args: &ContextArgs) -> Result<CommandSuccess> {
                     let needs_cap = object
                         .get("actionable")
                         .and_then(|value| value.as_array())
-                        .is_some_and(|actionable| actionable.len() > 16);
+                        .is_some_and(|actionable| actionable.len() > 12);
                     if needs_cap {
                         if let Some(actionable) = object
                             .get_mut("actionable")
                             .and_then(|value| value.as_array_mut())
                         {
-                            actionable.truncate(16);
+                            actionable.truncate(12);
                         }
                         object.insert(
                             "actionable_truncated".to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                    }
+                    let needs_context_cap = object
+                        .get("context")
+                        .and_then(|value| value.as_array())
+                        .is_some_and(|context| context.len() > 8);
+                    if needs_context_cap {
+                        if let Some(context) = object
+                            .get_mut("context")
+                            .and_then(|value| value.as_array_mut())
+                        {
+                            context.truncate(8);
+                        }
+                        object.insert(
+                            "context_truncated".to_string(),
                             serde_json::Value::Bool(true),
                         );
                     }
@@ -300,7 +316,7 @@ pub async fn context(cli: &Cli, args: &ContextArgs) -> Result<CommandSuccess> {
                         .get_mut("visible_text")
                         .and_then(|value| value.as_array_mut())
                     {
-                        text.truncate(24);
+                        text.truncate(16);
                     }
                 }
                 screen_value = value;

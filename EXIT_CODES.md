@@ -23,6 +23,10 @@ Agents must branch on the process exit code and on `error.code` in JSON. Do not 
 | `9` | Internal error or artifact write failure. |
 | `130` | Interrupted (Ctrl+C / cancellation). |
 
+Pipeline-style commands may return a successful HTTP-style envelope with `status: "failed"` or
+`status: "blocked"` and a nonzero exit code while preserving a structured `result`. Branch on
+`exit_code` and `result.final_status`; do not assume `status` must be `success` or `error`.
+
 ## Complete code table
 
 | Code | Exit | Recoverable | Meaning |
@@ -53,6 +57,7 @@ Agents must branch on the process exit code and on `error.code` in JSON. Do not 
 | `E_SIGNATURE_VERIFICATION_FAILED` | 7 | no | APK signature verification failed. |
 | `E_SELECTOR_NOT_FOUND` | 7 | yes | No UI node matched the selector, or `ui clear` had no focused editable field. |
 | `E_UI_HIERARCHY_INVALID` | 6 | yes | UIAutomator returned an unreadable hierarchy. |
+| `E_UI_AUTOMATOR_UNAVAILABLE` | 6 | yes | The UIAutomator helper was killed or stuck after automatic cleanup/retry. Retry or collect diagnostics. |
 | `E_SELECTOR_AMBIGUOUS` | 7 | yes | Multiple nodes matched; inspect candidates and add `--index` or a narrower selector. |
 | `E_POSTCONDITION_TIMEOUT` | 7 | yes | The action executed but its requested postcondition was not satisfied before the timeout. The action is not retried. Context includes current foreground state and an observation token. |
 | `E_UI_ASSERTION_FAILED` | 7 | yes | The requested UI condition did not hold. |

@@ -1,8 +1,85 @@
 # Verification record
 
-This document records what was actually run for the `0.4.0` Alpha delivery on 2026-11-16, followed by
-the historical `0.3.0` record. It separates automated checks, real Android validation, desktop workflow
+This document records what was actually run for the `0.5.0` Alpha delivery, followed by the historical
+`0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
 validation and packaging validation from areas that were not exercised.
+
+## v0.5.0 verification (2026-11-16)
+
+### Scope
+
+Three independent app agents reported `PASS WITH ISSUES` for IronPulse, DiscountHunter and CalcSuite.
+AndroidForge v0.5.0 fixes every confirmed AndroidForge issue plus the app/conformance test-asset issues
+inside the AndroidForge example adapters. Two claims were checked and not reproduced as stated:
+
+- `session release --owner` already exists and parses. A CLI parser regression test now pins it. The
+  ownership error text was made more specific.
+- The shared-host `session ensure` failure was real but the cause was automatic port allocation choosing
+  an occupied ADB emulator port before the device lock was checked.
+
+### Automated checks
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --workspace` | Passed. |
+| `cargo build --workspace --release` | Passed. |
+| `androidforge --version` | `androidforge 0.5.0` after version bump. |
+
+### Regression tests added
+
+- Failed and blocked `agent test` envelope status.
+- UIAutomator failure classification for the new code and legacy `E_COMMAND_FAILED`/exit 137 reports.
+- Project-scoped `report explain latest` preferring a failed run and finding an unprojected run by id.
+- Observation `actionable`/`context` separation, `token`, always-present `clickable`/`enabled` and
+  password redaction.
+- Compact diff truncation at 12 and `--full` at 100.
+- `session release --owner` parsing.
+- Envelope preservation of `status: "failed"` and nonzero exit code.
+
+### Live checks
+
+| Scenario | Result |
+| --- | --- |
+| Existing `emulator-5554` running, ensure `androidforge_test` | Launched `emulator-5556` in 27.9 s, not 5554. |
+| `session start`/`attach` project binding | Newly attached session showed the CalcSuite project root; release with `--owner` succeeded. |
+| First ensure after session creation | No legacy project-binding warning. |
+| `ui observe` new shape | `token` equals `id`; `clickable`/`enabled` present; interactive and context lists separated; empty resource ids omitted. |
+| `ui diff` compact | CalcSuite Settings-to-Home: 8.4 KB with 12/33 added and 12/34 removed truncated lists, versus ~21.6 KB before the compact change. |
+| `report explain latest --project examples/CalcSuite` | Selected the failed run `20261116-211609-...`, not the newer passed run. |
+| `report explain <unprojected-id> --project examples/CalcSuite` | Found and explained the root-artifact run. |
+| `report explain` on DiscountHunter UIAutomator failure | Category `ui_automation`, high confidence, observe/diagnostics/session next actions. |
+| `report list --all` | Merged project and ancestor stores. |
+| `agent test --apk missing --dry-run` | Envelope `status: "failed"`, exit 6, `result.final_status: "failed"`. |
+| Desktop `--version` / `--help` | Printed text and exited 0 without opening the GUI. |
+| Desktop normal launch | Window titled `AndroidForge` remained responsive. |
+
+### Packaging validation
+
+- `.\packaging\package.ps1 -SkipBuild` produced:
+  - `androidforge-cli-windows-x86_64.zip` (3,878,377 bytes), SHA-256
+    `b9ae358d4adeb7cb613520f843e242a0c018864dd27b766f1bc2abbda5ad7e38`.
+  - `androidforge-desktop-windows-x86_64.zip` (10,487,600 bytes), SHA-256
+    `c31b80b0b84bd9b8c9a9b9a1e7f96a1aaade73d4851a58b46cbb043fec2e4ac1`.
+  - `androidforge-windows-x86_64-setup.exe` (8,977,635 bytes), SHA-256
+    `7ad4d2167f7250be98c7cd6dfde76785379e30cc51da6e9243c3ddd63de0a46c`.
+- The portable ZIP was extracted into a clean directory; CLI and desktop both reported `0.5.0`; the new
+  `--port`, `ui observe` and `ui diff` help pages loaded; the desktop launched with title
+  `AndroidForge` and stayed responsive.
+- The installer ran silently, installed CLI/desktop `0.5.0`, and uninstalled cleanly while removing the
+  install directory.
+- All three packaged asset SHA-256 values matched `SHA256SUMS.txt`.
+
+### Not exercised
+
+- UIAutomator helper recovery was not forced into exit 137; classification and cleanup paths are unit
+  tested, and the live observation path passed.
+- The full three-app `agent test` matrix was not repeated after every fix; existing v0.4.0 evidence was
+  reused for the unaffected app flows, and the corrected report/observation/session paths were tested
+  directly.
+- Physical devices, Maestro, instrumentation packages, snapshot restore, root-only operations and
+  multiple DPI scales remain unvalidated.
 
 ## v0.4.0 verification (2026-11-16)
 
@@ -230,6 +307,7 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
 
 
 

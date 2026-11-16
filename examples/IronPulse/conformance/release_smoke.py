@@ -104,6 +104,15 @@ def complete_onboarding_if_needed():
     run("ui", "tap", "--text", "Start training")
 
 
+def dismiss_update_dialog():
+    """Dismiss a debug-build update prompt so it cannot cover Home."""
+    if not find("--text", "Update available") and not find("--contains", "is available"):
+        return
+    run("ui", "tap", "--text", "Do not show this again", required=False)
+    run("ui", "tap", "--text", "Close", required=False)
+    run("ui", "wait", "--text", "CURRENT STREAK", "--timeout", "10", required=False)
+
+
 def main():
     launch = run("app", "launch", PACKAGE)[1]
     check(
@@ -113,7 +122,9 @@ def main():
     )
 
     complete_onboarding_if_needed()
+    dismiss_update_dialog()
     run("ui", "tap", "--text", "Home", required=False)
+    dismiss_update_dialog()
     run("ui", "wait", "--text", "CURRENT STREAK", "--timeout", "20")
     home = run("ui", "assert", "--text", "CURRENT STREAK")[1]
     check("home surface", home["result"].get("matched") is True, home["result"])

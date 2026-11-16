@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -113,6 +114,53 @@ pub async fn avd_list(ctx: &CliContext) -> Result<CommandSuccess> {
     Ok(success("avd.list", result, human))
 }
 
+async fn allocate_emulator_port(
+    ctx: &CliContext,
+    requested: Option<u16>,
+) -> Result<androidforge_emulator::PortReservation> {
+    let adb = ctx.adb()?;
+    let occupied = adb
+        .devices_raw()
+        .await?
+        .iter()
+        .filter_map(|device| parse_emulator_port(&device.serial))
+        .collect::<BTreeSet<_>>();
+    if let Some(port) = requested {
+        if occupied.contains(&port) {
+            return Err(ForgeError::new(
+                ErrorCode::DeviceBusy,
+                format!("emulator console port {port} already belongs to a connected ADB emulator"),
+            )
+            .with_context("port", serde_json::json!(port))
+            .with_suggestion(
+                "Choose a different even --port, or omit --port for automatic allocation.",
+            )
+            .device(format!("emulator-{port}")));
+        }
+        return androidforge_emulator::allocate_port(Some(port));
+    }
+    for port in (5554u16..=5682u16).step_by(2) {
+        if occupied.contains(&port) {
+            continue;
+        }
+        if let Ok(reservation) = androidforge_emulator::allocate_port(Some(port)) {
+            return Ok(reservation);
+        }
+    }
+    let reservation = androidforge_emulator::allocate_port(None)?;
+    if occupied.contains(&reservation.console_port) {
+        return Err(ForgeError::new(
+            ErrorCode::DeviceBusy,
+            format!(
+                "automatic port allocation chose emulator-{}, which is already connected over ADB",
+                reservation.console_port
+            ),
+        )
+        .with_suggestion("Stop an unused emulator or pass an explicit even --port."));
+    }
+    Ok(reservation)
+}
+
 async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSuccess> {
     if args.headless && args.windowed {
         return Err(ForgeError::invalid_argument(
@@ -161,6 +209,7 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
             true,
         );
         session.create(&ctx.paths)?;
+        session.bind_project(&ctx.paths, &ctx.paths.project_root.to_string_lossy())?;
         if let Err(error) = session.acquire_device(&ctx.paths, &serial) {
             let _ = session.mark_failed(&ctx.paths, error.message());
             return Err(error.session(session.id.clone()));
@@ -189,7 +238,7 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
         );
     }
 
-    let reservation = androidforge_emulator::allocate_port(args.port)?;
+    let reservation = allocate_emulator_port(ctx, args.port).await?;
     let port = reservation.console_port;
     let serial = reservation.serial();
     let mut session = Session::new(
@@ -201,6 +250,7 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
         headless,
     );
     session.create(&ctx.paths)?;
+    session.bind_project(&ctx.paths, &ctx.paths.project_root.to_string_lossy())?;
     if let Err(error) = session.acquire_device(&ctx.paths, &serial) {
         let _ = session.mark_failed(&ctx.paths, error.message());
         return Err(error.session(session.id.clone()));
@@ -504,6 +554,7 @@ pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result
                 "avd": args.avd,
                 "serial": args.serial,
                 "profile": args.profile,
+                "port": args.port,
                 "headless": true,
                 "prepare": args.prepare,
                 "lease_ttl_seconds": ttl.map(|ttl| ttl.as_secs()),
@@ -568,7 +619,7 @@ pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result
         }
         if legacy {
             legacy_warning = Some(format!(
-                "Session {} predates project binding and was reused by owner/project compatibility heuristics; it is now bound to this project.",
+                "Session {} was created before project binding was recorded; it is now bound to this project.",
                 session.id
             ));
         }
@@ -668,7 +719,17 @@ pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result
         ("attached_existing", created, warnings)
     } else {
         let avd = args.avd.as_deref().unwrap_or_default();
-        if let Some((serial, _)) = find_running_avd(ctx, avd).await? {
+        if let Some((serial, running_port)) = find_running_avd(ctx, avd).await? {
+            if let Some(requested_port) = args.port
+                && requested_port != running_port
+            {
+                return Err(ForgeError::invalid_argument(format!(
+                    "AVD {avd} is already running as {serial} on console port {running_port}, not requested port {requested_port}"
+                ))
+                .with_suggestion("Omit --port to attach to the running emulator.")
+                .with_suggestion("Stop the running emulator first if you need a specific port.")
+                .device(serial));
+            }
             ensure_serial_not_owned(ctx, &serial, &owner).await?;
             let attach_args = SessionAttachArgs {
                 owner: Some(owner.clone()),
@@ -683,7 +744,7 @@ pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result
             let start_args = SessionStartArgs {
                 avd: avd.to_string(),
                 owner: Some(owner.clone()),
-                port: None,
+                port: args.port,
                 headless: true,
                 windowed: false,
                 memory: None,
@@ -779,6 +840,7 @@ async fn attach_with_serial(
         true,
     );
     session.create(&ctx.paths)?;
+    session.bind_project(&ctx.paths, &ctx.paths.project_root.to_string_lossy())?;
     if let Err(error) = session.acquire_device(&ctx.paths, &serial) {
         let _ = session.mark_failed(&ctx.paths, error.message());
         return Err(error.session(session.id.clone()));
@@ -912,7 +974,7 @@ fn ensure_session_owner(session: &Session, caller: &str, force: bool) -> Result<
     )
     .with_context_string("session_owner", session.owner.clone())
     .with_context_string("caller_owner", caller.to_string())
-    .with_suggestion("Pass --owner <OWNER> matching the session owner.")
+    .with_suggestion("Pass `--owner <OWNER>` to `session release`, `session stop` or `session restart`, or set ANDROIDFORGE_OWNER.")
     .with_suggestion("Or set ANDROIDFORGE_OWNER to your agent name.")
     .with_suggestion("Use --force only when you intentionally take over another agent's session.")
     .session(session.id.clone()))
@@ -1488,5 +1550,27 @@ mod tests {
     #[test]
     fn force_allows_deliberate_takeover() {
         assert!(ensure_session_owner(&session("AgentA"), "AgentB", true).is_ok());
+    }
+
+    #[test]
+    fn session_release_accepts_an_explicit_owner_flag() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "androidforge",
+            "session",
+            "release",
+            "--session",
+            "ses-test",
+            "--owner",
+            "AgentA",
+            "--json",
+        ])
+        .expect("session release --owner must parse");
+        match cli.command {
+            crate::cli::Command::Session {
+                command: SessionCommand::Release(args),
+            } => assert_eq!(args.owner.as_deref(), Some("AgentA")),
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

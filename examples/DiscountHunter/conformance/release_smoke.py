@@ -90,7 +90,7 @@ def main():
     run("ui", "wait", "--text", "Deals", "--timeout", "20")
     dismiss_first_run()
 
-    run("ui", "tap", "--text", "Settings")
+    run("ui", "tap", "--text", "Settings", "--clickable")
     run("ui", "scroll-to", "--text", "Deal alerts")
     alerts = run("ui", "assert", "--text", "Deal alerts")[1]
     check("deal alerts section", alerts["result"].get("matched") is True, alerts["result"])

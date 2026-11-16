@@ -131,6 +131,7 @@ impl UiManager {
     pub async fn dump(&self, serial: &str) -> Result<UiHierarchy> {
         let remote = format!("/data/local/tmp/androidforge-ui-{}.xml", short_id());
         let mut last_error = None;
+        let mut recovery_attempted = false;
         for attempt in 0..3 {
             let dump_output = self
                 .adb
@@ -209,15 +210,20 @@ impl UiManager {
                 }
                 Err(error) => {
                     last_error = Some(error.message().to_string());
-                    if error.code() == ErrorCode::UnsupportedOperation
-                        || error.message().to_ascii_lowercase().contains("uiautomator")
-                    {
+                    if error.code() == ErrorCode::UnsupportedOperation {
                         break;
                     }
                 }
             }
             if attempt < 2 {
-                tokio::time::sleep(Duration::from_millis(450)).await;
+                let transient = last_error
+                    .as_deref()
+                    .is_some_and(is_transient_uiautomator_failure);
+                if transient {
+                    recovery_attempted = true;
+                    recover_uiautomator(&self.adb, serial).await;
+                }
+                tokio::time::sleep(Duration::from_millis(if transient { 750 } else { 450 })).await;
             }
         }
         let _ = self
@@ -230,14 +236,21 @@ impl UiManager {
             )
             .await;
         Err(ForgeError::new(
-            ErrorCode::CommandFailed,
+            ErrorCode::UiAutomatorUnavailable,
             "could not obtain a usable UIAutomator hierarchy",
         )
         .with_context_string(
             "last_error",
             last_error.unwrap_or_else(|| "unknown UIAutomator failure".to_string()),
         )
-        .with_suggestion("Retry after the screen is awake and animation has stopped.")
+        .with_context("attempts", serde_json::json!(3))
+        .with_context("recovery_attempted", serde_json::json!(recovery_attempted))
+        .with_suggestion(
+            "Retry; AndroidForge already attempted to clear a stuck UIAutomator helper.",
+        )
+        .with_suggestion(
+            "If it persists, run `androidforge adb shell pkill -9 -f uiautomator` and retry.",
+        )
         .with_suggestion("Inspect the device with `androidforge diagnostics collect`.")
         .device(serial.to_string()))
     }
@@ -1074,9 +1087,61 @@ fn scroll_points(bounds: Rect, direction: &str) -> Result<(i32, i32, i32, i32)> 
     })
 }
 
+fn is_transient_uiautomator_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("not found") || lower.contains("no such file") {
+        return false;
+    }
+    lower.contains("exit code 137")
+        || lower.contains("could not get idle state")
+        || lower.contains("null root node")
+        || lower.contains("empty or partial xml")
+        || (lower.contains("uiautomator")
+            && (lower.contains("killed")
+                || lower.contains("timeout")
+                || lower.contains("timed out")
+                || lower.contains("not responding")))
+}
+
+async fn recover_uiautomator(adb: &AdbClient, serial: &str) {
+    // Best effort: a killed or wedged uiautomator helper is process-local to
+    // this session's device. Android's toolbox pkill is available on all
+    // supported API levels.
+    let _ = adb
+        .shell_args(
+            serial,
+            &[
+                "pkill".to_string(),
+                "-9".to_string(),
+                "-f".to_string(),
+                "uiautomator".to_string(),
+            ],
+            Some(Duration::from_secs(5)),
+            None,
+        )
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_uiautomator_failures_are_recognized() {
+        assert!(is_transient_uiautomator_failure(
+            "ADB command failed with exit code 137"
+        ));
+        assert!(is_transient_uiautomator_failure(
+            "ERROR: could not get idle state"
+        ));
+        assert!(is_transient_uiautomator_failure("ERROR: null root node"));
+        assert!(is_transient_uiautomator_failure(
+            "uiautomator produced empty or partial XML"
+        ));
+        assert!(!is_transient_uiautomator_failure(
+            "uiautomator: executable not found"
+        ));
+    }
 
     #[test]
     fn scroll_points_respect_direction() {

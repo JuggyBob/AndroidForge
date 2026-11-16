@@ -260,17 +260,34 @@ pub async fn doctor(cli: &Cli) -> Result<CommandSuccess> {
         });
     }
     let sessions = androidforge_core::session::list_sessions(&paths).unwrap_or_default();
+    let active_sessions = sessions
+        .iter()
+        .filter(|session| {
+            !matches!(
+                session.state,
+                androidforge_core::session::SessionState::Released
+                    | androidforge_core::session::SessionState::Failed
+                    | androidforge_core::session::SessionState::Abandoned
+            )
+        })
+        .collect::<Vec<_>>();
+    let stale_active = active_sessions
+        .iter()
+        .filter(|session| session.stale)
+        .count();
+    let tombstones = sessions.len().saturating_sub(active_sessions.len());
     checks.push(Check {
         name: "sessions".to_string(),
-        status: if sessions.iter().any(|session| session.stale) {
+        status: if stale_active > 0 {
             "warn".to_string()
         } else {
             "ok".to_string()
         },
         detail: format!(
-            "{} session(s), {} stale",
-            sessions.len(),
-            sessions.iter().filter(|session| session.stale).count()
+            "{} active session(s), {} stale active, {} tombstone(s)",
+            active_sessions.len(),
+            stale_active,
+            tombstones
         ),
         path: None,
     });

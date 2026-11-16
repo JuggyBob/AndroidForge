@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -267,8 +268,26 @@ async fn run_exec(ctx: &CliContext, args: &RunExecArgs) -> Result<CommandSuccess
 
 pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<CommandSuccess> {
     match command {
-        ReportCommand::List { limit } => {
-            let runs = list_runs(&ctx.paths.artifacts_dir)?;
+        ReportCommand::List { limit, all } => {
+            let mut runs = if *all {
+                let mut merged: BTreeMap<String, androidforge_core::run::RunSummary> =
+                    BTreeMap::new();
+                for root in candidate_artifact_roots(ctx) {
+                    for run in list_runs(&root).unwrap_or_default() {
+                        merged.entry(run.run_id.clone()).or_insert(run);
+                    }
+                }
+                let mut runs = merged.into_values().collect::<Vec<_>>();
+                runs.sort_by(|left, right| {
+                    right
+                        .started_at
+                        .cmp(&left.started_at)
+                        .then_with(|| right.run_id.cmp(&left.run_id))
+                });
+                runs
+            } else {
+                list_runs(&ctx.paths.artifacts_dir)?
+            };
             let total = runs.len();
             let mut human = String::new();
             if runs.is_empty() {
@@ -277,7 +296,11 @@ pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<Command
                 human.push_str(&format!(
                     "{} run(s) in {}\n",
                     total,
-                    ctx.paths.artifacts_dir.join("runs").display()
+                    if *all {
+                        "all discovered artifact stores".to_string()
+                    } else {
+                        ctx.paths.artifacts_dir.join("runs").display().to_string()
+                    }
                 ));
                 for run in runs.iter().take(*limit) {
                     human.push_str(&format!(
@@ -286,12 +309,14 @@ pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<Command
                     ));
                 }
             }
+            runs.truncate(*limit);
             Ok(success(
                 "report.list",
                 serde_json::json!({
                     "count": total,
                     "limit": limit,
-                    "runs": runs.into_iter().take(*limit).collect::<Vec<_>>(),
+                    "all": all,
+                    "runs": runs,
                 }),
                 human,
             ))
@@ -838,6 +863,57 @@ async fn prune(ctx: &CliContext, args: &crate::cli::ReportPruneArgs) -> Result<C
 /// project-local `.artifacts/runs` directories. Conformance runs live under the
 /// adapter's project root; agents often inspect them from the repository root
 /// without repeating `--project`.
+fn candidate_artifact_roots(ctx: &CliContext) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    roots.push(ctx.paths.artifacts_dir.clone());
+    collect_artifact_roots(&ctx.paths.project_root, 0, &mut roots);
+    collect_artifact_roots(&ctx.paths.cwd, 0, &mut roots);
+    for start in [&ctx.paths.project_root, &ctx.paths.cwd] {
+        let mut current = start.parent();
+        for _ in 0..4 {
+            let Some(parent) = current else {
+                break;
+            };
+            collect_artifact_roots(parent, 0, &mut roots);
+            current = parent.parent();
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn resolve_latest_explain_dir(ctx: &CliContext) -> Result<PathBuf> {
+    let mut runs: Vec<(androidforge_core::run::RunSummary, PathBuf)> = Vec::new();
+    for root in candidate_artifact_roots(ctx) {
+        let Ok(summaries) = list_runs(&root) else {
+            continue;
+        };
+        for summary in summaries {
+            let path = root.join(&summary.path);
+            if !path.is_dir() {
+                continue;
+            }
+            runs.push((summary, path));
+        }
+    }
+    if runs.is_empty() {
+        return resolve_run_dir(&ctx.paths.artifacts_dir, "latest");
+    }
+    runs.sort_by(|(left, _), (right, _)| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    let preferred = runs
+        .iter()
+        .rev()
+        .find(|(summary, _)| summary.status != RunStatus::Passed)
+        .or_else(|| runs.last())
+        .expect("runs is non-empty");
+    Ok(preferred.1.clone())
+}
+
 fn resolve_report_dir(ctx: &CliContext, spec: &str) -> Result<PathBuf> {
     let original = match resolve_run_dir(&ctx.paths.artifacts_dir, spec) {
         Ok(dir) => return Ok(dir),
@@ -846,10 +922,7 @@ fn resolve_report_dir(ctx: &CliContext, spec: &str) -> Result<PathBuf> {
     if Path::new(spec).is_dir() {
         return Err(original);
     }
-    let mut roots = Vec::new();
-    collect_artifact_roots(&ctx.paths.project_root, 0, &mut roots);
-    roots.sort();
-    roots.dedup();
+    let roots = candidate_artifact_roots(ctx);
     let mut matches = Vec::new();
     for root in &roots {
         if let Ok(dir) = resolve_run_dir(root, spec)
@@ -1019,7 +1092,11 @@ fn summary_json(report: &RunReport, dir: &std::path::Path) -> serde_json::Value 
 }
 
 async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSuccess> {
-    let dir = resolve_report_dir(ctx, &args.run)?;
+    let dir = if args.run == "latest" {
+        resolve_latest_explain_dir(ctx)?
+    } else {
+        resolve_report_dir(ctx, &args.run)?
+    };
     let report: RunReport = androidforge_core::util::read_json(&dir.join("report.json"))?;
     let explanation = explain_report(&report);
     let mut result = serde_json::to_value(&explanation)?;

@@ -27,6 +27,7 @@ pub enum DiagnosisCategory {
     Anr,
     Selector,
     SelectorAmbiguous,
+    UiAutomation,
     Timeout,
     Assertion,
     Permission,
@@ -50,6 +51,7 @@ impl DiagnosisCategory {
             Self::Anr => "anr",
             Self::Selector => "selector",
             Self::SelectorAmbiguous => "selector_ambiguous",
+            Self::UiAutomation => "ui_automation",
             Self::Timeout => "timeout",
             Self::Assertion => "assertion",
             Self::Permission => "permission",
@@ -247,6 +249,7 @@ fn category_for_code(code: ErrorCode) -> Option<DiagnosisCategory> {
         ErrorCode::SelectorAmbiguous => Some(C::SelectorAmbiguous),
         ErrorCode::UiAssertionFailed | ErrorCode::TextVerificationFailed => Some(C::Assertion),
         ErrorCode::UiHierarchyInvalid => Some(C::Application),
+        ErrorCode::UiAutomatorUnavailable => Some(C::UiAutomation),
         ErrorCode::CommandTimeout => Some(C::Timeout),
         ErrorCode::PermissionDenied => Some(C::Permission),
         ErrorCode::ConfigInvalid
@@ -273,6 +276,12 @@ fn category_for_failure(failure: &FailureInfo) -> (DiagnosisCategory, Confidence
         || message.contains("install_failed_update_incompatible")
     {
         return (DiagnosisCategory::Signature, Confidence::High);
+    }
+    if message.contains("uiautomator") && !message.contains("not found") {
+        return (DiagnosisCategory::UiAutomation, Confidence::High);
+    }
+    if message.contains("adb command failed with exit code 137") {
+        return (DiagnosisCategory::UiAutomation, Confidence::Medium);
     }
     if let Some(category) = category_for_code(failure.code) {
         return (category, Confidence::High);
@@ -509,6 +518,37 @@ fn next_actions(
                         ["androidforge", "session", "list", "--json"],
                     ));
                 }
+            }
+        }
+        DiagnosisCategory::UiAutomation => {
+            let mut observe = argv(&["androidforge", "ui", "observe"]);
+            observe.extend(session.clone());
+            observe.push("--json".to_string());
+            actions.push(action(
+                "Retry the observation; AndroidForge now attempts to clear a stuck UIAutomator helper automatically.",
+                "high",
+                observe,
+            ));
+            let mut diagnostics = argv(&["androidforge", "diagnostics", "collect", "--json"]);
+            diagnostics.extend(session.clone());
+            actions.push(action(
+                "Collect bounded device diagnostics if the helper failure repeats.",
+                "normal",
+                diagnostics,
+            ));
+            if let Some(session_id) = &report.session_id {
+                actions.push(action(
+                    "Inspect the session and device state.",
+                    "normal",
+                    [
+                        "androidforge",
+                        "session",
+                        "inspect",
+                        "--session",
+                        session_id.as_str(),
+                        "--json",
+                    ],
+                ));
             }
         }
         DiagnosisCategory::Environment => {
@@ -1362,5 +1402,37 @@ mod tests {
                 .iter()
                 .any(|action| { action.command.argv.iter().any(|arg| arg == "verify") })
         );
+    }
+
+    #[test]
+    fn uiautomator_failures_are_automation_failures_not_unknown() {
+        let explanation = explain_report(&report_with(
+            ErrorCode::UiAutomatorUnavailable,
+            "could not obtain a usable UIAutomator hierarchy",
+        ));
+        assert_eq!(
+            explanation.diagnosis.category,
+            DiagnosisCategory::UiAutomation
+        );
+        assert_eq!(explanation.diagnosis.confidence, Confidence::High);
+        assert!(
+            explanation
+                .next_actions
+                .iter()
+                .any(|action| { action.command.argv.iter().any(|arg| arg == "observe") })
+        );
+
+        let legacy = explain_report(&report_with(
+            ErrorCode::CommandFailed,
+            "could not obtain a usable UIAutomator hierarchy",
+        ));
+        assert_eq!(legacy.diagnosis.category, DiagnosisCategory::UiAutomation);
+
+        let killed = explain_report(&report_with(
+            ErrorCode::CommandFailed,
+            "ADB command failed with exit code 137",
+        ));
+        assert_eq!(killed.diagnosis.category, DiagnosisCategory::UiAutomation);
+        assert_eq!(killed.diagnosis.confidence, Confidence::Medium);
     }
 }

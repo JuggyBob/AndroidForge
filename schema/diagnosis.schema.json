@@ -83,6 +83,7 @@
             "anr",
             "selector",
             "selector_ambiguous",
+            "ui_automation",
             "timeout",
             "assertion",
             "permission",

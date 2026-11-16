@@ -286,6 +286,9 @@ pub struct AgentTestArgs {
     /// Lease duration for session ensure, for example 30m.
     #[arg(long)]
     pub ttl: Option<String>,
+    /// Emulator console port to use when launching the requested AVD.
+    #[arg(long)]
+    pub port: Option<u16>,
     /// Permit installing the APK when the installed build cannot be proven current.
     #[arg(long)]
     pub install: bool,
@@ -367,6 +370,9 @@ pub struct SessionEnsureArgs {
     /// Lease duration metadata, for example 30m or 2h. Does not stop devices on expiry.
     #[arg(long)]
     pub ttl: Option<String>,
+    /// Emulator console port to use when launching the requested AVD.
+    #[arg(long)]
+    pub port: Option<u16>,
     /// Start the emulator headless.
     #[arg(long)]
     pub headless: bool,
@@ -755,6 +761,9 @@ pub struct UiDiffArgs {
     /// Optional target observation token. A fresh observation is captured when omitted.
     #[arg(long)]
     pub to: Option<String>,
+    /// Include up to 100 added/removed nodes instead of the compact 12.
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1332,6 +1341,9 @@ pub enum ReportCommand {
     List {
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Include runs from the current directory and ancestor project artifact stores.
+        #[arg(long)]
+        all: bool,
     },
     Show {
         run: String,

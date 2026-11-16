@@ -41,7 +41,7 @@ Errors carry a stable `ErrorCode`, message, recoverability, suggestions, context
 
 ## Agent loop
 
-The v0.4.0 agent-facing layer is a composition of existing primitives, not a second execution model.
+The v0.5.0 agent-facing layer is a composition of existing primitives, not a second execution model.
 
 ### Context
 
@@ -55,11 +55,11 @@ written by the same observation token store used by `ui observe`, so `context` n
 
 `ui observe` parses one UIAutomator hierarchy, then derives a compact semantic projection. Tokens are
 written atomically under `<state>/observations/<session>/<token>.json`, with the raw XML in the same
-directory. Records include the session id, boot id, timestamp and parsed projection. Reads validate
+directory. Records include the session id, boot id, timestamp and parsed projection. The compact node model records `token`, `clickable`, `enabled` and\n`editable`; empty resource ids are omitted. Reads validate
 session scope, boot id and the 24-hour maximum age; the per-session retention limit is 20 records. The
 store is filesystem-only and requires no daemon. Diffs pair nodes by resource id when available and by
 path/class/package otherwise, pair duplicate ids in order, ignore sub-threshold bounds movement and cap
-the returned lists with explicit totals.
+the returned lists with explicit totals. The default answer separates interactive `actionable` nodes from\nnon-interactive `context` text and caps diff node lists at 12 unless `--full` is requested.
 
 ### Deterministic diagnosis
 
@@ -236,3 +236,4 @@ Text artifacts and report strings pass through a default redactor for password/s
 ## Generic core
 
 The `genericity` integration test scans every runtime crate's `src/` for app names, package IDs and project-specific tokens. Project behavior belongs in adapters, fixtures, hooks, conformance scripts and project data. CI should run this test, `cargo fmt --check`, clippy with `-D warnings`, and the full workspace test suite.
+

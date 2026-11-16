@@ -24,6 +24,7 @@
     "device_serial": { "type": "string" },
     "avd": { "type": "string" },
     "profile": { "type": "string" },
+    "port": { "type": "integer", "minimum": 1024, "maximum": 65532 },
     "kind": { "enum": ["emulator", "attached"] },
     "state": { "enum": ["starting", "ready", "stopping", "released", "failed", "abandoned"] },
     "acquisition_mode": {

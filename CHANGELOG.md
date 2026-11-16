@@ -8,6 +8,56 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.5.0] - 2026-11-16
+
+Fifth alpha. Fixes every issue confirmed by the three independent app verification agents and adds
+regression coverage for each corrected behavior.
+
+### Fixed
+
+- Failed `agent test` pipelines now emit envelope `status: "failed"` instead of `status: "success"` with
+  a nonzero exit code. Blocked dry runs emit `status: "blocked"`.
+- `session ensure` no longer chooses a console port already associated with a connected ADB emulator.
+  Added `--port` to `session ensure` and the agent pipeline, with explicit conflict errors.
+- `session start`, `session attach` and `session ensure` now bind the project root on creation, so the
+  first `ensure` no longer emits a misleading legacy-project warning.
+- A stuck UIAutomator helper is detected, killed and retried automatically. Persistent failure returns
+  `E_UI_AUTOMATOR_UNAVAILABLE` with attempts, last error and recovery context.
+- `report explain` classifies UIAutomator infrastructure failures as `ui_automation` rather than
+  `unknown`, including legacy `E_COMMAND_FAILED` reports containing exit 137.
+- `report explain latest` selects the newest failed/partial/cancelled/interrupted run when one exists,
+  instead of explaining a newer passed run.
+- `report explain <RUN>` and `report show/path` search the current directory and ancestor artifact
+  stores, so runs created without `--project` remain discoverable from a project-scoped invocation.
+- `report list --all` discovers runs across project and ancestor artifact stores.
+- `ui observe` now exposes `token` alongside the backward-compatible `id`, separates interactive
+  `actionable` nodes from non-interactive `context` text, always includes `clickable` and `enabled`,
+  filters empty resource ids, and adds an `editable` flag.
+- `ui diff` returns compact node summaries with a default 12-node cap per category and totals/truncation
+  flags. `--full` raises the cap to 100.
+- Selector errors now suggest `ui scroll-to` for below-the-fold targets and `--clickable` when candidate
+  matches differ in interactivity.
+- `doctor` counts active sessions and stale active sessions, reporting tombstones separately.
+- `session release` ownership errors now name the actual subcommands and mention `ANDROIDFORGE_OWNER`.
+- The desktop executable answers `--help` and `--version` non-interactively instead of launching the GUI.
+- IronPulse's conformance flow dismisses the debug update dialog. DiscountHunter's Settings tap uses
+  `--clickable` to avoid the header/bottom-nav ambiguity.
+
+### Added
+
+- Regression tests for failed/blocked agent envelope status, UIAutomator classification, project-scoped
+  run discovery, observation actionable/context separation, compact diff caps, session owner parsing,
+  and report scoping.
+- `ui diff --full`.
+- `session ensure --port`.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.5.0`.
+- Observation compact default caps actionable nodes at 24 and context nodes at 16; context includes at
+  most 12 and 8 respectively.
+- `ui diff` defaults to compact nodes; use `--full` for larger lists.
+
 ## [0.4.0] - 2026-11-16
 
 Fourth alpha, focused on reducing the number of commands, tokens and manual reasoning an AI coding
@@ -267,7 +317,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.5.0
 [0.4.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.4.0
 [0.3.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0

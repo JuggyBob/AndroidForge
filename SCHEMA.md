@@ -42,15 +42,17 @@ The new schemas cover:
 - `context.schema.json` - `project`, `environment`, `session`, `device`, `app`, `screen`, `last_run`,
   `next_actions` and `warnings`. Omitted sections are not present; requested-but-unavailable sections
   have `available: false` and a reason.
-- `observation.schema.json` - observation id, session/device, freshness, display, foreground, focus,
-  compact actionables, scrollables, visible text, hierarchy metadata and raw XML path. `nodes` appears
-  only with `--full`. `actionable_total` and `actionable_truncated` make the compact cap explicit.
-- `ui-diff.schema.json` - from/to tokens plus added, removed, modified, focus, package and activity
-  changes, totals and truncation flag. Pure layout movement is deliberately not reported as a
-  modification.
+- `observation.schema.json` - observation `token` (and backward-compatible `id`), session/device,
+  freshness, display, foreground, focus, interactive `actionable` nodes, non-interactive `context`
+  text, scrollables, visible text, per-node `clickable`/`enabled`/`editable`, hierarchy metadata and raw
+  XML path. `nodes` appears only with `--full`. `actionable_total`/`actionable_truncated` and
+  `context_total`/`context_truncated` make the compact caps explicit.
+- `ui-diff.schema.json` - from/to tokens plus compact added, removed, modified, focus, package and
+  activity changes, totals and truncation flag. `--full` raises the list cap from 12 to 100. Pure layout
+  movement is deliberately not reported as a modification.
 - `diagnosis.schema.json` - category, code, confidence, summary, alternatives, evidence references,
-  argv next actions, versioned fingerprint, project root and artifacts. `report` and
-  `evidence_excerpts` appear with `--full`.
+  argv next actions, versioned fingerprint, project root and artifacts. Categories include `ui_automation`
+  for UIAutomator helper failures. `report` and `evidence_excerpts` appear with `--full`.
 - `session-ensure.schema.json` - `session_id`, acquisition mode, readiness, lease metadata, recovery and
   warnings. Expiry is advisory (`needs_reconciliation`) and does not imply device termination.
 - `repair-plan.schema.json` - read-only flag, issue severities, detection details and repair actions with
@@ -86,7 +88,8 @@ Every meaningful command with `--json` writes exactly one object to stdout:
 Rules:
 
 - `schema_version`, `status`, `command`, `exit_code` and `duration_ms` are always present.
-- `status` is `success` or `error`.
+- `status` is `success`, `error`, `failed` or `blocked`. `failed` and `blocked` are used by pipeline-style
+  commands that preserve a structured `result` instead of an error body.
 - Success responses put command-specific data in `result`.
 - Error responses put the structured failure in `error` and omit `result`.
 - Progress, trace and human diagnostics go to stderr, never stdout.

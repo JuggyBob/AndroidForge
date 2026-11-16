@@ -71,6 +71,7 @@ error_codes! {
     SignatureVerificationFailed => ("E_SIGNATURE_VERIFICATION_FAILED", 7, false),
     SelectorNotFound => ("E_SELECTOR_NOT_FOUND", 7, true),
     UiHierarchyInvalid => ("E_UI_HIERARCHY_INVALID", 6, true),
+    UiAutomatorUnavailable => ("E_UI_AUTOMATOR_UNAVAILABLE", 6, true),
     SelectorAmbiguous => ("E_SELECTOR_AMBIGUOUS", 7, true),
     UiAssertionFailed => ("E_UI_ASSERTION_FAILED", 7, true),
     PostconditionTimeout => ("E_POSTCONDITION_TIMEOUT", 7, true),

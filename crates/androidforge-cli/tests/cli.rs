@@ -468,6 +468,7 @@ fn agent_test_dry_run_is_transparent_and_writes_nothing() {
     assert_eq!(output.status.code(), Some(8));
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["command"], "agent.test");
+    assert_eq!(json["status"], "blocked");
     assert_eq!(json["result"]["dry_run"], true);
     assert_eq!(json["result"]["final_status"], "blocked");
     assert!(
@@ -479,4 +480,120 @@ fn agent_test_dry_run_is_transparent_and_writes_nothing() {
     let stages = json["result"]["stages"].as_array().unwrap();
     assert!(stages.iter().any(|stage| stage["status"] == "planned"));
     assert!(!temp.path().join("state/agent-tests").exists());
+}
+
+#[test]
+fn agent_test_failure_uses_a_failed_envelope_status() {
+    let temp = tempfile::tempdir().unwrap();
+    project_with_defaults(temp.path());
+    let output = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "agent",
+            "test",
+            "--apk",
+            "missing.apk",
+            "--dry-run",
+            "--json",
+        ])
+        .output()
+        .expect("agent test failure");
+    assert_eq!(output.status.code(), Some(6));
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["command"], "agent.test");
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["exit_code"], 6);
+    assert_eq!(json["result"]["final_status"], "failed");
+    assert_eq!(json["result"]["failure"]["stage"], "inspect_apk");
+}
+
+#[test]
+fn report_explain_latest_finds_failures_across_project_boundaries() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("ProjectWithAdapter");
+    project_with_defaults(&project);
+
+    let start = |name: &str, project: Option<&std::path::Path>| {
+        let mut command = binary();
+        command
+            .current_dir(temp.path())
+            .env("ANDROIDFORGE_HOME", temp.path());
+        if let Some(project) = project {
+            command.args(["--project", project.to_str().unwrap()]);
+        }
+        let output = command
+            .args(["run", "start", "--name", name, "--json"])
+            .output()
+            .expect("run start");
+        assert!(output.status.success(), "{output:?}");
+        let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+        json["run_id"].as_str().unwrap().to_string()
+    };
+
+    let failed_id = start("root-failure", None);
+    let passed_id = start("project-pass", Some(&project));
+
+    let failed_report = temp
+        .path()
+        .join(".artifacts/runs")
+        .join(&failed_id)
+        .join("report.json");
+    let mut report: Value =
+        serde_json::from_slice(&std::fs::read(&failed_report).unwrap()).unwrap();
+    report["status"] = serde_json::json!("failed");
+    report["failure"] = serde_json::json!({
+        "code": "E_SELECTOR_NOT_FOUND",
+        "message": "no UI element matched",
+        "failed_operation": "ui.tap",
+        "recoverable": true,
+        "suggestions": [],
+        "context": {"selector": {"text": "Save"}},
+        "artifacts": []
+    });
+    std::fs::write(&failed_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+
+    let passed_report = project
+        .join(".artifacts/runs")
+        .join(&passed_id)
+        .join("report.json");
+    let mut report: Value =
+        serde_json::from_slice(&std::fs::read(&passed_report).unwrap()).unwrap();
+    report["status"] = serde_json::json!("passed");
+    std::fs::write(&passed_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+
+    let latest = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "--project",
+            project.to_str().unwrap(),
+            "report",
+            "explain",
+            "latest",
+            "--json",
+        ])
+        .output()
+        .expect("explain latest");
+    assert!(latest.status.success(), "{latest:?}");
+    let latest_json: Value = serde_json::from_slice(&latest.stdout).unwrap();
+    assert_eq!(latest_json["result"]["run_id"], failed_id);
+    assert_eq!(latest_json["result"]["diagnosis"]["category"], "selector");
+
+    let by_id = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "--project",
+            project.to_str().unwrap(),
+            "report",
+            "explain",
+            &failed_id,
+            "--json",
+        ])
+        .output()
+        .expect("explain by id");
+    assert!(by_id.status.success(), "{by_id:?}");
+    let by_id_json: Value = serde_json::from_slice(&by_id.stdout).unwrap();
+    assert_eq!(by_id_json["result"]["run_id"], failed_id);
 }

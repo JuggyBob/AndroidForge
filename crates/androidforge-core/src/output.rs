@@ -37,6 +37,10 @@ pub struct Envelope {
 #[derive(Debug, Clone)]
 pub struct CommandSuccess {
     pub command: String,
+    /// Envelope status for non-error results. Normally `success`; pipeline-style
+    /// commands may report `failed` or `blocked` while preserving structured
+    /// results and a meaningful exit code.
+    pub status: &'static str,
     pub result: Value,
     pub human: String,
     pub artifacts: Vec<ArtifactRef>,
@@ -51,6 +55,7 @@ impl CommandSuccess {
     pub fn new(command: impl Into<String>, result: Value, human: impl Into<String>) -> Self {
         Self {
             command: command.into(),
+            status: "success",
             result,
             human: human.into(),
             artifacts: Vec::new(),
@@ -60,6 +65,11 @@ impl CommandSuccess {
             duration_ms: 0,
             exit_code: 0,
         }
+    }
+
+    pub fn with_status(mut self, status: &'static str) -> Self {
+        self.status = status;
+        self
     }
 
     pub fn with_artifacts(mut self, artifacts: Vec<ArtifactRef>) -> Self {
@@ -114,7 +124,7 @@ pub fn emit_success(options: OutputOptions, success: &CommandSuccess) -> Result<
     if options.json {
         let envelope = Envelope {
             schema_version: ENVELOPE_SCHEMA_VERSION,
-            status: "success",
+            status: success.status,
             command: success.command.clone(),
             exit_code: success.exit_code,
             run_id: success.run_id.clone(),
@@ -379,6 +389,33 @@ mod tests {
         let json = serde_json::to_value(envelope).unwrap();
         assert_eq!(json["status"], "success");
         assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn envelope_preserves_pipeline_failed_status() {
+        let success = CommandSuccess::new(
+            "agent.test",
+            serde_json::json!({"final_status": "failed"}),
+            "",
+        )
+        .with_status("failed");
+        let envelope = Envelope {
+            schema_version: 1,
+            status: success.status,
+            command: success.command.clone(),
+            exit_code: 6,
+            run_id: None,
+            session_id: None,
+            device: None,
+            result: Some(success.result.clone()),
+            error: None,
+            artifacts: Vec::new(),
+            duration_ms: 10,
+        };
+        let json = serde_json::to_value(envelope).unwrap();
+        assert_eq!(json["status"], "failed");
+        assert_eq!(json["exit_code"], 6);
+        assert_eq!(json["result"]["final_status"], "failed");
     }
 
     #[test]

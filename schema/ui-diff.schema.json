@@ -71,7 +71,10 @@
   "$defs": {
     "node": {
       "type": "object",
-      "required": ["path", "depth", "bounds"],
+      "required": ["bounds"],
+      "properties": {
+        "bounds": { "type": "object" }
+      },
       "additionalProperties": true
     }
   },

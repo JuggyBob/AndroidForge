@@ -151,6 +151,9 @@ fn ensure_argv(args: &AgentTestArgs, avd: Option<&str>, serial: Option<&str>) ->
     if let Some(ttl) = &args.ttl {
         argv.extend(["--ttl".to_string(), ttl.clone()]);
     }
+    if let Some(port) = args.port {
+        argv.extend(["--port".to_string(), port.to_string()]);
+    }
     argv.push("--json".to_string());
     argv
 }
@@ -484,6 +487,11 @@ fn finalize(ctx: &CliContext, mut state: RunState) -> Result<CommandSuccess> {
         result,
         format!("{human}Consolidated report: {}\n", report_path.display()),
     );
+    response.status = if state.failure.is_some() {
+        "failed"
+    } else {
+        "success"
+    };
     response.exit_code = state
         .failure
         .as_ref()
@@ -522,6 +530,7 @@ fn pipeline_failure(cli: &Cli, stage: &str, error: ForgeError) -> Result<Command
                     context_error.message()
                 ),
             );
+            response.status = "failed";
             response.exit_code = context_error.exit_code();
             return Ok(response);
         }
@@ -693,6 +702,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                         owner: args.owner.clone(),
                         profile: args.profile.clone(),
                         ttl: args.ttl.clone(),
+                        port: args.port,
                         headless: true,
                         prepare: false,
                     };
@@ -1436,6 +1446,7 @@ async fn dry_run(
         }
     );
     let mut response = success("agent.test", result, human);
+    response.status = if blocked { "blocked" } else { "success" };
     response.exit_code = if blocked { 8 } else { 0 };
     response.session_id = state.session.as_ref().map(|session| session.id.clone());
     Ok(response)
@@ -1463,6 +1474,15 @@ fn dry_run_execute_argv(ctx: &CliContext, args: &AgentTestArgs) -> Vec<String> {
     }
     if let Some(owner) = &args.owner {
         argv.extend(["--owner".to_string(), owner.clone()]);
+    }
+    if let Some(profile) = &args.profile {
+        argv.extend(["--profile".to_string(), profile.clone()]);
+    }
+    if let Some(ttl) = &args.ttl {
+        argv.extend(["--ttl".to_string(), ttl.clone()]);
+    }
+    if let Some(port) = args.port {
+        argv.extend(["--port".to_string(), port.to_string()]);
     }
     if let Some(flow) = &args.flow {
         argv.extend(["--flow".to_string(), flow.clone()]);

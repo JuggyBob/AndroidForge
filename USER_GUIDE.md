@@ -29,7 +29,7 @@ cargo build --workspace --release
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
-## 2.1 Agent loop commands (v0.4.0)
+## 2.1 Agent loop commands (v0.5.0)
 
 These commands reduce repeated discovery and inspection. They keep the same JSON envelope, exit codes
 and evidence rules as the rest of the CLI.
@@ -53,6 +53,7 @@ are reused unless `--refresh-screen` is passed. `--dry-run` avoids capturing a n
 
 ```powershell
 androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
+androidforge session ensure --project . --avd Pixel_8_API_35 --port 5562 --owner MyAgent --json
 androidforge session ensure --project . --serial emulator-5554 --owner MyAgent --json
 ```
 
@@ -70,13 +71,16 @@ androidforge ui observe --session <ID> --package com.example.app --json
 androidforge ui observe --session <ID> --since obs-... --json
 androidforge ui observe --session <ID> --full --json
 androidforge ui diff --session <ID> --from obs-... --json
+androidforge ui diff --session <ID> --from obs-... --full --json
 ```
 
-Default observations contain actionable/scrollable semantics, focus, foreground package/activity,
-display and visible text. `actionable_total` and `actionable_truncated` state whether the compact view
-was capped. `--full` returns the complete parsed hierarchy plus all actionable nodes. Observation tokens
-are session-scoped, boot-id-scoped, kept in the local AndroidForge state directory and expire after 24
-hours or the per-session retention limit. A reboot or cross-session token returns
+Default observations contain interactive `actionable` nodes, non-interactive `context` text, focus,
+foreground package/activity, display and visible text. Each node includes `clickable` and `enabled`;
+`token` is the preferred observation token and `id` is a backward-compatible alias.
+`actionable_total`/`actionable_truncated` and `context_total`/`context_truncated` state whether the
+compact view was capped. `--full` returns the complete parsed hierarchy plus all nodes. Observation
+tokens are session-scoped, boot-id-scoped, kept in the local AndroidForge state directory and expire
+after 24 hours or the per-session retention limit. A reboot or cross-session token returns
 `E_OBSERVATION_EXPIRED` or `E_OBSERVATION_SESSION_MISMATCH`.
 
 ### Action postconditions
@@ -102,7 +106,9 @@ androidforge report explain <RUN_ID> --markdown
 
 Explanations are deterministic and offline. They include category, stable error code, confidence,
 curated evidence, alternatives, exact `argv` next actions, a stable fingerprint and the project root.
-Run commands from `project_root` or pass `--project`.
+`report explain latest` prefers the newest failed/partial/cancelled/interrupted run when one exists.
+Run lookup searches the project, current directory and ancestor artifact stores; `report list --all`
+lists them together. Run commands from `project_root` or pass `--project`.
 
 ### Read-only repair planning
 
@@ -127,6 +133,10 @@ installed build, optionally install, optionally run a fixture, optionally run co
 failure and write a consolidated report. Without `--install`, a mismatch stops at `install_apk`; the
 pipeline never runs a `--fresh` install, clears data or uninstalls. `--dry-run` performs no session,
 install, fixture or conformance changes and lists required confirmations.
+
+A failed pipeline returns envelope `status: "failed"` with a nonzero `exit_code` and the full structured
+result. A blocked dry run returns `status: "blocked"` and exit code 8. The desktop executable also
+answers `--help` and `--version` without opening its GUI.
 
 ## 3. Desktop cockpit
 
@@ -160,7 +170,7 @@ Overview error banner and in Settings.
   `Install APK`. Released/abandoned tombstones are read-only.
 - **Runs** - report-backed runs, project hooks and `Run project flow`. Selecting `Open` or a row shows
   build identity, steps, failure details and evidence.
-- **Triage** - failure metadata, evidence, flaky analysis and the v0.4.0 deterministic explanation:
+- **Triage** - failure metadata, evidence, flaky analysis and the v0.5.0 deterministic explanation:
   category, confidence, summary, fingerprint, curated evidence and copyable next-action commands. The
   commands are never executed by the desktop.
 - **Setup** - the environment section builds the same read-only `doctor fix --plan` result as the CLI,
@@ -619,7 +629,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.4.0` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.5.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents
@@ -634,4 +644,5 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 8. Treat `--yes`, `--fresh`, `clear-data`, snapshot load, time/network changes and raw ADB as destructive.
 9. In the desktop, check the selected project/session in every confirmation; closing the app does not
    release or stop anything. Cancelling a run preserves the emulator.
+
 

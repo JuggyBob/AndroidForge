@@ -56,11 +56,13 @@ pub struct ObservationNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
     pub bounds: ObservationBounds,
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Always present: agents use this to decide whether a node can be tapped.
+    #[serde(default)]
     pub clickable: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub long_clickable: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Always present: agents use this to decide whether an element is usable.
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub focused: bool,
@@ -71,6 +73,8 @@ pub struct ObservationNode {
     #[serde(default, skip_serializing_if = "is_false")]
     pub checked: bool,
     #[serde(default, skip_serializing_if = "is_false")]
+    pub editable: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
     pub password: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub displayed: Option<bool>,
@@ -78,6 +82,13 @@ pub struct ObservationNode {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn non_empty(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 impl ObservationNode {
@@ -89,13 +100,13 @@ impl ObservationNode {
             text: if password {
                 node.text.as_ref().map(|_| "[password]".to_string())
             } else {
-                node.text.clone()
+                non_empty(&node.text)
             },
-            content_desc: node.content_desc.clone(),
-            hint: node.hint.clone(),
-            resource_id: node.resource_id.clone(),
-            class: node.class.clone(),
-            package: node.package.clone(),
+            content_desc: non_empty(&node.content_desc),
+            hint: non_empty(&node.hint),
+            resource_id: non_empty(&node.resource_id),
+            class: non_empty(&node.class),
+            package: non_empty(&node.package),
             bounds: node.bounds.into(),
             clickable: node.clickable,
             long_clickable: node.long_clickable,
@@ -104,6 +115,7 @@ impl ObservationNode {
             selected: node.selected,
             scrollable: node.scrollable,
             checked: node.checked,
+            editable: node.editable_like(),
             password,
             displayed: node.displayed,
         }
@@ -114,6 +126,7 @@ impl ObservationNode {
             || self.long_clickable
             || self.scrollable
             || self.focused
+            || self.editable
             || self.text.as_deref().is_some_and(|value| !value.is_empty())
             || self
                 .content_desc
@@ -181,6 +194,9 @@ pub struct ObservationForeground {
 pub struct Observation {
     pub schema_version: u32,
     pub id: String,
+    /// Preferred alias for `id`; observation tokens are passed to `ui diff --from`.
+    #[serde(default)]
+    pub token: String,
     pub session_id: String,
     pub device_serial: String,
     pub observed_at: String,
@@ -196,6 +212,13 @@ pub struct Observation {
     pub actionable_total: usize,
     #[serde(default, skip_serializing_if = "is_false")]
     pub actionable_truncated: bool,
+    /// Meaningful non-interactive text/context nodes.
+    #[serde(default)]
+    pub context: Vec<ObservationNode>,
+    #[serde(default)]
+    pub context_total: usize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub context_truncated: bool,
     #[serde(default)]
     pub scrollable: Vec<ObservationNode>,
     #[serde(default)]
@@ -221,12 +244,61 @@ struct ObservationRecord {
     session_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct DiffNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_desc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    pub bounds: ObservationBounds,
+    #[serde(default)]
+    pub clickable: bool,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub focused: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub scrollable: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub checked: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub editable: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub password: bool,
+}
+
+impl From<&ObservationNode> for DiffNode {
+    fn from(node: &ObservationNode) -> Self {
+        Self {
+            text: node.text.clone(),
+            content_desc: node.content_desc.clone(),
+            hint: node.hint.clone(),
+            resource_id: node.resource_id.clone(),
+            class: node.class.clone(),
+            bounds: node.bounds.clone(),
+            clickable: node.clickable,
+            enabled: node.enabled,
+            focused: node.focused,
+            scrollable: node.scrollable,
+            checked: node.checked,
+            editable: node.editable,
+            password: node.password,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObservationChanges {
     #[serde(default)]
-    pub added: Vec<ObservationNode>,
+    pub added: Vec<DiffNode>,
     #[serde(default)]
-    pub removed: Vec<ObservationNode>,
+    pub removed: Vec<DiffNode>,
     #[serde(default)]
     pub modified: Vec<NodeModification>,
     pub added_total: usize,
@@ -353,9 +425,11 @@ fn compact_nodes(
 ) -> (
     Vec<ObservationNode>,
     Vec<ObservationNode>,
+    Vec<ObservationNode>,
     Option<ObservationNode>,
 ) {
     let mut actionable = Vec::new();
+    let mut context = Vec::new();
     let mut scrollable = Vec::new();
     let mut focused = None;
     for node in &hierarchy.nodes {
@@ -385,28 +459,56 @@ fn compact_nodes(
                 .hint
                 .as_deref()
                 .is_some_and(|value| !value.is_empty());
-        let interactive =
-            compact.clickable || compact.long_clickable || compact.scrollable || compact.focused;
-        if !has_label {
+        let class = compact.class.as_deref().unwrap_or("").to_ascii_lowercase();
+        let actionable_class = class.contains("button")
+            || class.contains("checkbox")
+            || class.contains("switch")
+            || class.contains("seekbar")
+            || class.contains("spinner")
+            || class.contains("tab")
+            || class.contains("edittext")
+            || class.contains("textfield")
+            || class.contains("autocompletetextview")
+            || class.contains("searchview");
+        // Compose and some system views expose navigation/actions as
+        // android.view.View with a content description but clickable=false.
+        let content_action = compact.content_desc.is_some()
+            && !class.contains("textview")
+            && !class.contains("text");
+        let interactive = compact.clickable
+            || compact.long_clickable
+            || compact.scrollable
+            || compact.focused
+            || compact.editable
+            || actionable_class
+            || content_action;
+        if interactive {
             let has_id = compact
                 .resource_id
                 .as_deref()
                 .is_some_and(|id| !id.is_empty());
-            if !interactive || (!has_id && !compact.scrollable && !compact.focused) {
+            if !has_label && !has_id && !compact.scrollable && !compact.focused && !compact.editable
+            {
                 continue;
             }
-        }
-        if compact.is_layout_container() && !has_label && !compact.scrollable && !compact.focused {
-            continue;
-        }
-        if compact.meaningful() {
-            actionable.push(compact);
+            if compact.is_layout_container()
+                && !has_label
+                && !compact.scrollable
+                && !compact.focused
+            {
+                continue;
+            }
+            if compact.meaningful() {
+                actionable.push(compact);
+            }
+        } else if has_label && !compact.is_layout_container() && compact.meaningful() {
+            context.push(compact);
         }
     }
     actionable.sort_by_key(|node| {
         let rank = if node.focused {
             0
-        } else if node.clickable || node.long_clickable {
+        } else if node.clickable || node.long_clickable || node.editable {
             1
         } else if node.scrollable {
             2
@@ -415,8 +517,9 @@ fn compact_nodes(
         };
         (rank, node.depth, node.bounds.top, node.bounds.left)
     });
+    context.sort_by_key(|node| (node.depth, node.bounds.top, node.bounds.left));
     scrollable.sort_by_key(|left| left.depth);
-    (actionable, scrollable, focused)
+    (actionable, context, scrollable, focused)
 }
 
 pub async fn collect_observation(
@@ -439,34 +542,36 @@ pub async fn collect_observation(
         short_id()
     );
     let observed_at = now_rfc3339();
-    let (mut actionable, mut scrollable, focused) = compact_nodes(&hierarchy);
+    let (mut actionable, mut context, mut scrollable, focused) = compact_nodes(&hierarchy);
     if let Some(package) = package_filter {
-        actionable.retain(|node| {
+        let belongs = |node: &ObservationNode| {
             node.package.as_deref() == Some(package)
                 || node
                     .resource_id
                     .as_deref()
                     .is_some_and(|id| id.starts_with(package))
-        });
-        scrollable.retain(|node| {
-            node.package.as_deref() == Some(package)
-                || node
-                    .resource_id
-                    .as_deref()
-                    .is_some_and(|id| id.starts_with(package))
-        });
+        };
+        actionable.retain(belongs);
+        context.retain(belongs);
+        scrollable.retain(belongs);
     }
     let mut visible_text = actionable
         .iter()
+        .chain(context.iter())
         .filter_map(|node| node.label().map(str::to_string))
         .collect::<Vec<_>>();
     visible_text.sort();
     visible_text.dedup();
-    visible_text.truncate(40);
+    visible_text.truncate(32);
     let actionable_total = actionable.len();
-    let actionable_truncated = !include_nodes && actionable_total > 32;
+    let context_total = context.len();
+    let actionable_truncated = !include_nodes && actionable_total > 24;
     if actionable_truncated {
-        actionable.truncate(32);
+        actionable.truncate(24);
+    }
+    let context_truncated = !include_nodes && context_total > 16;
+    if context_truncated {
+        context.truncate(16);
     }
 
     let raw_dir = observations_dir(&ctx.paths, &session.id);
@@ -491,6 +596,7 @@ pub async fn collect_observation(
     let observation = Observation {
         schema_version: OBSERVATION_SCHEMA_VERSION,
         id: token.clone(),
+        token: token.clone(),
         session_id: session.id.clone(),
         device_serial: serial.clone(),
         observed_at,
@@ -502,6 +608,9 @@ pub async fn collect_observation(
         actionable,
         actionable_total,
         actionable_truncated,
+        context,
+        context_total,
+        context_truncated,
         scrollable,
         visible_text,
         nodes: include_nodes.then(|| {
@@ -515,7 +624,7 @@ pub async fn collect_observation(
             package: hierarchy.package_name.clone(),
             rotation: hierarchy.rotation,
             node_count: hierarchy.nodes.len(),
-            compact_node_count: actionable_total,
+            compact_node_count: actionable_total + context_total,
         },
         raw_xml_path: raw.to_string_lossy().into_owned(),
     };
@@ -609,6 +718,9 @@ impl ObservationRecordView {
             })
             .unwrap_or(0);
         observation.stale = observation.age_ms > 24 * 60 * 60 * 1000;
+        if observation.token.is_empty() {
+            observation.token = observation.id.clone();
+        }
         observation
     }
 
@@ -677,6 +789,9 @@ pub fn latest_observation(paths: &ForgePaths, session_id: &str) -> Option<Observ
         })
         .unwrap_or(0);
     observation.stale = observation.age_ms > 24 * 60 * 60 * 1000;
+    if observation.token.is_empty() {
+        observation.token = observation.id.clone();
+    }
     Some(observation)
 }
 
@@ -699,7 +814,11 @@ fn semantic_key(node: &ObservationNode) -> String {
 
 fn group_nodes(observation: &Observation) -> BTreeMap<String, Vec<ObservationNode>> {
     let mut groups: BTreeMap<String, Vec<ObservationNode>> = BTreeMap::new();
-    for node in &observation.actionable {
+    for node in observation
+        .actionable
+        .iter()
+        .chain(observation.context.iter())
+    {
         groups
             .entry(semantic_key(node))
             .or_default()
@@ -807,16 +926,16 @@ fn compare_nodes(
     changes
 }
 
-pub fn diff_observations(before: &Observation, after: &Observation) -> ObservationDiff {
+pub fn diff_observations(before: &Observation, after: &Observation, full: bool) -> ObservationDiff {
     let mut before_groups = group_nodes(before);
     let mut changes = ObservationChanges::default();
-    for node in &after.actionable {
+    for node in after.actionable.iter().chain(after.context.iter()) {
         let key = semantic_key(node);
         let previous = before_groups
             .get_mut(&key)
             .and_then(|group| (!group.is_empty()).then(|| group.remove(0)));
         match previous {
-            None => changes.added.push(node.clone()),
+            None => changes.added.push(DiffNode::from(node)),
             Some(previous) => {
                 let fields = compare_nodes(&previous, node, &after.display);
                 if !fields.is_empty() {
@@ -829,22 +948,22 @@ pub fn diff_observations(before: &Observation, after: &Observation) -> Observati
         }
     }
     for group in before_groups.values() {
-        changes.removed.extend(group.iter().cloned());
+        changes.removed.extend(group.iter().map(DiffNode::from));
     }
     changes.added_total = changes.added.len();
     changes.removed_total = changes.removed.len();
     changes.modified_total = changes.modified.len();
-    const MAX_DIFF_NODES: usize = 100;
-    if changes.added.len() > MAX_DIFF_NODES {
-        changes.added.truncate(MAX_DIFF_NODES);
+    let max_nodes: usize = if full { 100 } else { 12 };
+    if changes.added.len() > max_nodes {
+        changes.added.truncate(max_nodes);
         changes.truncated = true;
     }
-    if changes.removed.len() > MAX_DIFF_NODES {
-        changes.removed.truncate(MAX_DIFF_NODES);
+    if changes.removed.len() > max_nodes {
+        changes.removed.truncate(max_nodes);
         changes.truncated = true;
     }
-    if changes.modified.len() > MAX_DIFF_NODES {
-        changes.modified.truncate(MAX_DIFF_NODES);
+    if changes.modified.len() > max_nodes {
+        changes.modified.truncate(max_nodes);
         changes.truncated = true;
     }
     changes.focus_changed = before.focused.as_ref().map(|node| &node.path)
@@ -906,7 +1025,7 @@ pub async fn observe_command(
         Some(token) => {
             let record = load_observation(&ctx.paths, &session.id, token)?;
             verify_boot_id(ctx, session, &record).await?;
-            let diff = diff_observations(&record.observation(), &observation);
+            let diff = diff_observations(&record.observation(), &observation, args.full);
             Some(diff)
         }
         None => None,
@@ -975,14 +1094,19 @@ pub async fn diff_command(
         }
         None => collect_observation(ctx, session, device, None, false).await?,
     };
-    let diff = diff_observations(&before, &after);
+    let diff = diff_observations(&before, &after, args.full);
     let human = format!(
-        "Compared {} with {}: {} added, {} removed, {} modified.\n",
+        "Compared {} with {}: {} added, {} removed, {} modified{}.\\n",
         diff.from,
         diff.to,
-        diff.changes.added.len(),
-        diff.changes.removed.len(),
-        diff.changes.modified.len()
+        diff.changes.added_total,
+        diff.changes.removed_total,
+        diff.changes.modified_total,
+        if diff.changes.truncated {
+            " (lists truncated; see totals)"
+        } else {
+            ""
+        }
     );
     Ok(success("ui.diff", serde_json::to_value(&diff)?, human)
         .with_optional_session(Some(session.id.clone()))
@@ -1020,6 +1144,7 @@ mod tests {
             selected: false,
             scrollable: false,
             checked: false,
+            editable: false,
             password: false,
             displayed: Some(true),
         }
@@ -1030,6 +1155,7 @@ mod tests {
         Observation {
             schema_version: OBSERVATION_SCHEMA_VERSION,
             id: id.to_string(),
+            token: id.to_string(),
             session_id: "ses-test".to_string(),
             device_serial: "emulator-5554".to_string(),
             observed_at: now_rfc3339(),
@@ -1050,6 +1176,9 @@ mod tests {
             actionable: nodes,
             actionable_total,
             actionable_truncated: false,
+            context: Vec::new(),
+            context_total: 0,
+            context_truncated: false,
             scrollable: Vec::new(),
             visible_text: Vec::new(),
             nodes: None,
@@ -1081,7 +1210,7 @@ mod tests {
         let mut after_node = node("root/0", "Saved", bounds(1, 1, 101, 51));
         after_node.enabled = false;
         let after = observation("obs-2", vec![after_node]);
-        let diff = diff_observations(&before, &after);
+        let diff = diff_observations(&before, &after, false);
         assert_eq!(diff.changes.added_total, 0);
         assert_eq!(diff.changes.removed_total, 0);
         assert_eq!(diff.changes.modified_total, 1);
@@ -1101,7 +1230,7 @@ mod tests {
             "obs-2",
             vec![node("root/0", "Settings", bounds(1, 1, 101, 51))],
         );
-        let diff = diff_observations(&before, &after);
+        let diff = diff_observations(&before, &after, false);
         assert_eq!(diff.changes.modified_total, 0);
         assert_eq!(diff.changes.added_total, 0);
         assert_eq!(diff.changes.removed_total, 0);
@@ -1117,7 +1246,7 @@ mod tests {
             "obs-2",
             vec![node("root/0", "Settings", bounds(0, 0, 300, 200))],
         );
-        let diff = diff_observations(&before, &after);
+        let diff = diff_observations(&before, &after, false);
         assert_eq!(diff.changes.modified_total, 1);
         assert!(
             diff.changes.modified[0]
@@ -1143,7 +1272,7 @@ mod tests {
                 node("root/1", "Dos", bounds(0, 60, 100, 110)),
             ],
         );
-        let diff = diff_observations(&before, &after);
+        let diff = diff_observations(&before, &after, false);
         assert_eq!(diff.changes.added_total, 0);
         assert_eq!(diff.changes.removed_total, 0);
         assert_eq!(diff.changes.modified_total, 2);
@@ -1164,10 +1293,33 @@ mod tests {
                 })
                 .collect(),
         );
-        let diff = diff_observations(&before, &after);
-        assert_eq!(diff.changes.added_total, 150);
-        assert_eq!(diff.changes.added.len(), 100);
-        assert!(diff.changes.truncated);
+        let compact = diff_observations(&before, &after, false);
+        assert_eq!(compact.changes.added_total, 150);
+        assert_eq!(compact.changes.added.len(), 12);
+        assert!(compact.changes.truncated);
+        let full = diff_observations(&before, &after, true);
+        assert_eq!(full.changes.added.len(), 100);
+        assert!(full.changes.truncated);
+    }
+
+    #[test]
+    fn compact_nodes_separates_interactive_targets_from_context_text() {
+        let xml = r#"<hierarchy rotation="0">
+  <node index="0" text="Save" resource-id="com.example:id/save" class="android.widget.Button" package="com.example" content-desc="" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[100,200][300,300]" />
+  <node index="1" text="Footer note" resource-id="" class="android.widget.TextView" package="com.example" content-desc="" clickable="false" enabled="true" focused="false" scrollable="false" bounds="[100,400][700,450]" />
+</hierarchy>"#;
+        let hierarchy = UiHierarchy::parse(xml).unwrap();
+        let (actionable, context, _, _) = compact_nodes(&hierarchy);
+        assert_eq!(actionable.len(), 1);
+        assert_eq!(actionable[0].text.as_deref(), Some("Save"));
+        assert!(actionable[0].clickable);
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0].text.as_deref(), Some("Footer note"));
+        assert!(!context[0].clickable);
+        let value = serde_json::to_value(&context[0]).unwrap();
+        assert_eq!(value["clickable"], false);
+        assert_eq!(value["enabled"], true);
+        assert!(value.get("resource_id").is_none());
     }
 
     #[test]

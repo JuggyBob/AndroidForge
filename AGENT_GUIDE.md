@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.4.0 agent loop
+## 0. The v0.5.0 agent loop
 
 The shortest reliable loop is:
 
@@ -77,6 +77,7 @@ Never execute an action blindly. The argv is exact, but it is not run automatica
 
 ```powershell
 androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
+androidforge session ensure --project . --avd Pixel_8_API_35 --port 5562 --owner MyAgent --json
 androidforge session ensure --project . --serial emulator-5554 --owner MyAgent --json
 ```
 
@@ -84,7 +85,8 @@ androidforge session ensure --project . --serial emulator-5554 --owner MyAgent -
 session, attaches to a warm unowned emulator instead of starting a second one, or launches the
 requested AVD. It never steals a device owned by another session. The response includes
 `session_id`, `owner`, `device_serial`, `avd`, `acquisition_mode`, `readiness`, `lease_expires_at`,
-`lease_expired`, `needs_reconciliation`, `recovery` and `warnings`.
+`lease_expired`, `needs_reconciliation`, `recovery` and `warnings`. Automatic port allocation skips
+ports already used by connected ADB emulators; `--port` requests an explicit even console port.
 
 TTL is advisory metadata. Expiry never stops an emulator or interrupts an active operation. Without
 `--ttl`, an expired lease is reported as `needs_reconciliation: true`; with `--ttl`, ensure renews it
@@ -103,21 +105,24 @@ androidforge ui observe --session ses-... --since obs-... --json
 androidforge ui observe --session ses-... --full --json
 androidforge ui diff --session ses-... --from obs-... --json
 androidforge ui diff --session ses-... --from obs-... --to obs-... --json
+androidforge ui diff --session ses-... --from obs-... --full --json
 ```
 
-A compact observation returns the foreground package/activity, display, focus, actionable and
-scrollable nodes, visible text, freshness and a token such as `obs-...`. Default output is intentionally
-filtered and capped; `actionable_total` and `actionable_truncated` tell you whether more nodes exist.
-`--full` returns the complete parsed hierarchy.
+A compact observation returns the foreground package/activity, display, focus, interactive
+`actionable` nodes, non-interactive `context` text, scrollable nodes, visible text, freshness and a
+preferred `token` (with `id` retained as an alias). Every node includes `clickable` and `enabled`;
+`editable` is present when true. Default output is intentionally filtered and capped;
+`actionable_total`/`actionable_truncated` and `context_total`/`context_truncated` tell you whether more
+nodes exist. `--full` returns the complete parsed hierarchy.
 
 Tokens are scoped to one session and one device boot. They expire after 24 hours, after the per-session
 retention limit, or when the device reboots. Cross-session use returns
 `E_OBSERVATION_SESSION_MISMATCH`; a reboot or expiry returns `E_OBSERVATION_EXPIRED`. Create a fresh
 observation instead of guessing.
 
-`ui diff` reports semantic added, removed and modified nodes, focus/package/activity changes and
-meaningful bounds changes. Pure pixel movement is ignored. Large diffs are truncated with explicit
-counts.
+`ui diff` reports compact semantic added, removed and modified nodes, focus/package/activity changes
+and meaningful bounds changes. Pure pixel movement is ignored. Lists are capped at 12 by default with
+explicit totals/`truncated`; pass `--full` to raise the cap to 100.
 
 ### 0.5 UI actions with postconditions
 
@@ -148,9 +153,14 @@ androidforge report explain <RUN_ID> --markdown
 The explanation contains `diagnosis.category`, `diagnosis.code`, `diagnosis.confidence`, a summary,
 curated evidence references, alternatives, `next_actions` with exact argv, a stable `sha256:` fingerprint
 and `project_root`. Categories include environment, device, emulator, install, signature, application,
-process, task, ANR, selector, selector_ambiguous, timeout, assertion, permission, configuration,
-cancelled, interrupted and unknown. Confidence is `high`, `medium`, `low` or `insufficient_evidence`;
-there is no fake percentage.
+process, task, ANR, selector, selector_ambiguous, ui_automation, timeout, assertion, permission,
+configuration, cancelled, interrupted and unknown. Confidence is `high`, `medium`, `low` or
+`insufficient_evidence`; there is no fake percentage.
+
+`report explain latest` selects the newest failed/partial/cancelled/interrupted run when one exists,
+falling back to the newest run. Run lookup searches the current project, the current directory and
+ancestor artifact stores, so runs created without `--project` remain discoverable. Use
+`androidforge report list --all` to list runs across those stores.
 
 Run next actions from `project_root`, or pass that path with `--project`. The same failure produces the
 same fingerprint across timestamps, run IDs, temporary paths and dynamic numeric IDs. Different
@@ -181,6 +191,10 @@ cannot prove the installed build is current, it stops at `install_apk` and tells
 lists every planned stage, required confirmations, target session/target acquisition and state-changing
 operations without executing them. The result records per-stage status, duration, equivalent command
 argv, failure stage/code, explanation and artifact paths, plus a consolidated report path.
+
+A failed pipeline returns envelope `status: "failed"` with `exit_code` set to the failure code and the
+full structured `result` preserved. A blocked dry run returns `status: "blocked"` and exit code 8.
+Do not treat a nonzero exit code as an empty error: inspect `result.failure` and the report.
 
 ## 1. The operating model
 

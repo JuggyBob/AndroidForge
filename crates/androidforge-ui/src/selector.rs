@@ -325,6 +325,11 @@ pub fn select(hierarchy: UiHierarchy, selector: &Selector) -> Result<Selection> 
         .with_suggestion(
             "Add a more specific condition, or pass --index N to choose one of the listed matches.",
         );
+        if matches.iter().any(|item| item.clickable) && matches.iter().any(|item| !item.clickable) {
+            error = error.with_suggestion(
+                "If only one candidate is interactive, add --clickable to exclude non-clickable text.",
+            );
+        }
         for item in &matches {
             error = error.with_suggestion(format!(
                 "--index {}: {}",
@@ -392,6 +397,17 @@ pub fn selector_not_found(hierarchy: &UiHierarchy, selector: &Selector) -> Forge
     .with_suggestion("Run `androidforge ui dump` and inspect the current hierarchy.")
     .with_suggestion("Use --contains for partial text matching if the label is dynamic.")
     .with_suggestion("Use `androidforge ui wait` if the screen may still be loading.")
+    .with_suggestion(if let Some(text) = &selector.text {
+        format!(
+            "If the target is below the fold, run `androidforge ui scroll-to --text \"{text}\" --json`."
+        )
+    } else if let Some(desc) = &selector.content_desc {
+        format!(
+            "If the target is below the fold, run `androidforge ui scroll-to --content-desc \"{desc}\" --json`."
+        )
+    } else {
+        "If the target is below the fold, use `androidforge ui scroll-to` with the same selector.".to_string()
+    })
 }
 
 #[cfg(test)]
