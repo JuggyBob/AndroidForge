@@ -75,12 +75,12 @@ validation and packaging validation from areas that were not exercised.
 ### Packaging validation
 
 - `.\packaging\package.ps1 -SkipBuild` produced:
-  - `androidforge-cli-windows-x86_64.zip` (3,837,067 bytes), SHA-256
-    `3737ec9ad2950fc0bee861f7490128f2e93d5f063689f8a4e105ef328a873255`.
-  - `androidforge-desktop-windows-x86_64.zip` (10,442,651 bytes), SHA-256
-    `9aeb3bf84a22822b2eed068b5debd83d239ceda84d6e2866adf45b9e63088859`.
-  - `androidforge-windows-x86_64-setup.exe` (8,948,509 bytes), SHA-256
-    `f8245889c8903261fdd50a6770c5e73c6a839950747023ac402613b76859ce5f`.
+  - `androidforge-cli-windows-x86_64.zip` (3,836,839 bytes), SHA-256
+    `261aa5b5b0658ecef19fb9883852a21d091227868e6708e23c581362c7ce5c26`.
+  - `androidforge-desktop-windows-x86_64.zip` (10,442,902 bytes), SHA-256
+    `63898187634964b1117fba90df8f601d9366eba24b935154d320d45ac8a4362b`.
+  - `androidforge-windows-x86_64-setup.exe` (8,944,319 bytes), SHA-256
+    `cfaaa1c0046900e015f8adcea9520fe45859cdd85f760192e079429c742708c0`.
   - `SHA256SUMS.txt` matching all three assets.
 - The portable ZIP was extracted into a clean directory. `androidforge.exe --version` reported
   `androidforge 0.4.0`; `doctor fix --plan --json` reported `read_only: true`; the adjacent
@@ -97,6 +97,7 @@ validation and packaging validation from areas that were not exercised.
 - Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.4.0>
 - Tag: `v0.4.0`, tag object `83fb053083c479316ab74b311193ef27be0f01ee`, commit
   `34f2706df37a128fb2573258ee6380fd216b04fa`.
+- The tag-triggered Release workflow (`43943405606`) passed and uploaded CI-built assets.
 - Assets attached: `androidforge-cli-windows-x86_64.zip`,
   `androidforge-desktop-windows-x86_64.zip`, `androidforge-windows-x86_64-setup.exe`,
   `SHA256SUMS.txt`.
@@ -229,6 +230,7 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
 
 
 
