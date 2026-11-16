@@ -185,6 +185,44 @@ external process failed.
 `report import junit <file> --run <ID>` merges Gradle/JUnit XML into the same run. It does not replace
 Gradle, Robolectric, Compose instrumentation or your existing unit tests.
 
+Use run analysis without a second report format:
+
+```powershell
+androidforge report reconcile --dry-run --json
+androidforge report reconcile --run <RUN_ID> --outcome interrupted --json
+androidforge report compare <RUN_ID> --baseline <BASELINE_ID> --json
+androidforge report flaky --limit 30 --min-runs 3 --json
+```
+
+`report reconcile` only finalizes a `running` report when its creator PID is gone (or when an explicit
+outcome is requested). `report compare` warns when project/scenario or build/environment identity differs;
+`report flaky` never classifies a step from a single failure. Both analysis payloads are documented by
+`schema/analysis.schema.json`.
+
+Live read-only captures for agents and clients:
+
+```powershell
+androidforge capture frame --session <ID> --output .\frame.png --json
+androidforge diagnostics logcat peek --session <ID> --package com.example.app --level warn --since "11-16 18:00:00.000" --json
+androidforge ui inspect --session <ID> --json
+```
+
+`capture frame` and `logcat peek` do not create runs; `ui inspect` returns the parsed hierarchy without
+writing an artifact. `logcat peek` treats an omitted package as all processes and never clears the device
+buffer.
+
+Managed storage:
+
+```powershell
+androidforge maintenance summary --json
+androidforge maintenance clean --dry-run --older-than 30d --keep-last 10 --sessions --runs --json
+androidforge maintenance clean --yes --older-than 30d --keep-last 10 --sessions --runs --json
+androidforge session prune --dry-run --older-than 7d --keep-last 3 --json
+```
+
+Cleanup only considers terminal sessions and runs under AndroidForge-managed paths. Active sessions and
+running runs are never removed. Preview first; `--yes` is required for deletion.
+
 ## 8. Fixtures, hooks and conformance
 
 Project-specific behavior belongs in `.androidforge/project.toml`, fixtures, hooks and scripts. Never

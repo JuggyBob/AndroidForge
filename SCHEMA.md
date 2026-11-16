@@ -22,6 +22,8 @@ The schema files:
 | `fixture.schema.json` | Fixture manifest, steps and action types. |
 | `hook.schema.json` | Named hook entries, `run_as`, and `verify` postconditions. |
 | `conformance.schema.json` | Conformance flow, expectations and JSON-path checks. |
+| `analysis.schema.json` | `report compare` and `report flaky` result payloads. |
+| `maintenance.schema.json` | `maintenance summary` and `maintenance clean` result payloads. |
 
 Every schema is versioned with `schema_version = 1`, `adapter_version = 1`, fixture `version = 1`, and conformance `version = 1`. Unknown adapter fields are rejected deliberately.
 
@@ -195,3 +197,21 @@ Reports and text artifacts are redacted before writing when `[diagnostics].redac
 ## JUnit import
 
 `report import junit <file> --run <ID>` parses one or more `<testsuite>` elements, writes the source XML under `junit/`, adds a step with counts and failures, and checksums it in the manifest. Invalid XML returns `E_JUNIT_INVALID`. It does not execute Gradle or replace existing test workflows.
+
+## Run analysis
+
+`report compare` returns a `RunComparison` object. `comparable` is false when project or scenario
+identity differs; `notes` explains build/environment differences that could be mistaken for a test
+regression. Step changes use `regressed`, `fixed`, `failed_both`, `unchanged`, `added`, `removed` or
+`unknown`. `report flaky` returns a heuristic report: a step is classified `flaky` only when it has at
+least one success and one failure across at least `--min-runs` compatible terminal runs. Cancelled,
+interrupted, timed-out and abandoned runs are excluded. Both payloads are described by
+`schema/analysis.schema.json`.
+
+## Maintenance
+
+`maintenance summary` reports managed paths, byte counts, active/terminal sessions and runs, stale
+sessions, largest runs and the terminal-session list. `maintenance clean` defaults to a dry run and
+requires `--yes` for deletion; `--sessions`, `--runs`, `--older-than` and `--keep-last` select the
+eligible set. Active sessions and running runs are always excluded. The result lists every pruned
+session and deleted run. Both payloads are described by `schema/maintenance.schema.json`.

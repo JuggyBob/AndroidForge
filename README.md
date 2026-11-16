@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.2.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.3.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -72,8 +72,26 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Evidence | Screenshots, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
 | Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time |
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
-| Desktop | Native egui/eframe cockpit: read-only overview, devices, sessions, runs, evidence and controlled P1 actions |
+| Desktop | Native egui/eframe cockpit: onboarding, overview, devices, sessions, runs, triage, comparison, live logcat, device preview/inspector, maintenance and updates |
+| Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
+| Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
+
+## What is new in v0.3.0
+
+- **First-run setup wizard** with real CLI, Android SDK, ADB, emulator and AVD checks, plus a safe device verification step.
+- **Actionable diagnostics** from `doctor`, including required/optional status, blocking impact and suggested fixes.
+- **Update awareness and CLI repair** from GitHub Releases, with SHA-256 verification and rollback-safe sidecar replacement.
+- **Failure triage, run comparison and flaky-step analysis** with transparent matching rules and evidence links.
+- **Live logcat** with local filtering, search, pause/follow, bounded buffers, crash/ANR highlighting and export.
+- **Device preview and semantic inspector** with periodic screenshots, parsed hierarchy, bounds highlighting and semantic tap/type/scroll/back actions.
+- **Maintenance center** with storage accounting and confirmed, terminal-only cleanup.
+- **Substantially redesigned desktop UI** with a consistent design system, keyboard-friendly navigation and validated 1280×720, 1366×768 and 1920×1080 layouts.
+- **Portable ZIP and per-user Windows installer**, both unsigned.
+
+Screenshots of the released application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/).
+
+![AndroidForge desktop overview](docs/screenshots/v0.3.0/overview-1280x720.png)
 
 ## Requirements
 
@@ -93,21 +111,23 @@ environment failure; missing Maestro is a warning.
 
 1. Open [Releases](https://github.com/JuggyBob/AndroidForge/releases).
 2. Choose an asset and verify it with `SHA256SUMS.txt`:
-   - `androidforge-cli-windows-x86_64.zip` — standalone `androidforge.exe`;
-   - `androidforge-desktop-windows-x86_64.zip` — portable `androidforge.exe` + `androidforge-desktop.exe`.
-3. Extract the CLI zip, put `androidforge.exe` on `PATH`, and run:
+   - `androidforge-desktop-windows-x86_64.zip` - portable `androidforge.exe` + `androidforge-desktop.exe`, docs and license;
+   - `androidforge-windows-x86_64-setup.exe` - per-user Windows installer with both executables, Start Menu shortcut and uninstaller;
+   - `androidforge-cli-windows-x86_64.zip` - standalone `androidforge.exe` for PATH/automation.
+3. For the installer, run the setup executable. No administrator rights are required. The application installs under your user profile.
+4. For the portable build, extract the ZIP and launch `androidforge-desktop.exe`. Keep `androidforge.exe` beside it.
+5. For the CLI only, extract the CLI zip, put `androidforge.exe` on `PATH`, and run:
 
 ```powershell
 androidforge --version
 androidforge doctor --json
 ```
 
-4. For the desktop cockpit, extract the combined zip and launch `androidforge-desktop.exe`. It locates
-   the CLI beside itself first, then a configured path, then the workspace build, then `PATH`. Open
-   Settings to point at a different CLI or workspace.
+The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.2.0` version line. The desktop refuses a CLI whose JSON schema it
-does not understand rather than guessing.
+Both executables follow the same `0.3.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+
+> **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
 ### Build from source
 
@@ -257,13 +277,12 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.2.0`.** The CLI was exercised against three real apps on an Android 16 emulator:
-CalcSuite 3.0.3, DiscountHunter debug and IronPulse 4.4.0. The same release binary installed apps,
-drove semantic UI, ran fixtures and conformance flows, verified APK identity, collected evidence and
-produced structured reports. The `0.2.0` native desktop cockpit was then exercised against CalcSuite:
-project discovery, session start/attach/release/restart/stop, APK inspect/dry-run/install, conformance
-runs, hook runs, run details, screenshot/log/manifest evidence, output streaming, cancellation and error
-inspection. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.3.0`.** The CLI has been exercised against real apps on an Android 16 emulator, and the
+`0.3.0` desktop was validated against a real emulator session and the CalcSuite project. Validation
+covered onboarding screens, environment diagnostics, session start/restart, APK inspection and verified
+install, conformance execution, cancellation/reconciliation, live logcat, device preview and semantic
+hierarchy actions, run comparison and safe maintenance preview/cleanup. See
+[VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -274,7 +293,10 @@ Validated:
 - Fixtures, hooks with postconditions, conformance flows, JUnit import.
 - Screenshots, logcat, dumpsys, notifications/jobs/alarms evidence.
 - Build identity inheritance from installs into later runs.
-- Native desktop P0 cockpit and P1 controlled actions, including process-tree cancellation.
+- Native desktop onboarding, triage, comparison, flaky analysis, logcat, preview/inspector, maintenance
+  and controlled P1 actions, including process-tree cancellation and run reconciliation.
+- Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
+  install directory.
 
 Not yet validated:
 
@@ -283,8 +305,9 @@ Not yet validated:
 - Snapshot load/restore and root-only time changes.
 - macOS and Linux hosts (the desktop is Windows-validated; the CLI is not validated there either).
 - Very large test suites or long-duration stress runs.
-- Desktop editing of project adapters/fixtures or an embedded device mirror; the cockpit is an operator
-  console, not an IDE.
+- Live update download/repair against a matching published CLI release (discovery and checksum logic are
+  implemented and unit-tested; the public release carrying this version is the first usable target).
+- Desktop editing of project adapters/fixtures. The cockpit is an operator console, not an IDE.
 
 Unsupported features return `E_UNSUPPORTED_OPERATION` with a reason and alternatives. A capability
 that was not exercised is not claimed as verified.

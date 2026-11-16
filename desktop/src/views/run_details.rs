@@ -4,110 +4,91 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
 use crate::backend::evidence;
-use crate::components::{copy_button, empty_state, error_banner, key_value, muted, section_title};
-use crate::state::{EvidenceTab, RunDetailState};
+use crate::components::*;
+use crate::state::*;
 use crate::theme;
-use crate::views::overview::format_duration;
+use crate::views::format_duration;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
-    let Some((run_id, status, path, tab, project, command, started_at, duration_ms)) =
-        app.run_detail.as_ref().map(|state| {
-            let report = &state.detail.report;
-            (
-                report.run_id.clone(),
-                report.status.clone(),
-                state.detail.path.path.clone(),
-                state.evidence.tab,
-                report.project.clone(),
-                report.command.clone(),
-                report.started_at.clone(),
-                report.duration_ms,
-            )
-        })
-    else {
+    let Some(state) = app.run_detail.as_ref() else {
+        empty_state(ui, "No run selected", "Choose a run from the Runs page.");
         return;
     };
-    let mut back = false;
+    let report = state.detail.report.clone();
+    let path = state.detail.path.path.clone();
+    let tab = state.evidence.tab;
+    let mut new_tab = tab;
     ui.horizontal(|ui| {
-        if ui.button("← Back to runs").clicked() {
-            back = true;
+        if ghost_button(ui, "← Back to runs").clicked() {
+            app.clear_run_detail();
         }
-        ui.label(RichText::new(&run_id).size(15.0).strong());
-        ui.label(
-            RichText::new(&status)
-                .size(11.0)
-                .color(theme::status_color(&status)),
-        );
+        ui.label(RichText::new(&report.run_id).size(17.0).strong());
+        status_pill(ui, &report.status, theme::status_color(&report.status));
         if app.run_loading {
             ui.spinner();
         }
-        if !path.is_empty() {
-            ui.add_space(8.0);
-            if ui.small_button("Open run folder").clicked() {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if secondary_button(ui, "Open folder").clicked() && !path.is_empty() {
                 let _ = open::that(&path);
             }
-            copy_button(ui, &path, "Copy path");
-        }
+            if ghost_button(ui, "Copy path").clicked() && !path.is_empty() {
+                ui.ctx().copy_text(path.clone());
+            }
+            if ghost_button(ui, "Compare").clicked() {
+                app.compare_form.current = Some(report.run_id.clone());
+                app.set_page(Page::Compare);
+            }
+            if !matches!(report.status.as_str(), "passed")
+                && secondary_button(ui, "Triage").clicked()
+            {
+                app.open_triage(Some(report.run_id.clone()), ui.ctx());
+            }
+        });
     });
-    if back {
-        app.clear_run_detail();
-        return;
-    }
     ui.label(
         RichText::new(format!(
             "{} · {} · {} · {}",
-            project,
-            command,
-            started_at,
-            format_duration(duration_ms)
+            report.project,
+            report.command,
+            report.started_at,
+            format_duration(report.duration_ms)
         ))
         .size(10.0)
         .color(theme::MUTED),
     );
-    ui.add_space(5.0);
-    let mut new_tab = tab;
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut new_tab, EvidenceTab::Summary, "Summary");
-        ui.selectable_value(&mut new_tab, EvidenceTab::Artifacts, "Evidence");
-        ui.selectable_value(&mut new_tab, EvidenceTab::Raw, "Raw files");
-    });
+    ui.add_space(6.0);
+    segmented(
+        ui,
+        &[
+            ("Summary", tab == EvidenceTab::Summary),
+            ("Evidence", tab == EvidenceTab::Artifacts),
+            ("Raw files", tab == EvidenceTab::Raw),
+        ],
+        |index| {
+            new_tab = match index {
+                0 => EvidenceTab::Summary,
+                1 => EvidenceTab::Artifacts,
+                _ => EvidenceTab::Raw,
+            }
+        },
+    );
     if new_tab != tab {
         if let Some(state) = app.run_detail.as_mut() {
             state.evidence.tab = new_tab;
         }
     }
-    ui.separator();
+    ui.add_space(8.0);
     match new_tab {
         EvidenceTab::Summary => {
-            if let Some(state) = app.run_detail.as_ref() {
-                summary(ui, state);
-            }
+            summary(ui, &report);
         }
         EvidenceTab::Artifacts => {
-            let mut filter = app
-                .run_detail
-                .as_ref()
-                .map(|state| state.evidence.filter.clone())
-                .unwrap_or_default();
             let mut pending = None;
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Filter").size(11.0).color(theme::MUTED));
-                ui.add(
-                    egui::TextEdit::singleline(&mut filter)
-                        .desired_width(220.0)
-                        .hint_text("path, kind or description"),
-                );
-            });
             if let Some(state) = app.run_detail.as_mut() {
-                state.evidence.filter = filter.clone();
-            }
-            ui.add_space(3.0);
-            if let Some(state) = app.run_detail.as_mut() {
-                evidence_split(ui, state, &filter, &mut pending);
+                pending = evidence_tab(ui, state);
             }
             if let Some(key) = pending {
-                let ctx = ui.ctx().clone();
-                select_artifact(app, &key, &ctx);
+                select_artifact(app, &key, ui.ctx());
             }
         }
         EvidenceTab::Raw => {
@@ -118,100 +99,127 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-fn summary(ui: &mut egui::Ui, state: &RunDetailState) {
-    let report = &state.detail.report;
+fn summary(ui: &mut egui::Ui, report: &crate::models::RunReport) {
     if let Some(failure) = &report.failure {
         error_banner(ui, &format!("{}: {}", failure.code, failure.message));
         for suggestion in &failure.suggestions {
-            ui.label(RichText::new(format!("• {suggestion}")).size(10.0));
+            ui.label(
+                RichText::new(format!("• {suggestion}"))
+                    .size(10.0)
+                    .color(theme::MUTED),
+            );
         }
         ui.add_space(4.0);
     }
-    section_title(ui, "Build identity");
-    egui::Grid::new("run-build")
-        .num_columns(4)
-        .spacing([16.0, 4.0])
-        .show(ui, |ui| {
-            key_value(
-                ui,
-                "Package",
-                report.build.package.as_deref().unwrap_or("-"),
+    let build = &report.build;
+    section_label(ui, "Build identity");
+    card(ui, |ui| {
+        ui.columns(2, |columns| {
+            kv_grid(
+                &mut columns[0],
+                "run-build-left",
+                &[
+                    (
+                        "Package",
+                        build.package.clone().unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
+                        "Version",
+                        format!(
+                            "{} ({})",
+                            build
+                                .version_name
+                                .clone()
+                                .unwrap_or_else(|| "-".to_string()),
+                            build
+                                .version_code
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "-".to_string())
+                        ),
+                    ),
+                    (
+                        "APK SHA-256",
+                        build.apk_sha256.clone().unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
+                        "Installed SHA-256",
+                        build
+                            .installed_apk_sha256
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                ],
             );
-            key_value(
-                ui,
-                "Version",
-                &format!(
-                    "{} ({})",
-                    report.build.version_name.as_deref().unwrap_or("-"),
-                    report
-                        .build
-                        .version_code
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "-".to_string())
-                ),
+            kv_grid(
+                &mut columns[1],
+                "run-build-right",
+                &[
+                    (
+                        "Certificate",
+                        build.cert_sha256.clone().unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
+                        "Verified",
+                        if build.verified { "yes" } else { "no" }.to_string(),
+                    ),
+                    (
+                        "Session",
+                        report.session_id.clone().unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
+                        "Device",
+                        report
+                            .device_serial
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                ],
             );
-            ui.end_row();
-            key_value(
-                ui,
-                "APK SHA-256",
-                report.build.apk_sha256.as_deref().unwrap_or("-"),
-            );
-            key_value(
-                ui,
-                "Installed SHA-256",
-                report.build.installed_apk_sha256.as_deref().unwrap_or("-"),
-            );
-            ui.end_row();
-            key_value(
-                ui,
-                "Certificate",
-                report.build.cert_sha256.as_deref().unwrap_or("-"),
-            );
-            key_value(
-                ui,
-                "Verified",
-                if report.build.verified { "yes" } else { "no" },
-            );
-            ui.end_row();
-            key_value(ui, "Session", report.session_id.as_deref().unwrap_or("-"));
-            key_value(ui, "Device", report.device_serial.as_deref().unwrap_or("-"));
-            ui.end_row();
         });
+    });
     ui.add_space(8.0);
-    section_title(ui, "Steps");
+    ui.horizontal(|ui| {
+        section_title(ui, "Steps");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ghost_button(ui, "Copy Markdown").clicked() {
+                ui.ctx().copy_text(markdown_summary(report));
+            }
+            if ghost_button(ui, "Copy JSON").clicked() {
+                if let Ok(text) = serde_json::to_string_pretty(report) {
+                    ui.ctx().copy_text(text);
+                }
+            }
+        });
+    });
     if report.steps.is_empty() {
         empty_state(ui, "No steps", "The report contains no recorded steps.");
         return;
     }
-    let steps = &report.steps;
+    let steps = report.steps.clone();
     TableBuilder::new(ui)
-        .striped(true)
+        .striped(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::initial(60.0))
+        .column(Column::initial(85.0))
+        .column(Column::remainder().at_least(180.0))
+        .column(Column::initial(80.0))
         .column(Column::initial(55.0))
         .column(Column::initial(65.0))
-        .column(Column::remainder().at_least(160.0))
-        .column(Column::initial(75.0))
-        .column(Column::initial(55.0))
-        .column(Column::initial(65.0))
-        .header(22.0, |mut header| {
+        .header(24.0, |mut header| {
             for name in ["#", "Status", "Step", "Duration", "Exit", "Artifacts"] {
                 header.col(|ui| {
-                    ui.label(RichText::new(name).size(10.0).strong().color(theme::MUTED));
+                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
                 });
             }
         })
         .body(|body| {
-            body.rows(24.0, steps.len(), |mut row| {
+            body.rows(28.0, steps.len(), |mut row| {
                 let step = &steps[row.index()];
                 row.col(|ui| {
                     ui.label(RichText::new(&step.id).size(9.0).monospace());
                 });
                 row.col(|ui| {
-                    ui.label(
-                        RichText::new(&step.status)
-                            .size(10.0)
-                            .color(theme::status_color(&step.status)),
-                    );
+                    status_pill(ui, &step.status, theme::status_color(&step.status));
                 });
                 row.col(|ui| {
                     ui.add(egui::Label::new(RichText::new(&step.name).size(10.0)).truncate())
@@ -224,7 +232,7 @@ fn summary(ui: &mut egui::Ui, state: &RunDetailState) {
                     ui.label(
                         RichText::new(
                             step.exit_code
-                                .map(|v| v.to_string())
+                                .map(|value| value.to_string())
                                 .unwrap_or_else(|| "-".to_string()),
                         )
                         .size(10.0),
@@ -236,7 +244,6 @@ fn summary(ui: &mut egui::Ui, state: &RunDetailState) {
             });
         });
     if !report.artifacts.is_empty() {
-        ui.add_space(6.0);
         muted(
             ui,
             format!("{} artifact(s) in this run", report.artifacts.len()),
@@ -244,22 +251,35 @@ fn summary(ui: &mut egui::Ui, state: &RunDetailState) {
     }
 }
 
-fn evidence_split(
-    ui: &mut egui::Ui,
-    state: &mut RunDetailState,
-    filter: &str,
-    pending: &mut Option<String>,
-) {
+fn evidence_tab(ui: &mut egui::Ui, state: &mut RunDetailState) -> Option<String> {
     let artifacts = state.detail.report.artifacts.clone();
     let run_dir = state.detail.path.path.clone();
+    let mut filter = state.evidence.filter.clone();
+    let selected = state.evidence.selected_artifact.clone();
+    let mut pending = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Filter").size(10.0).color(theme::MUTED));
+        ui.add(
+            egui::TextEdit::singleline(&mut filter)
+                .desired_width(240.0)
+                .hint_text("path, kind or description"),
+        );
+        if !artifacts.is_empty() {
+            small(ui, format!("{} artifact(s)", artifacts.len()));
+        }
+    });
+    if filter != state.evidence.filter {
+        state.evidence.filter = filter.clone();
+    }
+    ui.add_space(4.0);
     ui.columns(2, |columns| {
         columns[0].set_min_width(240.0);
-        columns[0].set_max_width(360.0);
+        columns[0].set_max_width(380.0);
         egui::ScrollArea::vertical()
             .id_salt("evidence-list")
-            .max_height(490.0)
+            .max_height(500.0)
             .show(&mut columns[0], |ui| {
-                let filter = filter.to_ascii_lowercase();
+                let query = filter.to_ascii_lowercase();
                 for artifact in &artifacts {
                     let haystack = format!(
                         "{} {} {}",
@@ -268,31 +288,30 @@ fn evidence_split(
                         artifact.description.as_deref().unwrap_or("")
                     )
                     .to_ascii_lowercase();
-                    if !filter.is_empty() && !haystack.contains(&filter) {
+                    if !query.is_empty() && !haystack.contains(&query) {
                         continue;
                     }
-                    let selected =
-                        state.evidence.selected_artifact.as_deref() == Some(artifact.path.as_str());
+                    let is_selected = selected.as_deref() == Some(artifact.path.as_str());
                     let label = format!(
                         "{}  {}",
                         icon_for_kind(&artifact.kind),
                         artifact.path.rsplit('/').next().unwrap_or(&artifact.path)
                     );
                     if ui
-                        .selectable_label(selected, RichText::new(label).size(10.0))
+                        .selectable_label(is_selected, RichText::new(label).size(10.0))
                         .on_hover_text(format!("{}\n{}", artifact.path, artifact.kind))
                         .clicked()
                     {
-                        *pending = Some(artifact.path.clone());
+                        pending = Some(artifact.path.clone());
                     }
                 }
             });
-        columns[1].set_min_width(300.0);
+        columns[1].set_min_width(320.0);
         egui::ScrollArea::vertical()
             .id_salt("evidence-preview")
-            .max_height(490.0)
+            .max_height(500.0)
             .show(&mut columns[1], |ui| {
-                if let Some(key) = state.evidence.selected_artifact.clone() {
+                if let Some(key) = selected.clone() {
                     preview(ui, &mut state.evidence, &artifacts, &run_dir, &key);
                 } else {
                     empty_state(
@@ -303,57 +322,59 @@ fn evidence_split(
                 }
             });
     });
+    if let Some(key) = &pending {
+        state.evidence.selected_artifact = Some(key.clone());
+    }
+    pending
 }
 
 fn preview(
     ui: &mut egui::Ui,
-    evidence: &mut crate::state::EvidenceState,
+    evidence_state: &mut EvidenceState,
     artifacts: &[crate::models::ArtifactRef],
     run_dir: &str,
     key: &str,
 ) {
     let artifact = artifacts.iter().find(|artifact| artifact.path == key);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(key).size(10.0).monospace());
+        ui.add(egui::Label::new(RichText::new(key).size(9.5).monospace()).truncate())
+            .on_hover_text(key);
         if let Some(artifact) = artifact {
-            ui.label(
-                RichText::new(format!("{} · {} bytes", artifact.kind, artifact.size_bytes))
-                    .size(10.0)
-                    .color(theme::MUTED),
+            small(
+                ui,
+                format!("{} · {} bytes", artifact.kind, artifact.size_bytes),
             );
         }
-        copy_button(ui, key, "Copy path");
+        copy_button(ui, key, "Copy");
         let full = format!("{}/{}", run_dir.replace('\\', "/"), key);
         if ui.small_button("Open").clicked() {
             let _ = open::that(full);
         }
     });
     ui.separator();
-    if let Some(texture) = evidence.image_texture.clone() {
-        if evidence.image_path.as_deref() == Some(key) {
-            let (w, h) = evidence.image_size.unwrap_or((1000, 1000));
+    if evidence_state.image_path.as_deref() == Some(key) {
+        if let Some(texture) = evidence_state.image_texture.clone() {
+            let (w, h) = evidence_state.image_size.unwrap_or((1000, 1000));
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("{w} × {h} original pixels"))
-                        .size(10.0)
-                        .color(theme::MUTED),
-                );
+                small(ui, format!("{w} × {h}"));
                 if ui.small_button("Fit").clicked() {
-                    evidence.fit = true;
+                    evidence_state.fit = true;
                 }
                 if ui.small_button("100%").clicked() {
-                    evidence.fit = false;
-                    evidence.zoom = 1.0;
+                    evidence_state.fit = false;
+                    evidence_state.zoom = 1.0;
                 }
-                if !evidence.fit {
-                    ui.add(egui::Slider::new(&mut evidence.zoom, 0.1..=3.0).show_value(false));
+                if !evidence_state.fit {
+                    ui.add(
+                        egui::Slider::new(&mut evidence_state.zoom, 0.1..=3.0).show_value(false),
+                    );
                 }
             });
             let available = ui.available_width().max(200.0);
-            let scale = if evidence.fit {
+            let scale = if evidence_state.fit {
                 (available / w as f32).min(520.0 / h as f32).min(1.0)
             } else {
-                evidence.zoom
+                evidence_state.zoom
             };
             let size = Vec2::new(w as f32 * scale, h as f32 * scale);
             egui::ScrollArea::both()
@@ -361,28 +382,25 @@ fn preview(
                 .show(ui, |ui| {
                     ui.image((texture.id(), size));
                 });
-            return;
-        }
-    }
-    if evidence.image_path.as_deref() == Some(key) {
-        if let Some(error) = &evidence.image_error {
+        } else if let Some(error) = &evidence_state.image_error {
             error_banner(ui, error);
         }
         return;
     }
-    if evidence.text_key.as_deref() == Some(key) {
-        if let Some(error) = &evidence.text_error {
+    if evidence_state.text_key.as_deref() == Some(key) {
+        if let Some(error) = &evidence_state.text_error {
             error_banner(ui, error);
-        } else if let Some(text) = evidence.text.clone() {
+        } else if let Some(text) = evidence_state.text.clone() {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Search").size(10.0).color(theme::MUTED));
                 ui.add(
-                    egui::TextEdit::singleline(&mut evidence.search)
+                    egui::TextEdit::singleline(&mut evidence_state.search)
                         .desired_width(200.0)
                         .hint_text("filter log lines"),
                 );
-                ui.label(
-                    RichText::new(format!(
+                small(
+                    ui,
+                    format!(
                         "{} bytes{}",
                         text.size_bytes,
                         if text.truncated {
@@ -390,16 +408,14 @@ fn preview(
                         } else {
                             ""
                         }
-                    ))
-                    .size(10.0)
-                    .color(theme::MUTED),
+                    ),
                 );
             });
-            let query = evidence.search.to_ascii_lowercase();
+            let query = evidence_state.search.to_ascii_lowercase();
             let mut content = String::new();
-            for (line_number, line) in text.text.lines().enumerate() {
+            for (index, line) in text.text.lines().enumerate() {
                 if query.is_empty() || line.to_ascii_lowercase().contains(&query) {
-                    content.push_str(&format!("{:>5}  {line}\n", line_number + 1));
+                    content.push_str(&format!("{:>5}  {line}\n", index + 1));
                 }
                 if content.len() > 1_500_000 {
                     content.push_str("\n[... preview display capped ...]\n");
@@ -408,7 +424,7 @@ fn preview(
             }
             ui.add(
                 egui::TextEdit::multiline(&mut content)
-                    .font(egui::FontId::monospace(10.0))
+                    .font(egui::FontId::monospace(9.5))
                     .desired_rows(24)
                     .desired_width(f32::INFINITY)
                     .interactive(true),
@@ -423,7 +439,7 @@ fn preview(
         empty_state(
             ui,
             "Artifact selected",
-            "Choose an artifact to load its preview.",
+            "Choose it again to load its preview.",
         );
     }
 }
@@ -431,42 +447,46 @@ fn preview(
 fn raw_files(ui: &mut egui::Ui, state: &RunDetailState) {
     let manifest = &state.detail.manifest;
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!(
-                "Manifest: {} ok · {} missing · {} mismatched",
-                manifest.ok, manifest.missing, manifest.mismatched
-            ))
-            .size(11.0)
-            .color(if manifest.missing + manifest.mismatched == 0 {
+        status_pill(
+            ui,
+            if manifest.missing + manifest.mismatched == 0 {
+                "manifest verified"
+            } else {
+                "manifest mismatch"
+            },
+            if manifest.missing + manifest.mismatched == 0 {
                 theme::GREEN
             } else {
                 theme::RED
-            }),
+            },
         );
+        small(
+            ui,
+            format!(
+                "{} ok · {} missing · {} mismatched",
+                manifest.ok, manifest.missing, manifest.mismatched
+            ),
+        );
+        if !state.detail.path.path.is_empty() && ui.small_button("Open folder").clicked() {
+            let _ = open::that(&state.detail.path.path);
+        }
     });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     ui.columns(2, |columns| {
         egui::ScrollArea::vertical()
             .id_salt("raw-report")
-            .max_height(420.0)
+            .max_height(430.0)
             .show(&mut columns[0], |ui| {
-                ui.label(RichText::new("report.json").strong());
+                section_title(ui, "report.json");
                 if let Some(preview) = &state.detail.raw_report {
-                    let mut text = preview.text.clone();
-                    ui.add(
-                        egui::TextEdit::multiline(&mut text)
-                            .font(egui::FontId::monospace(10.0))
-                            .desired_rows(18)
-                            .desired_width(f32::INFINITY)
-                            .interactive(false),
-                    );
+                    code_block(ui, &preview.text);
                 }
             });
         egui::ScrollArea::vertical()
             .id_salt("manifest-list")
-            .max_height(420.0)
+            .max_height(430.0)
             .show(&mut columns[1], |ui| {
-                ui.label(RichText::new("manifest.json").strong());
+                section_title(ui, "manifest.json");
                 for entry in &manifest.entries {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -483,43 +503,26 @@ fn raw_files(ui: &mut egui::Ui, state: &RunDetailState) {
                 }
             });
     });
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     ui.collapsing("metadata.json", |ui| {
         if let Some(preview) = &state.detail.raw_metadata {
-            let mut text = preview.text.clone();
-            ui.add(
-                egui::TextEdit::multiline(&mut text)
-                    .font(egui::FontId::monospace(10.0))
-                    .desired_rows(12)
-                    .desired_width(f32::INFINITY)
-                    .interactive(false),
-            );
+            code_block(ui, &preview.text);
         }
     });
     ui.collapsing("manifest.json (raw)", |ui| {
         if let Some(preview) = &state.detail.raw_manifest {
-            let mut text = preview.text.clone();
-            ui.add(
-                egui::TextEdit::multiline(&mut text)
-                    .font(egui::FontId::monospace(10.0))
-                    .desired_rows(12)
-                    .desired_width(f32::INFINITY)
-                    .interactive(false),
-            );
+            code_block(ui, &preview.text);
         }
     });
 }
 
 fn select_artifact(app: &mut App, key: &str, ctx: &egui::Context) {
-    let Some(state) = app.run_detail.as_ref() else {
+    let Some(state) = app.run_detail.as_mut() else {
         return;
     };
     let run_dir = state.detail.path.path.clone();
     if evidence::safe_join(std::path::Path::new(&run_dir), key).is_err() {
-        if let Some(state) = app.run_detail.as_mut() {
-            state.evidence.selected_artifact = Some(key.to_string());
-            state.evidence.image_error = Some("Artifact path is outside the run directory".into());
-        }
+        state.evidence.image_error = Some("Artifact path is outside the run directory".to_string());
         return;
     }
     let extension = std::path::Path::new(key)
@@ -528,16 +531,14 @@ fn select_artifact(app: &mut App, key: &str, ctx: &egui::Context) {
         .unwrap_or("")
         .to_ascii_lowercase();
     let is_image = matches!(extension.as_str(), "png" | "jpg" | "jpeg");
-    if let Some(state) = app.run_detail.as_mut() {
-        state.evidence.selected_artifact = Some(key.to_string());
-        state.evidence.text = None;
-        state.evidence.text_key = None;
-        state.evidence.text_error = None;
-        state.evidence.image_error = None;
-        state.evidence.image_path = None;
-        state.evidence.image_texture = None;
-        state.evidence.image_size = None;
-    }
+    state.evidence.selected_artifact = Some(key.to_string());
+    state.evidence.text = None;
+    state.evidence.text_key = None;
+    state.evidence.text_error = None;
+    state.evidence.image_error = None;
+    state.evidence.image_path = None;
+    state.evidence.image_texture = None;
+    state.evidence.image_size = None;
     if is_image {
         let result = evidence::safe_join(std::path::Path::new(&run_dir), key)
             .and_then(|path| std::fs::read(path).map_err(crate::backend::DesktopError::Io));
@@ -552,23 +553,13 @@ fn select_artifact(app: &mut App, key: &str, ctx: &egui::Context) {
                         color,
                         egui::TextureOptions::LINEAR,
                     );
-                    if let Some(state) = app.run_detail.as_mut() {
-                        state.evidence.image_size = Some((image.width(), image.height()));
-                        state.evidence.image_texture = Some(texture);
-                        state.evidence.image_path = Some(key.to_string());
-                    }
+                    state.evidence.image_size = Some((image.width(), image.height()));
+                    state.evidence.image_texture = Some(texture);
+                    state.evidence.image_path = Some(key.to_string());
                 }
-                Err(error) => {
-                    if let Some(state) = app.run_detail.as_mut() {
-                        state.evidence.image_error = Some(error.to_string());
-                    }
-                }
+                Err(error) => state.evidence.image_error = Some(error.to_string()),
             },
-            Err(error) => {
-                if let Some(state) = app.run_detail.as_mut() {
-                    state.evidence.image_error = Some(error.to_string());
-                }
-            }
+            Err(error) => state.evidence.image_error = Some(error.to_string()),
         }
     } else {
         app.request_evidence_text(key.to_string(), ctx);
@@ -587,4 +578,36 @@ fn icon_for_kind(kind: &str) -> &'static str {
     } else {
         "·"
     }
+}
+
+fn markdown_summary(report: &crate::models::RunReport) -> String {
+    let mut out = format!(
+        "# AndroidForge run `{}`\n\n- Status: **{}**\n- Scenario: `{}`\n- Project: `{}`\n- Started: `{}`\n- Duration: {}\n",
+        report.run_id,
+        report.status,
+        report.command,
+        report.project,
+        report.started_at,
+        format_duration(report.duration_ms)
+    );
+    if let Some(failure) = &report.failure {
+        out.push_str(&format!(
+            "\n## Failure\n\n`{}`: {}\n",
+            failure.code, failure.message
+        ));
+        for suggestion in &failure.suggestions {
+            out.push_str(&format!("- {suggestion}\n"));
+        }
+    }
+    out.push_str("\n## Steps\n\n| # | Status | Step | Duration |\n| --- | --- | --- | --- |\n");
+    for step in &report.steps {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            step.id,
+            step.status,
+            step.name,
+            format_duration(step.duration_ms)
+        ));
+    }
+    out
 }

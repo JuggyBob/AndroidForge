@@ -91,10 +91,10 @@ The run detail has three tabs:
   copy button. `Dismiss` clears a finished panel.
 
 Session lifecycle operations run to completion and do not show `Cancel`. Cancellation is limited
-to installs, fixtures, conformance and hooks: it terminates the AndroidForge child process tree, writes a
-warning that the final report may be incomplete, and never calls `session stop` or `session release`. The
-emulator remains available. A cancelled run may appear as `running` in the report list until you inspect
-or clean it; its report was not finalized.
+to installs, fixtures, conformance and hooks: it terminates the AndroidForge child process tree and never
+calls `session stop` or `session release`. The emulator remains available. The desktop reconciles the
+unfinished run as `cancelled`, and startup reconciliation marks abandoned runs `interrupted` rather than
+leaving them `running` forever.
 
 ### Safety rules for desktop users
 
@@ -514,7 +514,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.2.0` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.3.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents

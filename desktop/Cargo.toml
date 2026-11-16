@@ -32,6 +32,9 @@ hex = "0.4"
 roxmltree = "0.21"
 open = "5"
 thiserror = "2.0"
+ureq = "3.5.2"
+zip = "9.6.0"
+chrono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

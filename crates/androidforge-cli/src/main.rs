@@ -186,7 +186,7 @@ fn preprocess(mut args: Vec<OsString>) -> Vec<OsString> {
             .map(|arg| arg.to_string_lossy().to_string());
         let is_subcommand = matches!(
             next.as_deref(),
-            Some("tail" | "start" | "stop" | "status" | "--help" | "-h")
+            Some("tail" | "peek" | "start" | "stop" | "status" | "--help" | "-h")
         );
         if !is_subcommand {
             args.insert(logcat_index + 1, OsString::from("tail"));

@@ -2,6 +2,7 @@ use eframe::egui;
 use egui::RichText;
 
 use crate::app::App;
+use crate::components::{ghost_button, small, status_pill};
 use crate::state::*;
 use crate::theme;
 
@@ -11,60 +12,55 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     };
     let title = operation.handle.title.clone();
     let command = operation.handle.command.clone();
-    let elapsed = operation.handle.elapsed();
-    let running = operation.is_running();
     let outcome = operation.outcome.clone();
+    let elapsed = outcome
+        .as_ref()
+        .map(|outcome| outcome.duration_ms as f32 / 1000.0)
+        .unwrap_or_else(|| operation.handle.elapsed().as_secs_f32());
+    let running = operation.is_running();
     let lines = operation.lines.clone();
-    let mut cancel_clicked = false;
-    let mut dismiss_clicked = false;
+    let cancellable = operation.kind.cancellable();
+    let mut cancel = false;
+    let mut dismiss = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).strong());
+        ui.label(RichText::new(title).size(12.0).strong());
         ui.label(
-            RichText::new(format!("{:.1}s", elapsed.as_secs_f32()))
-                .size(10.0)
+            RichText::new(format!("{elapsed:.1}s"))
+                .size(9.5)
                 .color(theme::MUTED),
         );
         if running {
             ui.spinner();
-            if operation.kind.cancellable() {
-                if ui.button("Cancel...").clicked() {
-                    cancel_clicked = true;
+            if cancellable {
+                if ghost_button(ui, "Cancel...").clicked() {
+                    cancel = true;
                 }
             } else {
-                ui.label(
-                    RichText::new("session operation · runs to completion")
-                        .size(10.0)
-                        .color(theme::MUTED),
-                )
-                .on_hover_text(
-                    "Session lifecycle operations cannot be cancelled safely. Wait for the CLI to finish; cancellation of a run never stops the emulator.",
-                );
+                small(ui, "runs to completion");
             }
-        } else {
-            if let Some(outcome) = &outcome {
-                let (label, color) = if outcome.cancelled {
-                    ("cancelled", theme::YELLOW)
-                } else if outcome.success {
-                    ("success", theme::GREEN)
-                } else {
-                    ("failed", theme::RED)
-                };
-                ui.label(RichText::new(label).size(11.0).color(color));
+        } else if let Some(outcome) = &outcome {
+            let (label, color) = if outcome.cancelled {
+                ("cancelled", theme::PURPLE)
+            } else if outcome.success {
+                ("success", theme::GREEN)
+            } else {
+                ("failed", theme::RED)
+            };
+            status_pill(ui, label, color);
+            if outcome.cancelled {
+                small(ui, "process tree closed");
+            } else {
                 ui.label(
                     RichText::new(format!("exit {:?}", outcome.status_code))
-                        .size(10.0)
+                        .size(9.5)
                         .color(theme::MUTED),
                 );
-                if outcome.truncated {
-                    ui.label(
-                        RichText::new("output truncated")
-                            .size(10.0)
-                            .color(theme::YELLOW),
-                    );
-                }
             }
-            if ui.button("Dismiss").clicked() {
-                dismiss_clicked = true;
+            if outcome.truncated {
+                small(ui, "output truncated");
+            }
+            if ghost_button(ui, "Dismiss").clicked() {
+                dismiss = true;
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -95,7 +91,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .truncate(),
     )
     .on_hover_text(&command);
-    ui.separator();
+    ui.add_space(4.0);
     let body_height = (ui.available_height() - 8.0).max(60.0);
     egui::ScrollArea::vertical()
         .id_salt("operation-output")
@@ -103,22 +99,27 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .max_height(body_height)
         .show(ui, |ui| {
             if let Some(outcome) = &outcome {
+                if outcome.cancelled {
+                    ui.label(
+                        RichText::new(
+                            "No final report was produced because the operation was cancelled. The emulator and session were left intact.",
+                        )
+                        .size(10.0)
+                        .color(theme::YELLOW),
+                    );
+                    ui.add_space(4.0);
+                }
                 for line in outcome.stdout.lines().chain(outcome.stderr.lines()) {
                     ui.label(
                         RichText::new(line)
-                            .font(egui::FontId::monospace(10.0))
-                            .size(10.0),
+                            .font(egui::FontId::monospace(9.5))
+                            .size(9.5),
                     );
                 }
-                if let Some(error) = &outcome.parse_error {
-                    if outcome.cancelled {
-                        ui.colored_label(
-                            theme::YELLOW,
-                            "No final report was produced because the operation was cancelled.",
-                        );
-                    } else {
-                        ui.colored_label(theme::RED, error);
-                    }
+                if let Some(error) = &outcome.parse_error
+                    && !outcome.cancelled
+                {
+                    ui.colored_label(theme::RED, error);
                 }
             } else {
                 for line in &lines {
@@ -129,17 +130,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     };
                     ui.label(
                         RichText::new(&line.text)
-                            .font(egui::FontId::monospace(10.0))
-                            .size(10.0)
+                            .font(egui::FontId::monospace(9.5))
+                            .size(9.5)
                             .color(color),
                     );
                 }
             }
         });
-    if cancel_clicked {
+    if cancel {
         app.confirm(ConfirmAction::CancelOperation);
     }
-    if dismiss_clicked {
+    if dismiss {
         app.dismiss_operation();
     }
 }

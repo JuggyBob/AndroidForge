@@ -597,6 +597,89 @@ pub fn gc_sessions(paths: &ForgePaths, reclaim: bool, dry_run: bool) -> Result<S
     Ok(report)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPruneEntry {
+    pub id: String,
+    pub state: SessionState,
+    pub serial: Option<String>,
+    pub created_at: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPruneReport {
+    pub sessions_scanned: usize,
+    pub terminal_sessions: usize,
+    pub pruned: Vec<SessionPruneEntry>,
+    pub kept: usize,
+    pub dry_run: bool,
+}
+
+/// Remove old terminal session tombstones. Active sessions, sessions with a
+/// live operation or emulator, and the newest `keep_last` tombstones are kept.
+/// The device lock is released only when it still belongs to the pruned session.
+pub fn prune_sessions(
+    paths: &ForgePaths,
+    older_than: std::time::Duration,
+    keep_last: usize,
+    dry_run: bool,
+) -> Result<SessionPruneReport> {
+    let sessions = list_sessions(paths)?;
+    let mut terminal: Vec<SessionListEntry> = sessions
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.state,
+                SessionState::Released | SessionState::Failed | SessionState::Abandoned
+            )
+        })
+        .cloned()
+        .collect();
+    terminal.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    let terminal_sessions = terminal.len();
+    let mut report = SessionPruneReport {
+        sessions_scanned: sessions.len(),
+        terminal_sessions,
+        pruned: Vec::new(),
+        kept: sessions.len(),
+        dry_run,
+    };
+    for (index, entry) in terminal.iter().enumerate() {
+        if index < keep_last {
+            continue;
+        }
+        if entry.operation_active || entry.emulator_process_alive {
+            continue;
+        }
+        let age = age_secs(&entry.created_at);
+        if age < older_than.as_secs() as i64 {
+            continue;
+        }
+        let reason = format!("terminal session older than {}s", older_than.as_secs());
+        report.pruned.push(SessionPruneEntry {
+            id: entry.id.clone(),
+            state: entry.state,
+            serial: entry.serial.clone(),
+            created_at: entry.created_at.clone(),
+            reason,
+        });
+        if !dry_run {
+            release_device_lock_unlocked(paths, &entry.id, entry.serial.as_deref())?;
+            let dir = paths.sessions_dir().join(&entry.id);
+            if dir.is_dir() {
+                fs::remove_dir_all(&dir).map_err(|error| {
+                    ForgeError::new(
+                        ErrorCode::Internal,
+                        format!("could not remove session {}: {error}", dir.display()),
+                    )
+                })?;
+            }
+        }
+    }
+    report.kept = sessions.len().saturating_sub(report.pruned.len());
+    Ok(report)
+}
+
 pub fn resolve_session_id(
     paths: &ForgePaths,
     cli_value: Option<&str>,

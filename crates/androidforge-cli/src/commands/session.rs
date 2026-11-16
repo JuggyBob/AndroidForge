@@ -5,15 +5,16 @@ use androidforge_core::model::Device;
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::session::{
     Session, SessionKind, SessionState, gc_sessions, list_sessions, owner_of_serial,
-    set_current_session,
+    prune_sessions, set_current_session,
 };
-use androidforge_core::util::now_rfc3339;
+use androidforge_core::util::{now_rfc3339, parse_duration};
 use androidforge_emulator::{DevicePrepareOptions, DevicePreparer};
 use serde_json::Value;
 
 use crate::cli::{
     AvdCommand, EmulatorCommand, SessionAttachArgs, SessionCommand, SessionGcArgs,
-    SessionReleaseArgs, SessionRestartArgs, SessionStartArgs, SessionStopArgs, SnapshotCommand,
+    SessionPruneArgs, SessionReleaseArgs, SessionRestartArgs, SessionStartArgs, SessionStopArgs,
+    SnapshotCommand,
 };
 use crate::commands::common::{default_owner, success};
 use crate::context::CliContext;
@@ -56,6 +57,7 @@ pub async fn session(ctx: &CliContext, command: &SessionCommand) -> Result<Comma
             ))
         }
         SessionCommand::Gc(args) => gc(ctx, args).await,
+        SessionCommand::Prune(args) => prune(ctx, args).await,
         SessionCommand::Restart(args) => restart(ctx, args).await,
     }
 }
@@ -604,6 +606,37 @@ async fn gc(ctx: &CliContext, args: &SessionGcArgs) -> Result<CommandSuccess> {
         "session.gc",
         serde_json::json!({"report": report, "warnings": warnings}),
         serde_json::to_string_pretty(&report).unwrap_or_default() + "\n",
+    ))
+}
+
+async fn prune(ctx: &CliContext, args: &SessionPruneArgs) -> Result<CommandSuccess> {
+    if !ctx.yes && !ctx.dry_run {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            "pruning session tombstones is destructive; pass --yes",
+        )
+        .with_suggestion("Use --dry-run to preview which sessions would be removed."));
+    }
+    let older_than = args
+        .older_than
+        .as_deref()
+        .map(parse_duration)
+        .transpose()
+        .map_err(ForgeError::invalid_argument)?
+        .unwrap_or(Duration::from_secs(7 * 86_400));
+    let keep_last = args.keep_last.unwrap_or(3);
+    let report = prune_sessions(&ctx.paths, older_than, keep_last, ctx.dry_run)?;
+    let human = format!(
+        "{} {} of {} terminal session(s); kept {} total.\n",
+        if ctx.dry_run { "Would prune" } else { "Pruned" },
+        report.pruned.len(),
+        report.terminal_sessions,
+        report.kept
+    );
+    Ok(success(
+        "session.prune",
+        serde_json::to_value(&report)?,
+        human,
     ))
 }
 

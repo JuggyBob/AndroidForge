@@ -4,6 +4,7 @@
 //! Nothing in this crate knows about a specific Android project. Project
 //! differences belong in `.androidforge/project.toml`, fixtures and hooks.
 
+pub mod analysis;
 pub mod artifact;
 pub mod config;
 pub mod error;

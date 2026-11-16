@@ -9,6 +9,7 @@ pub mod evidence;
 pub mod json_parser;
 pub mod process_manager;
 pub mod project;
+pub mod update;
 
 pub type Result<T> = std::result::Result<T, DesktopError>;
 
@@ -48,6 +49,15 @@ pub enum DesktopError {
 
     #[error("path is outside the selected run directory")]
     PathOutsideRun,
+
+    #[error("network request failed: {0}")]
+    Network(String),
+
+    #[error("release asset verification failed: {0}")]
+    Verification(String),
+
+    #[error("update failed: {0}")]
+    Update(String),
 
     #[error("evidence file exceeds the preview limit")]
     EvidenceTooLarge,

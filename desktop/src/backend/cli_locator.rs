@@ -13,6 +13,8 @@ pub enum CliSource {
     Configured,
     Adjacent,
     Development,
+    Path,
+    InstallDirectory,
 }
 
 impl CliSource {
@@ -21,6 +23,8 @@ impl CliSource {
             Self::Configured => "configured path",
             Self::Adjacent => "bundled executable",
             Self::Development => "development build",
+            Self::Path => "PATH",
+            Self::InstallDirectory => "installation directory",
         }
     }
 }
@@ -62,6 +66,33 @@ pub fn resolve(explicit: Option<&Path>) -> Result<CliResolution> {
         }
     }
 
+    for path in install_candidates() {
+        if !searched.contains(&path) {
+            searched.push(path.clone());
+        }
+        if path.is_file() {
+            return Ok(CliResolution {
+                path,
+                source: CliSource::InstallDirectory,
+            });
+        }
+    }
+
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let path = dir.join(cli_name());
+            if !searched.contains(&path) {
+                searched.push(path.clone());
+            }
+            if path.is_file() {
+                return Ok(CliResolution {
+                    path,
+                    source: CliSource::Path,
+                });
+            }
+        }
+    }
+
     Err(DesktopError::CliNotFound { searched })
 }
 
@@ -69,6 +100,33 @@ pub fn current_exe_dir() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+fn install_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(local)
+                .join("Programs")
+                .join("AndroidForge")
+                .join(cli_name()),
+        );
+    }
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        candidates.push(
+            PathBuf::from(program_files)
+                .join("AndroidForge")
+                .join(cli_name()),
+        );
+    }
+    if let Ok(program_files) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(
+            PathBuf::from(program_files)
+                .join("AndroidForge")
+                .join(cli_name()),
+        );
+    }
+    candidates
 }
 
 fn development_candidates() -> Vec<PathBuf> {

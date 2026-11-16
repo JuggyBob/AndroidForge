@@ -1,119 +1,104 @@
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke};
+use eframe::egui::{
+    self, Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, StrokeKind,
+};
 
 use crate::state::ThemeMode;
 
-pub const ACCENT: Color32 = Color32::from_rgb(245, 165, 36);
-pub const BLUE: Color32 = Color32::from_rgb(88, 166, 255);
-pub const GREEN: Color32 = Color32::from_rgb(63, 185, 80);
-pub const RED: Color32 = Color32::from_rgb(248, 81, 73);
-pub const YELLOW: Color32 = Color32::from_rgb(210, 153, 34);
-pub const MUTED: Color32 = Color32::from_rgb(139, 148, 167);
+pub const ACCENT: Color32 = Color32::from_rgb(240, 166, 50);
+pub const ACCENT_SOFT: Color32 = Color32::from_rgb(60, 45, 22);
+pub const BLUE: Color32 = Color32::from_rgb(104, 168, 255);
+pub const GREEN: Color32 = Color32::from_rgb(74, 201, 112);
+pub const RED: Color32 = Color32::from_rgb(255, 107, 107);
+pub const YELLOW: Color32 = Color32::from_rgb(229, 180, 84);
+pub const PURPLE: Color32 = Color32::from_rgb(177, 140, 255);
+pub const MUTED: Color32 = Color32::from_rgb(139, 153, 171);
+pub const TEXT: Color32 = Color32::from_rgb(231, 237, 245);
 
-pub const DARK_BG: Color32 = Color32::from_rgb(11, 14, 19);
-pub const DARK_PANEL: Color32 = Color32::from_rgb(17, 21, 29);
-pub const DARK_SURFACE: Color32 = Color32::from_rgb(22, 27, 36);
-pub const DARK_BORDER: Color32 = Color32::from_rgb(37, 44, 57);
+pub const DARK_BG: Color32 = Color32::from_rgb(9, 12, 17);
+pub const DARK_PANEL: Color32 = Color32::from_rgb(14, 19, 26);
+pub const DARK_SURFACE: Color32 = Color32::from_rgb(20, 27, 36);
+pub const DARK_SURFACE_ALT: Color32 = Color32::from_rgb(26, 35, 47);
+pub const DARK_BORDER: Color32 = Color32::from_rgb(38, 49, 64);
+pub const DARK_BORDER_SOFT: Color32 = Color32::from_rgb(29, 38, 50);
 
-pub const LIGHT_BG: Color32 = Color32::from_rgb(246, 247, 249);
+pub const LIGHT_BG: Color32 = Color32::from_rgb(242, 245, 249);
 pub const LIGHT_PANEL: Color32 = Color32::from_rgb(255, 255, 255);
-pub const LIGHT_SURFACE: Color32 = Color32::from_rgb(240, 242, 245);
-pub const LIGHT_BORDER: Color32 = Color32::from_rgb(208, 215, 222);
+pub const LIGHT_SURFACE: Color32 = Color32::from_rgb(247, 249, 252);
+pub const LIGHT_BORDER: Color32 = Color32::from_rgb(215, 224, 234);
+
+pub const PAGE_TITLE_SIZE: f32 = 24.0;
+pub const SECTION_SIZE: f32 = 10.5;
+pub const BODY_SIZE: f32 = 13.0;
+pub const SMALL_SIZE: f32 = 11.0;
+pub const MONO_SIZE: f32 = 11.5;
 
 pub fn configure_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let mut loaded = false;
-
-    #[cfg(windows)]
-    {
-        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
-            fonts.font_data.insert(
-                "segoe-ui".to_string(),
-                Arc::new(FontData::from_owned(bytes)),
-            );
-            fonts
-                .families
-                .entry(FontFamily::Proportional)
-                .or_default()
-                .insert(0, "segoe-ui".to_string());
-            loaded = true;
-        }
-        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\consola.ttf") {
-            fonts.font_data.insert(
-                "consolas".to_string(),
-                Arc::new(FontData::from_owned(bytes)),
-            );
-            fonts
-                .families
-                .entry(FontFamily::Monospace)
-                .or_default()
-                .insert(0, "consolas".to_string());
-            loaded = true;
-        }
-    }
-
-    if loaded {
-        ctx.set_fonts(fonts);
-    }
+    fonts.font_data.insert(
+        "inter".to_string(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-Variable.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "jetbrains-mono".to_string(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/JetBrainsMono-Variable.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "inter".to_string());
+    fonts
+        .families
+        .entry(FontFamily::Monospace)
+        .or_default()
+        .insert(0, "jetbrains-mono".to_string());
+    ctx.set_fonts(fonts);
 }
 
 pub fn apply(ctx: &egui::Context, mode: ThemeMode) {
     ctx.set_theme(mode.preference());
     ctx.style_mut_of(egui::Theme::Dark, |style| {
-        style.visuals = dark_visuals();
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(9.0, 4.0);
-        style.spacing.menu_margin = egui::Margin::same(6);
-        style.spacing.interact_size.y = 24.0;
-        style.text_styles.insert(
-            egui::TextStyle::Heading,
-            FontId::new(18.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Body,
-            FontId::new(13.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Button,
-            FontId::new(13.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Small,
-            FontId::new(11.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Monospace,
-            FontId::new(12.0, FontFamily::Monospace),
-        );
+        apply_style(style, dark_visuals())
     });
     ctx.style_mut_of(egui::Theme::Light, |style| {
-        style.visuals = light_visuals();
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(9.0, 4.0);
-        style.spacing.menu_margin = egui::Margin::same(6);
-        style.spacing.interact_size.y = 24.0;
-        style.text_styles.insert(
-            egui::TextStyle::Heading,
-            FontId::new(18.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Body,
-            FontId::new(13.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Button,
-            FontId::new(13.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Small,
-            FontId::new(11.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Monospace,
-            FontId::new(12.0, FontFamily::Monospace),
-        );
+        apply_style(style, light_visuals())
     });
+}
+
+fn apply_style(style: &mut egui::Style, visuals: egui::Visuals) {
+    style.visuals = visuals;
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.menu_margin = egui::Margin::same(8);
+    style.spacing.interact_size.y = 26.0;
+    style.spacing.scroll.bar_width = 8.0;
+    style.spacing.scroll.floating = true;
+    style.text_styles.insert(
+        egui::TextStyle::Heading,
+        FontId::new(18.0, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Body,
+        FontId::new(BODY_SIZE, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Button,
+        FontId::new(12.5, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Small,
+        FontId::new(SMALL_SIZE, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Monospace,
+        FontId::new(MONO_SIZE, FontFamily::Monospace),
+    );
 }
 
 fn dark_visuals() -> egui::Visuals {
@@ -121,25 +106,42 @@ fn dark_visuals() -> egui::Visuals {
     visuals.panel_fill = DARK_BG;
     visuals.window_fill = DARK_PANEL;
     visuals.faint_bg_color = DARK_SURFACE;
-    visuals.extreme_bg_color = Color32::from_rgb(8, 11, 15);
-    visuals.override_text_color = Some(Color32::from_rgb(230, 234, 242));
+    visuals.extreme_bg_color = Color32::from_rgb(6, 9, 13);
+    visuals.override_text_color = Some(TEXT);
     visuals.hyperlink_color = BLUE;
-    visuals.selection.bg_fill = Color32::from_rgb(48, 63, 85);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(200, 220, 255));
+    visuals.selection.bg_fill = Color32::from_rgb(55, 75, 104);
+    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(210, 225, 255));
     visuals.widgets.noninteractive.bg_fill = DARK_PANEL;
     visuals.widgets.noninteractive.weak_bg_fill = DARK_PANEL;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, DARK_BORDER);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.inactive.bg_fill = DARK_SURFACE;
     visuals.widgets.inactive.weak_bg_fill = DARK_SURFACE;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, DARK_BORDER);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(31, 38, 50);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(31, 38, 50);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(60, 72, 92));
-    visuals.widgets.active.bg_fill = Color32::from_rgb(38, 47, 62);
-    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(38, 47, 62);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.hovered.bg_fill = DARK_SURFACE_ALT;
+    visuals.widgets.hovered.weak_bg_fill = DARK_SURFACE_ALT;
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(61, 78, 99));
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(34, 46, 61);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(34, 46, 61);
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    visuals.widgets.open.bg_fill = DARK_SURFACE;
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.open.bg_fill = DARK_SURFACE_ALT;
     visuals.window_stroke = Stroke::new(1.0, DARK_BORDER);
+    visuals.window_corner_radius = egui::CornerRadius::same(10);
+    visuals.window_shadow = egui::epaint::Shadow {
+        offset: [0, 10],
+        blur: 28,
+        spread: 0,
+        color: Color32::from_black_alpha(140),
+    };
+    visuals.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 6],
+        blur: 18,
+        spread: 0,
+        color: Color32::from_black_alpha(120),
+    };
     visuals
 }
 
@@ -149,33 +151,88 @@ fn light_visuals() -> egui::Visuals {
     visuals.window_fill = LIGHT_PANEL;
     visuals.faint_bg_color = LIGHT_SURFACE;
     visuals.extreme_bg_color = Color32::WHITE;
-    visuals.override_text_color = Some(Color32::from_rgb(31, 35, 40));
-    visuals.hyperlink_color = Color32::from_rgb(9, 105, 218);
+    visuals.override_text_color = Some(Color32::from_rgb(22, 32, 45));
+    visuals.hyperlink_color = Color32::from_rgb(20, 100, 200);
     visuals.selection.bg_fill = Color32::from_rgb(194, 222, 255);
     visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(20, 60, 110));
     visuals.widgets.noninteractive.bg_fill = LIGHT_PANEL;
     visuals.widgets.noninteractive.weak_bg_fill = LIGHT_PANEL;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, LIGHT_BORDER);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(7);
     visuals.widgets.inactive.bg_fill = LIGHT_SURFACE;
     visuals.widgets.inactive.weak_bg_fill = LIGHT_SURFACE;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, LIGHT_BORDER);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(228, 233, 240);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(228, 233, 240);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(160, 172, 188));
-    visuals.widgets.active.bg_fill = Color32::from_rgb(214, 222, 232);
-    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(214, 222, 232);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(228, 235, 244);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(228, 235, 244);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(170, 184, 200));
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(214, 224, 236);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(214, 224, 236);
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
     visuals.window_stroke = Stroke::new(1.0, LIGHT_BORDER);
+    visuals.window_corner_radius = egui::CornerRadius::same(10);
+    visuals.window_shadow = egui::epaint::Shadow {
+        offset: [0, 10],
+        blur: 28,
+        spread: 0,
+        color: Color32::from_black_alpha(40),
+    };
     visuals
+}
+
+pub fn panel_fill(ui: &egui::Ui) -> Color32 {
+    if ui.style().visuals.dark_mode {
+        DARK_PANEL
+    } else {
+        LIGHT_PANEL
+    }
+}
+
+pub fn surface_fill(ui: &egui::Ui) -> Color32 {
+    if ui.style().visuals.dark_mode {
+        DARK_SURFACE
+    } else {
+        LIGHT_SURFACE
+    }
+}
+
+pub fn border_color(ui: &egui::Ui) -> Color32 {
+    if ui.style().visuals.dark_mode {
+        DARK_BORDER
+    } else {
+        LIGHT_BORDER
+    }
 }
 
 pub fn status_color(status: &str) -> Color32 {
     match status.to_ascii_lowercase().as_str() {
-        "ok" | "success" | "passed" | "ready" | "device" | "completed" | "active" => GREEN,
-        "warn" | "warning" | "degraded" | "running" | "pending" | "attached" => YELLOW,
-        "error" | "failed" | "failure" | "offline" | "unauthorized" | "aborted" => RED,
-        "released" | "interrupted" | "partial" | "cancelled" => MUTED,
+        "ok" | "success" | "passed" | "ready" | "device" | "completed" | "active" | "connected"
+        | "stable_success" => GREEN,
+        "warn"
+        | "warning"
+        | "degraded"
+        | "running"
+        | "pending"
+        | "attached"
+        | "insufficient_evidence" => YELLOW,
+        "error" | "failed" | "failure" | "offline" | "unauthorized" | "aborted"
+        | "stable_failure" | "regressed" => RED,
+        "cancelled" | "canceled" => PURPLE,
+        "interrupted" | "timed_out" | "timed-out" | "abandoned" | "partial" => BLUE,
+        "released" | "skipped" | "unchanged" | "fixed" | "added" | "removed" => MUTED,
+        "flaky" => YELLOW,
         _ => MUTED,
+    }
+}
+
+pub fn status_label(status: &str) -> String {
+    let normalized = status.replace(['_', '-'], " ");
+    let mut chars = normalized.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 
@@ -209,17 +266,64 @@ pub fn icon_data() -> Arc<egui::IconData> {
     })
 }
 
+/// Draw a settings gear without relying on a font glyph, so it renders the
+/// same on every Windows font fallback configuration.
+pub fn paint_gear_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    let center = rect.center();
+    let radius = rect.width().min(rect.height()) * 0.36;
+    let stroke = Stroke::new(1.4, color);
+    painter.circle_stroke(center, radius, stroke);
+    painter.circle_filled(center, radius * 0.28, color);
+    for index in 0..8 {
+        let angle = std::f32::consts::TAU * index as f32 / 8.0;
+        let direction = egui::vec2(angle.cos(), angle.sin());
+        painter.line_segment(
+            [
+                center + direction * (radius + 0.5),
+                center + direction * (radius + 3.0),
+            ],
+            stroke,
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum NavIcon {
+    Setup,
     Overview,
     Devices,
     Sessions,
     Runs,
+    Triage,
+    Compare,
+    Logcat,
+    Inspector,
+    Maintenance,
+    Settings,
 }
 
 pub fn paint_nav_icon(painter: &egui::Painter, rect: egui::Rect, icon: NavIcon, color: Color32) {
-    let r = rect.shrink(2.0);
+    let r = rect.shrink(3.0);
+    let stroke = Stroke::new(1.5, color);
+    let faint = Stroke::new(1.0, color);
     match icon {
+        NavIcon::Setup => {
+            painter.circle_stroke(r.center(), r.width().min(r.height()) / 2.0, stroke);
+            painter.line_segment(
+                [
+                    egui::pos2(r.center().x, r.top() + 2.0),
+                    egui::pos2(r.center().x + 2.5, r.center().y + 1.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.center().x + 2.5, r.center().y + 1.0),
+                    egui::pos2(r.center().x - 2.0, r.bottom() - 2.0),
+                ],
+                stroke,
+            );
+        }
         NavIcon::Overview => {
             let gap = 2.0;
             let w = (r.width() - gap) / 2.0;
@@ -235,27 +339,25 @@ pub fn paint_nav_icon(painter: &egui::Painter, rect: egui::Rect, icon: NavIcon, 
             }
         }
         NavIcon::Devices => {
-            let phone = r.shrink2(egui::vec2(2.0, 0.0));
-            let stroke = Stroke::new(1.5, color);
-            painter.line_segment([phone.left_top(), phone.right_top()], stroke);
-            painter.line_segment([phone.right_top(), phone.right_bottom()], stroke);
-            painter.line_segment([phone.right_bottom(), phone.left_bottom()], stroke);
-            painter.line_segment([phone.left_bottom(), phone.left_top()], stroke);
-            painter.circle_filled(
-                egui::pos2(phone.center().x, phone.bottom() - 2.0),
-                1.0,
-                color,
+            let phone = r.shrink2(egui::vec2(2.5, 0.0));
+            painter.rect_stroke(phone, 2.0, stroke, StrokeKind::Inside);
+            painter.line_segment(
+                [
+                    egui::pos2(phone.center().x - 2.0, phone.bottom() - 1.5),
+                    egui::pos2(phone.center().x + 2.0, phone.bottom() - 1.5),
+                ],
+                faint,
             );
         }
         NavIcon::Sessions => {
-            painter.circle_filled(egui::pos2(r.left() + 4.0, r.center().y), 3.0, color);
-            painter.circle_filled(egui::pos2(r.right() - 4.0, r.center().y), 3.0, color);
+            painter.circle_stroke(egui::pos2(r.left() + 4.0, r.center().y), 3.0, stroke);
+            painter.circle_stroke(egui::pos2(r.right() - 4.0, r.center().y), 3.0, stroke);
             painter.line_segment(
                 [
-                    egui::pos2(r.left() + 6.0, r.center().y),
-                    egui::pos2(r.right() - 6.0, r.center().y),
+                    egui::pos2(r.left() + 7.0, r.center().y),
+                    egui::pos2(r.right() - 7.0, r.center().y),
                 ],
-                Stroke::new(1.2, color),
+                faint,
             );
         }
         NavIcon::Runs => {
@@ -268,6 +370,132 @@ pub fn paint_nav_icon(painter: &egui::Painter, rect: egui::Rect, icon: NavIcon, 
                 color,
                 Stroke::NONE,
             ));
+            painter.line_segment(
+                [
+                    egui::pos2(r.right() - 5.0, r.top() + 2.0),
+                    egui::pos2(r.right() - 5.0, r.bottom() - 2.0),
+                ],
+                faint,
+            );
+        }
+        NavIcon::Triage => {
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(r.center().x, r.top()),
+                    egui::pos2(r.right(), r.bottom()),
+                    egui::pos2(r.left(), r.bottom()),
+                ],
+                Color32::TRANSPARENT,
+                stroke,
+            ));
+            painter.line_segment(
+                [
+                    egui::pos2(r.center().x, r.top() + 4.0),
+                    egui::pos2(r.center().x, r.center().y + 1.0),
+                ],
+                stroke,
+            );
+            painter.circle_filled(egui::pos2(r.center().x, r.bottom() - 2.5), 1.2, color);
+        }
+        NavIcon::Compare => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(r.left_top(), egui::pos2(r.center().x - 2.0, r.bottom())),
+                2.0,
+                stroke,
+                StrokeKind::Inside,
+            );
+            painter.rect_stroke(
+                egui::Rect::from_min_max(egui::pos2(r.center().x + 2.0, r.top()), r.right_bottom()),
+                2.0,
+                stroke,
+                StrokeKind::Inside,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.center().x - 1.0, r.center().y - 2.0),
+                    egui::pos2(r.center().x + 1.0, r.center().y + 2.0),
+                ],
+                faint,
+            );
+        }
+        NavIcon::Logcat => {
+            painter.line_segment(
+                [
+                    egui::pos2(r.left() + 1.0, r.top() + 3.0),
+                    egui::pos2(r.center().x - 1.0, r.center().y),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.center().x - 1.0, r.center().y),
+                    egui::pos2(r.left() + 1.0, r.bottom() - 3.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.center().x + 3.0, r.bottom() - 3.0),
+                    egui::pos2(r.right() - 1.0, r.bottom() - 3.0),
+                ],
+                stroke,
+            );
+        }
+        NavIcon::Inspector => {
+            painter.rect_stroke(r.shrink(1.0), 2.0, stroke, StrokeKind::Inside);
+            painter.circle_stroke(r.center(), r.width() / 5.0, faint);
+            painter.line_segment(
+                [
+                    egui::pos2(r.center().x, r.top() - 1.0),
+                    egui::pos2(r.center().x, r.bottom() + 1.0),
+                ],
+                faint,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.left() - 1.0, r.center().y),
+                    egui::pos2(r.right() + 1.0, r.center().y),
+                ],
+                faint,
+            );
+        }
+        NavIcon::Maintenance => {
+            painter.line_segment(
+                [
+                    egui::pos2(r.left() + 3.0, r.bottom() - 2.0),
+                    egui::pos2(r.right() - 3.0, r.top() + 2.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.left() + 2.0, r.bottom() - 5.0),
+                    egui::pos2(r.left() + 5.0, r.bottom() - 2.0),
+                ],
+                faint,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.right() - 6.0, r.top() + 1.0),
+                    egui::pos2(r.right() - 1.0, r.top() + 4.0),
+                ],
+                faint,
+            );
+        }
+        NavIcon::Settings => {
+            painter.circle_stroke(r.center(), r.width() / 3.6, stroke);
+            painter.circle_filled(r.center(), 1.6, color);
+            for angle in [0.0_f32, 60.0, 120.0, 180.0, 240.0, 300.0] {
+                let radians = angle.to_radians();
+                let dir = egui::vec2(radians.cos(), radians.sin());
+                painter.line_segment(
+                    [
+                        r.center() + dir * (r.width() / 3.6),
+                        r.center() + dir * (r.width() / 2.2),
+                    ],
+                    faint,
+                );
+            }
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -11,28 +11,53 @@ use crate::backend::compatibility::CliInfo;
 use crate::backend::evidence::{ManifestVerification, TextPreview};
 use crate::backend::process_manager::{OperationHandle, OperationOutcome};
 use crate::backend::project::DiscoveredProject;
+use crate::backend::update::UpdateCheck;
 use crate::models::{
-    ApkInfo, DeviceList, DoctorResult, ErrorBody, FixtureInfo, HookInfo, ProjectConfig, ReportPath,
-    RunList, RunReport, SessionInfo, SessionList,
+    ApkInfo, DeviceList, DoctorResult, ErrorBody, FixtureInfo, FlakyReport, FrameResult, HookInfo,
+    LogcatPeek, MaintenanceSummary, ProjectConfig, ReconcileResult, ReportPath, RunComparison,
+    RunList, RunReport, SessionInfo, SessionList, UiInspectResult,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
+    Setup,
     Overview,
     Devices,
     Sessions,
     Runs,
+    Triage,
+    Compare,
+    Logcat,
+    Inspector,
+    Maintenance,
 }
 
 impl Page {
-    pub const ALL: [Page; 4] = [Page::Overview, Page::Devices, Page::Sessions, Page::Runs];
+    pub const ALL: [Page; 10] = [
+        Page::Setup,
+        Page::Overview,
+        Page::Devices,
+        Page::Sessions,
+        Page::Runs,
+        Page::Triage,
+        Page::Compare,
+        Page::Logcat,
+        Page::Inspector,
+        Page::Maintenance,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Page::Setup => "Setup",
             Page::Overview => "Overview",
             Page::Devices => "Devices",
             Page::Sessions => "Sessions",
             Page::Runs => "Runs",
+            Page::Triage => "Triage",
+            Page::Compare => "Compare",
+            Page::Logcat => "Logcat",
+            Page::Inspector => "Inspector",
+            Page::Maintenance => "Maintenance",
         }
     }
 }
@@ -62,13 +87,26 @@ impl ThemeMode {
     }
 }
 
+fn default_logcat_lines() -> usize {
+    1500
+}
+
+fn default_preview_interval_ms() -> u64 {
+    1200
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DesktopSettings {
     pub cli_path: Option<String>,
     pub workspace: Option<String>,
     pub project: Option<String>,
     pub owner: String,
     pub theme: ThemeMode,
+    pub onboarding_completed: bool,
+    pub logcat_lines: usize,
+    pub preview_interval_ms: u64,
+    pub update_check_on_start: bool,
 }
 
 impl Default for DesktopSettings {
@@ -84,6 +122,10 @@ impl Default for DesktopSettings {
                 .or_else(|| std::env::var("USERNAME").ok())
                 .unwrap_or_else(|| "Desktop User".to_string()),
             theme: ThemeMode::System,
+            onboarding_completed: false,
+            logcat_lines: default_logcat_lines(),
+            preview_interval_ms: default_preview_interval_ms(),
+            update_check_on_start: false,
         }
     }
 }
@@ -132,6 +174,7 @@ pub enum RefreshKind {
     Runs,
     Projects,
     Project,
+    Maintenance,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -142,6 +185,7 @@ pub struct RefreshState {
     pub last_sessions: Option<Instant>,
     pub last_runs: Option<Instant>,
     pub last_projects: Option<Instant>,
+    pub last_maintenance: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +246,7 @@ pub enum OperationKind {
     Fixture,
     Conformance,
     Hook,
+    Maintenance,
 }
 
 impl OperationKind {
@@ -227,6 +272,17 @@ impl OperationKind {
         matches!(
             self,
             Self::Fixture | Self::Conformance | Self::Hook | Self::Install
+        )
+    }
+
+    pub fn is_setup_lifecycle(self) -> bool {
+        matches!(
+            self,
+            Self::SessionStart
+                | Self::SessionAttach
+                | Self::SessionRelease
+                | Self::SessionStop
+                | Self::SessionRestart
         )
     }
 }
@@ -262,10 +318,26 @@ pub enum ConfirmAction {
     ReleaseSession(SessionInfo),
     StopSession(SessionInfo),
     RestartSession(SessionInfo),
-    Install { apk_path: PathBuf, fresh: bool },
-    Fixture { name: String, yes: bool },
-    Conformance { yes: bool },
-    Hook { name: String },
+    Install {
+        apk_path: PathBuf,
+        fresh: bool,
+    },
+    Fixture {
+        name: String,
+        yes: bool,
+    },
+    Conformance {
+        yes: bool,
+    },
+    Hook {
+        name: String,
+    },
+    Cleanup(CleanupRequest),
+    InstallCli {
+        staged: PathBuf,
+        target: PathBuf,
+        version: String,
+    },
     CancelOperation,
 }
 
@@ -279,6 +351,8 @@ impl ConfirmAction {
             Self::Fixture { .. } => "Run fixture",
             Self::Conformance { .. } => "Run conformance",
             Self::Hook { .. } => "Run hook",
+            Self::Cleanup(_) => "Clean maintenance data",
+            Self::InstallCli { .. } => "Replace CLI executable",
             Self::CancelOperation => "Cancel operation",
         }
     }
@@ -290,6 +364,8 @@ impl ConfirmAction {
             Self::RestartSession(_) => "Restart",
             Self::Install { .. } => "Install",
             Self::Fixture { .. } | Self::Conformance { .. } | Self::Hook { .. } => "Run",
+            Self::Cleanup(_) => "Clean now",
+            Self::InstallCli { .. } => "Replace CLI",
             Self::CancelOperation => "Cancel operation",
         }
     }
@@ -303,8 +379,228 @@ impl ConfirmAction {
                 | Self::Fixture { .. }
                 | Self::Conformance { .. }
                 | Self::Hook { .. }
+                | Self::Cleanup(_)
+                | Self::InstallCli { .. }
                 | Self::CancelOperation
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SetupSection {
+    #[default]
+    Welcome,
+    Cli,
+    Environment,
+    Project,
+    Device,
+    Updates,
+    Finish,
+}
+
+impl SetupSection {
+    pub const ALL: [SetupSection; 7] = [
+        SetupSection::Welcome,
+        SetupSection::Cli,
+        SetupSection::Environment,
+        SetupSection::Project,
+        SetupSection::Device,
+        SetupSection::Updates,
+        SetupSection::Finish,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Welcome => "Welcome",
+            Self::Cli => "CLI",
+            Self::Environment => "Environment",
+            Self::Project => "Project",
+            Self::Device => "Device",
+            Self::Updates => "Updates",
+            Self::Finish => "Finish",
+        }
+    }
+
+    pub fn position(self) -> usize {
+        Self::ALL.iter().position(|item| *item == self).unwrap_or(0)
+    }
+}
+
+#[derive(Default)]
+pub struct SetupState {
+    pub section: SetupSection,
+    pub create_name: String,
+    pub create_package: String,
+    pub create_avd: String,
+    pub create_busy: bool,
+    pub create_error: Option<String>,
+    pub test_running: bool,
+    pub test_ok: Option<bool>,
+    pub test_session: Option<String>,
+    pub test_log: Vec<String>,
+    pub test_error: Option<String>,
+    pub checked_cli: bool,
+    pub created_session: bool,
+}
+
+#[derive(Default)]
+pub struct UpdateState {
+    pub value: Option<UpdateCheck>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub staged: Option<PathBuf>,
+    pub repair_busy: bool,
+    pub repair_message: Option<String>,
+    pub last_check: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CleanupRequest {
+    pub older_days: u32,
+    pub keep_last: usize,
+    pub sessions: bool,
+    pub runs: bool,
+}
+
+#[derive(Default)]
+pub struct MaintenanceState {
+    pub summary: DataState<MaintenanceSummary>,
+    pub older_days: u32,
+    pub keep_last: usize,
+    pub include_sessions: bool,
+    pub include_runs: bool,
+    pub preview: Option<Value>,
+    pub preview_loading: bool,
+    pub preview_error: Option<String>,
+    pub cleaning: bool,
+    pub last_result: Option<String>,
+    pub cleanup_request: Option<CleanupRequest>,
+}
+
+#[derive(Default)]
+pub struct TriageState {
+    pub run_id: Option<String>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub flaky: Option<FlakyReport>,
+    pub flaky_loading: bool,
+    pub flaky_error: Option<String>,
+}
+
+#[derive(Default)]
+pub struct CompareState {
+    pub current: Option<String>,
+    pub baseline: Option<String>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub comparison: Option<RunComparison>,
+}
+
+#[derive(Default)]
+pub struct CompareForm {
+    pub current: Option<String>,
+    pub baseline: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogcatEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub tag: String,
+    pub message: String,
+    pub raw: String,
+    pub crash: bool,
+}
+
+pub struct LogcatState {
+    pub session_id: Option<String>,
+    pub package: String,
+    pub level: String,
+    pub search: String,
+    pub follow: bool,
+    pub paused: bool,
+    pub running: bool,
+    pub loading: bool,
+    pub lines: VecDeque<LogcatEntry>,
+    pub error: Option<String>,
+    pub notes: Vec<String>,
+    pub last_capture: Option<Instant>,
+    pub exported: Option<String>,
+    pub max_lines: usize,
+}
+
+impl Default for LogcatState {
+    fn default() -> Self {
+        Self {
+            session_id: None,
+            package: String::new(),
+            level: "verbose".to_string(),
+            search: String::new(),
+            follow: true,
+            paused: false,
+            running: false,
+            loading: false,
+            lines: VecDeque::new(),
+            error: None,
+            notes: Vec::new(),
+            last_capture: None,
+            exported: None,
+            max_lines: 4000,
+        }
+    }
+}
+
+pub struct InspectorState {
+    pub session_id: Option<String>,
+    pub image: Option<egui::TextureHandle>,
+    pub image_size: Option<(u32, u32)>,
+    pub display_size: Option<(u32, u32)>,
+    pub hierarchy: Option<crate::models::UiHierarchy>,
+    pub selected_node: Option<usize>,
+    pub collapsed: HashSet<usize>,
+    pub search: String,
+    pub raw_xml: bool,
+    pub auto_refresh: bool,
+    pub interval_ms: u64,
+    pub last_frame: Option<Instant>,
+    pub last_hierarchy: Option<Instant>,
+    pub frame_loading: bool,
+    pub hierarchy_loading: bool,
+    pub frame_error: Option<String>,
+    pub hierarchy_error: Option<String>,
+    pub action_busy: bool,
+    pub last_frame_path: Option<String>,
+    pub last_action: Option<String>,
+    pub typed_text: String,
+    pub highlight_pulse: f32,
+}
+
+impl Default for InspectorState {
+    fn default() -> Self {
+        Self {
+            session_id: None,
+            image: None,
+            image_size: None,
+            display_size: None,
+            hierarchy: None,
+            selected_node: None,
+            collapsed: HashSet::new(),
+            search: String::new(),
+            raw_xml: false,
+            auto_refresh: true,
+            interval_ms: 1200,
+            last_frame: None,
+            last_hierarchy: None,
+            frame_loading: false,
+            hierarchy_loading: false,
+            frame_error: None,
+            hierarchy_error: None,
+            action_busy: false,
+            last_frame_path: None,
+            last_action: None,
+            typed_text: String::new(),
+            highlight_pulse: 0.0,
+        }
     }
 }
 
@@ -423,10 +719,10 @@ impl UiError {
                 ..Default::default()
             });
         }
-        if let Some(envelope) = &outcome.envelope {
-            if let Some(body) = &envelope.error {
-                return Some(Self::from_error_body(body, outcome.stdout.clone()));
-            }
+        if let Some(envelope) = &outcome.envelope
+            && let Some(body) = &envelope.error
+        {
+            return Some(Self::from_error_body(body, outcome.stdout.clone()));
         }
         if !outcome.success {
             return Some(Self {
@@ -472,5 +768,25 @@ pub enum AppEvent {
     InstallPreview {
         path: PathBuf,
         result: std::result::Result<Value, String>,
+    },
+    Update(std::result::Result<UpdateCheck, String>),
+    Reconcile(std::result::Result<ReconcileResult, String>),
+    Comparison(std::result::Result<RunComparison, String>),
+    Flaky(std::result::Result<FlakyReport, String>),
+    Maintenance(std::result::Result<MaintenanceSummary, String>),
+    MaintenancePreview {
+        request: CleanupRequest,
+        result: std::result::Result<Value, String>,
+    },
+    Logcat(std::result::Result<LogcatPeek, String>),
+    Frame(std::result::Result<FrameResult, String>),
+    Hierarchy(std::result::Result<UiInspectResult, String>),
+    CliUpdateStaged(std::result::Result<PathBuf, String>),
+    CliUpdateInstalled(std::result::Result<String, String>),
+    SetupTest(std::result::Result<String, String>),
+    SetupProject(std::result::Result<String, String>),
+    UiAction {
+        label: String,
+        result: std::result::Result<String, String>,
     },
 }

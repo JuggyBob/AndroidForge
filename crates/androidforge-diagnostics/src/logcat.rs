@@ -37,6 +37,18 @@ pub struct LogcatResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogcatPeek {
+    pub lines: Vec<String>,
+    pub line_count: usize,
+    pub raw_bytes: u64,
+    pub pid_filter: Vec<u32>,
+    pub truncated: bool,
+    pub captured_at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogcatCapture {
     pub schema_version: u32,
     pub session_id: String,
@@ -186,6 +198,128 @@ pub async fn collect_logcat_tail(
         crash_buffer,
         notes,
     })
+}
+
+pub async fn collect_logcat_peek(
+    adb: &AdbClient,
+    serial: &str,
+    package: Option<&str>,
+    lines: Option<usize>,
+    max_bytes: Option<usize>,
+    min_level: Option<&str>,
+    since: Option<&str>,
+) -> Result<LogcatPeek> {
+    let requested = lines.unwrap_or(1000).clamp(1, 20_000);
+    let max_bytes = max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
+    let mut args = vec![
+        "logcat".to_string(),
+        "-d".to_string(),
+        "-v".to_string(),
+        "threadtime".to_string(),
+        "-t".to_string(),
+    ];
+    match since.filter(|value| !value.trim().is_empty()) {
+        Some(since) => args.push(since.trim().to_string()),
+        None => args.push(requested.to_string()),
+    }
+    let output = adb
+        .shell_args(
+            serial,
+            &args,
+            Some(Duration::from_secs(20)),
+            Some(max_bytes + 1),
+        )
+        .await?;
+    let raw = output.stdout_text();
+    let pids = if let Some(package) = package {
+        adb.shell_args(
+            serial,
+            &["pidof".to_string(), package.to_string()],
+            Some(Duration::from_secs(5)),
+            None,
+        )
+        .await
+        .ok()
+        .map(|output| {
+            output
+                .stdout_text()
+                .split_whitespace()
+                .filter_map(|value| value.parse::<u32>().ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let filtered = if let Some(package) = package {
+        filter_logcat(&raw, package, &pids)
+    } else {
+        raw.clone()
+    };
+    let min_priority = min_level.and_then(parse_priority).unwrap_or(0);
+    let mut selected = Vec::new();
+    for line in filtered.lines() {
+        if min_priority > 0 {
+            let Some(priority) = line_priority(line) else {
+                continue;
+            };
+            if priority < min_priority {
+                continue;
+            }
+        }
+        selected.push(line.to_string());
+    }
+    let truncated = output.stdout_truncated || raw.len() > max_bytes || selected.len() > requested;
+    if selected.len() > requested {
+        selected = selected.split_off(selected.len() - requested);
+    }
+    let line_count = selected.len();
+    let raw_bytes = raw.len() as u64;
+    let mut notes = Vec::new();
+    if output.stdout_truncated || raw.len() > max_bytes {
+        notes.push(format!(
+            "logcat output was capped at approximately {max_bytes} bytes"
+        ));
+    }
+    if pids.is_empty() && package.is_some() {
+        notes.push(
+            "the package process was not running; package filtering may be incomplete".to_string(),
+        );
+    }
+    Ok(LogcatPeek {
+        lines: selected,
+        line_count,
+        raw_bytes,
+        pid_filter: pids,
+        truncated,
+        captured_at: now_rfc3339(),
+        notes,
+    })
+}
+
+fn parse_priority(value: &str) -> Option<u8> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "v" | "verbose" => Some(0),
+        "d" | "debug" => Some(1),
+        "i" | "info" => Some(2),
+        "w" | "warn" | "warning" => Some(3),
+        "e" | "error" => Some(4),
+        "f" | "fatal" | "assert" => Some(5),
+        _ => None,
+    }
+}
+
+fn line_priority(line: &str) -> Option<u8> {
+    let token = line.split_whitespace().nth(4)?;
+    match token.as_bytes().first().copied()? {
+        b'V' => Some(0),
+        b'D' => Some(1),
+        b'I' => Some(2),
+        b'W' => Some(3),
+        b'E' => Some(4),
+        b'F' | b'A' => Some(5),
+        _ => None,
+    }
 }
 
 pub fn filter_logcat(raw: &str, package: &str, pids: &[u32]) -> String {

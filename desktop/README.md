@@ -28,11 +28,24 @@ Unit tests cover CLI resolution, JSON contracts, evidence path safety, project d
 process-tree termination. Integration tests compile a mock CLI with `rustc` and cover version/schema
 probing, typed results, structured errors, invalid JSON, timeouts, streamed output and cancellation.
 
+## Features
+
+Navigation is grouped into Workspace, Test & Debug, Analyze, Live and System. The cockpit provides:
+
+- first-run setup and persistent diagnostics;
+- overview, devices, sessions, runs and evidence;
+- failure triage, run comparison and flaky-step analysis;
+- bounded live logcat with filters, pause/resume, follow and export;
+- periodic device preview and a semantic UIAutomator inspector with bounded highlighting and actions;
+- maintenance previews and confirmed cleanup;
+- version compatibility, GitHub release checks and verified CLI repair.
+
 ## Validation
 
 `cargo fmt --check`, clippy with `-D warnings`, the workspace test suite and a release build are run in
-CI. GUI flows were validated manually on Windows against the CalcSuite project; see
-[../VERIFICATION.md](../VERIFICATION.md).
+CI. GUI flows were validated manually on Windows against a real Android 16 emulator and the CalcSuite
+project, including live logcat, preview/hierarchy actions, cancellation/reconciliation and maintenance
+cleanup; see [../VERIFICATION.md](../VERIFICATION.md).
 
 ## Cancellation
 
@@ -40,6 +53,10 @@ CI. GUI flows were validated manually on Windows against the CalcSuite project; 
 snapshot and terminates the child tree deepest-first, with `taskkill /T /F` as a fallback. It never issues
 `session stop` or `session release`. Session lifecycle operations run to completion because killing them
 could leave a half-owned emulator or an inconsistent lock.
+
+After cancellation the desktop reconciles the unfinished run as `cancelled`; startup reconciliation
+marks abandoned `running` reports `interrupted`. If the CLI process exits before cancellation is
+confirmed, the UI reports that cancellation had no effect instead of showing a false success.
 
 ## Assets
 

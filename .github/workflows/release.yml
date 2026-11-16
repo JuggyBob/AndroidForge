@@ -19,11 +19,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --release
 
-      - name: Verify version and package binaries
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build and verify
         shell: pwsh
         run: |
+          cargo build --workspace --release
+          if ($LASTEXITCODE -ne 0) { throw "release build failed" }
+
           $tag = $env:GITHUB_REF_NAME
           if (-not $tag.StartsWith("v")) {
             throw "Release workflow must run from a v* tag, got '$tag'"
@@ -38,32 +44,17 @@ jobs:
             throw "CLI reported '$cliVersion', expected 'androidforge $version'"
           }
 
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path target\release\androidforge.exe -DestinationPath dist\androidforge-cli-windows-x86_64.zip -Force
-
-          $portable = Join-Path $env:RUNNER_TEMP "androidforge-portable"
-          New-Item -ItemType Directory -Force -Path $portable | Out-Null
-          Copy-Item target\release\androidforge.exe $portable
-          Copy-Item target\release\androidforge-desktop.exe $portable
-          Copy-Item LICENSE $portable
-          @"
-          AndroidForge $version (Alpha) portable desktop + CLI
-
-          Run androidforge-desktop.exe for the native cockpit. It locates androidforge.exe beside it.
-          Use the CLI for automation and the JSON contract. See README.md, USER_GUIDE.md and
-          VERIFICATION.md in the repository for scope and known limitations.
-
-          This is alpha software. Windows 10/11 x86_64 is the validated host.
-          "@ | Set-Content (Join-Path $portable "PORTABLE.txt") -Encoding utf8
-          Compress-Archive -Path (Join-Path $portable "*") -DestinationPath dist\androidforge-desktop-windows-x86_64.zip -Force
-
-          $lines = @()
-          foreach ($name in @("androidforge-cli-windows-x86_64.zip", "androidforge-desktop-windows-x86_64.zip")) {
-            $hash = (Get-FileHash (Join-Path dist $name) -Algorithm SHA256).Hash.ToLower()
-            $lines += "$hash  $name"
+      - name: Package portable ZIP, installer and checksums
+        shell: pwsh
+        run: |
+          ./packaging/package.ps1 -SkipBuild
+          if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
+          if (-not (Test-Path "dist/androidforge-windows-x86_64-setup.exe")) {
+            throw "installer was not produced; iscc.exe was not found"
           }
-          $lines | Set-Content dist\SHA256SUMS.txt -Encoding ascii
-          Get-Content dist\SHA256SUMS.txt
+          if (-not (Test-Path "dist/androidforge-desktop-windows-x86_64.zip")) {
+            throw "portable ZIP was not produced"
+          }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -71,6 +62,7 @@ jobs:
           path: |
             dist/androidforge-cli-windows-x86_64.zip
             dist/androidforge-desktop-windows-x86_64.zip
+            dist/androidforge-windows-x86_64-setup.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -80,10 +72,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:GITHUB_REF_NAME
+          $notes = "docs/release-notes/$tag.md"
+          $notesArg = if (Test-Path $notes) { @("--notes-file", $notes) } else { @("--generate-notes") }
           gh release create $tag `
             dist/androidforge-cli-windows-x86_64.zip `
             dist/androidforge-desktop-windows-x86_64.zip `
+            dist/androidforge-windows-x86_64-setup.exe `
             dist/SHA256SUMS.txt `
-            --title "AndroidForge $tag (Alpha)" `
+            --title "AndroidForge $tag" `
             --prerelease `
-            --generate-notes
+            @notesArg

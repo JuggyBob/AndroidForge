@@ -26,6 +26,21 @@ struct Check {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct CheckView {
+    name: String,
+    status: String,
+    detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    required: bool,
+    blocking: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    impact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    suggestion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct DoctorReport {
     schema_version: u32,
     status: String,
@@ -34,7 +49,7 @@ struct DoctorReport {
     project_root: String,
     project_config: Option<String>,
     global_config: Option<String>,
-    checks: Vec<Check>,
+    checks: Vec<CheckView>,
     tools: Vec<androidforge_core::model::ToolInfo>,
     avds: Vec<String>,
     sessions: Vec<androidforge_core::session::SessionListEntry>,
@@ -299,6 +314,7 @@ pub async fn doctor(cli: &Cli) -> Result<CommandSuccess> {
     } else {
         "ok"
     };
+    let check_views = checks.iter().map(enrich_check).collect::<Vec<_>>();
     let report = DoctorReport {
         schema_version: 1,
         status: status.to_string(),
@@ -318,7 +334,7 @@ pub async fn doctor(cli: &Cli) -> Result<CommandSuccess> {
         } else {
             None
         },
-        checks: checks.clone(),
+        checks: check_views,
         tools,
         avds,
         sessions,
@@ -346,6 +362,110 @@ pub async fn doctor(cli: &Cli) -> Result<CommandSuccess> {
         success.exit_code = 3;
     }
     Ok(success)
+}
+
+fn enrich_check(check: &Check) -> CheckView {
+    let (required, blocking, impact, suggestion) = match check.name.as_str() {
+        "host" | "androidforge" => (
+            true,
+            true,
+            Some("The host and AndroidForge version anchor every report."),
+            None,
+        ),
+        "sdk" => (
+            true,
+            true,
+            Some("The SDK is required to find ADB, the emulator and build tools."),
+            Some("Set ANDROID_HOME or ANDROID_SDK_ROOT, or install the Android SDK."),
+        ),
+        "adb" => (
+            true,
+            true,
+            Some("ADB is the transport for every device operation."),
+            Some("Install Android SDK platform-tools and put adb.exe on PATH."),
+        ),
+        "emulator" => (
+            true,
+            false,
+            Some(
+                "Emulator execution is required to start AVD sessions; attached devices still work.",
+            ),
+            Some("Install the Android Emulator component from the SDK manager."),
+        ),
+        "aapt2" => (
+            true,
+            false,
+            Some("APK inspection and package/version identity require aapt2."),
+            Some("Install Android SDK build-tools and select a version with aapt2."),
+        ),
+        "java" => (
+            true,
+            false,
+            Some("apksigner needs a JDK to verify APK signatures and certificates."),
+            Some("Install a JDK 17+ or point JAVA_HOME at the SDK-bundled JDK."),
+        ),
+        "avds" => (
+            false,
+            false,
+            Some("At least one AVD is needed to start an AndroidForge-owned emulator."),
+            Some("Create an AVD in Android Studio or with avdmanager, then recheck."),
+        ),
+        "project_config" => (
+            false,
+            false,
+            Some("A project adapter supplies package, AVD, fixtures and conformance defaults."),
+            Some("Run `androidforge init` in the project or select an existing adapter."),
+        ),
+        "sdk_licenses" => (
+            false,
+            false,
+            Some("Unaccepted licenses can block SDK component installation and updates."),
+            Some("Run `sdkmanager --licenses` and accept the required licenses."),
+        ),
+        "virtualization" => (
+            false,
+            false,
+            Some("Hardware acceleration is required for usable emulator performance."),
+            Some("Enable virtualization in firmware/Windows features and recheck."),
+        ),
+        "maestro" => (
+            false,
+            false,
+            Some("Maestro is optional; AndroidForge automation does not require it."),
+            Some("Install Maestro only if you want to run Maestro flows."),
+        ),
+        "artifacts" => (
+            true,
+            true,
+            Some(
+                "Reports, screenshots and manifests cannot be written without a writable artifact directory.",
+            ),
+            Some("Choose a writable project/artifact directory or fix its permissions."),
+        ),
+        "sessions" => (
+            false,
+            false,
+            Some("Stale sessions can block a device and hide the current owner."),
+            Some("Run `androidforge session gc --reclaim --dry-run` to preview cleanup."),
+        ),
+        "disk" => (
+            false,
+            false,
+            Some("Low disk space can interrupt evidence capture and report writes."),
+            Some("Free space or choose a different artifact directory before long runs."),
+        ),
+        _ => (false, false, None, None),
+    };
+    CheckView {
+        name: check.name.clone(),
+        status: check.status.clone(),
+        detail: check.detail.clone(),
+        path: check.path.clone(),
+        required,
+        blocking: blocking && check.status != "ok",
+        impact: impact.map(str::to_string),
+        suggestion: suggestion.map(str::to_string),
+    }
 }
 
 async fn inspect_tool(
@@ -682,6 +802,14 @@ fn schema_files() -> Vec<(&'static str, &'static str)> {
         (
             "conformance.schema.json",
             include_str!("../../../../schema/conformance.schema.json"),
+        ),
+        (
+            "analysis.schema.json",
+            include_str!("../../../../schema/analysis.schema.json"),
+        ),
+        (
+            "maintenance.schema.json",
+            include_str!("../../../../schema/maintenance.schema.json"),
         ),
     ]
 }

@@ -3,30 +3,30 @@ use egui::RichText;
 use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
-use crate::components::{empty_state, key_value, muted, section_title, stale_note, title_row};
-use crate::state::DataState;
+use crate::components::*;
+use crate::state::*;
 use crate::theme;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
-    title_row(
+    page_header(
         ui,
         "Devices",
-        "Connected and discoverable Android devices. Ownership is reported by AndroidForge sessions.",
+        "Connected Android devices, current ownership and physical capabilities.",
     );
-    ui.horizontal(|ui| {
-        if ui.button("Refresh").clicked() {
+    toolbar(ui, |ui| {
+        if secondary_button(ui, "Refresh").clicked() {
             app.manual_refresh(ui.ctx());
         }
         muted(
             ui,
             format!(
-                "{} device(s) · automatic refresh every 3s",
+                "{} device(s) · automatic refresh while this page is visible",
                 app.devices.value.count
             ),
         );
     });
     stale_note(ui, &app.devices, "Device list");
-    ui.add_space(5.0);
+    ui.add_space(4.0);
     if app.devices.value.devices.is_empty() {
         empty_state(
             ui,
@@ -35,30 +35,29 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         );
         return;
     }
-
     let devices = app.devices.value.devices.clone();
+    let mut select = None;
     TableBuilder::new(ui)
         .sense(egui::Sense::click())
-        .striped(true)
+        .striped(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::initial(150.0).at_least(110.0))
         .column(Column::remainder().at_least(120.0))
+        .column(Column::initial(85.0))
         .column(Column::initial(75.0))
-        .column(Column::initial(80.0))
-        .column(Column::initial(150.0))
+        .column(Column::initial(180.0))
         .column(Column::initial(58.0))
-        .header(22.0, |mut header| {
+        .header(24.0, |mut header| {
             for name in ["Serial", "Model", "State", "Android", "Owner", ""] {
                 header.col(|ui| {
-                    ui.label(RichText::new(name).size(10.0).strong().color(theme::MUTED));
+                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
                 });
             }
         })
         .body(|body| {
-            body.rows(24.0, devices.len(), |mut row| {
+            body.rows(28.0, devices.len(), |mut row| {
                 let device = &devices[row.index()];
-                let selected = app.selected_device.as_deref() == Some(device.serial.as_str());
-                row.set_selected(selected);
+                row.set_selected(app.selected_device.as_deref() == Some(device.serial.as_str()));
                 row.col(|ui| {
                     ui.add(
                         egui::Label::new(RichText::new(&device.serial).size(10.0).monospace())
@@ -67,14 +66,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .on_hover_text(&device.serial);
                 });
                 row.col(|ui| {
-                    ui.label(RichText::new(device.model.as_deref().unwrap_or("-")).size(11.0));
+                    ui.label(RichText::new(device.model.as_deref().unwrap_or("-")).size(10.5));
                 });
                 row.col(|ui| {
-                    ui.label(
-                        RichText::new(&device.state)
-                            .size(10.0)
-                            .color(theme::status_color(&device.state)),
-                    );
+                    status_pill(ui, &device.state, theme::status_color(&device.state));
                 });
                 row.col(|ui| {
                     ui.label(
@@ -87,134 +82,133 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         .as_ref()
                         .map(|owner| format!("{} · {}", owner.owner, owner.session_id))
                         .unwrap_or_else(|| "unowned".to_string());
-                    ui.label(RichText::new(owner).size(10.0));
+                    ui.add(egui::Label::new(RichText::new(owner).size(10.0)).truncate());
                 });
                 row.col(|ui| {
                     if ui.small_button("Select").clicked() {
-                        app.selected_device = Some(device.serial.clone());
+                        select = Some(device.serial.clone());
                     }
                 });
                 if row.response().clicked() {
-                    app.selected_device = Some(device.serial.clone());
+                    select = Some(device.serial.clone());
                 }
             });
         });
-
+    if let Some(serial) = select {
+        app.selected_device = Some(serial);
+    }
     if let Some(device) = app.selected_device_info() {
         ui.add_space(8.0);
-        details(ui, &device, app);
+        details(app, ui, &device);
     }
 }
 
-fn details(ui: &mut egui::Ui, device: &crate::models::Device, app: &App) {
+fn details(app: &mut App, ui: &mut egui::Ui, device: &crate::models::Device) {
     section_title(ui, "Device details");
-    egui::Frame::new()
-        .fill(if ui.style().visuals.dark_mode {
-            theme::DARK_SURFACE
-        } else {
-            theme::LIGHT_SURFACE
-        })
-        .stroke(egui::Stroke::new(1.0, theme::DARK_BORDER))
-        .inner_margin(egui::Margin::symmetric(10, 7))
-        .show(ui, |ui| {
-            egui::Grid::new("device-details")
-                .num_columns(4)
-                .spacing([18.0, 4.0])
-                .show(ui, |ui| {
-                    key_value(ui, "Serial", &device.serial);
-                    key_value(ui, "Kind", device.kind.as_deref().unwrap_or("-"));
-                    ui.end_row();
-                    key_value(
-                        ui,
+    card(ui, |ui| {
+        ui.columns(2, |columns| {
+            kv_grid(
+                &mut columns[0],
+                "device-main",
+                &[
+                    ("Serial", device.serial.clone()),
+                    (
+                        "Model",
+                        device.model.clone().unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
                         "Manufacturer",
-                        device.manufacturer.as_deref().unwrap_or("-"),
-                    );
-                    key_value(ui, "Model", device.model.as_deref().unwrap_or("-"));
-                    ui.end_row();
-                    key_value(
-                        ui,
+                        device
+                            .manufacturer
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
                         "Android",
-                        device.android_version.as_deref().unwrap_or("-"),
-                    );
-                    key_value(
-                        ui,
+                        device
+                            .android_version
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
                         "API",
-                        &device
+                        device
                             .api_level
-                            .map(|v| v.to_string())
+                            .map(|value| value.to_string())
                             .unwrap_or_else(|| "-".to_string()),
-                    );
-                    ui.end_row();
-                    key_value(
-                        ui,
-                        "Architecture",
-                        device.architecture.as_deref().unwrap_or("-"),
-                    );
-                    key_value(
-                        ui,
+                    ),
+                ],
+            );
+            kv_grid(
+                &mut columns[1],
+                "device-more",
+                &[
+                    (
                         "Resolution",
-                        device.resolution.as_deref().unwrap_or("-"),
-                    );
-                    ui.end_row();
-                    key_value(ui, "Boot", device.boot_state.as_deref().unwrap_or("-"));
-                    key_value(ui, "AVD", device.avd.as_deref().unwrap_or("-"));
-                    ui.end_row();
-                    key_value(
-                        ui,
-                        "Port",
-                        &device
-                            .port
-                            .map(|v| v.to_string())
+                        device.resolution.clone().unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
+                        "Architecture",
+                        device
+                            .architecture
+                            .clone()
                             .unwrap_or_else(|| "-".to_string()),
-                    );
-                    key_value(
-                        ui,
+                    ),
+                    (
                         "Battery",
-                        &device
+                        device
                             .battery_level
-                            .map(|v| format!("{v}%"))
+                            .map(|value| format!("{value}%"))
                             .unwrap_or_else(|| "-".to_string()),
-                    );
-                    ui.end_row();
-                });
-            if let Some(owner) = &device.owner {
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(format!(
-                        "Owned by {} · {} · {}",
-                        owner.owner, owner.session_id, owner.state
-                    ))
-                    .size(11.0)
-                    .color(theme::YELLOW),
-                );
-            } else {
-                muted(ui, "Not currently owned by an AndroidForge session.");
-            }
-            if let Some(session) = app
+                    ),
+                    ("AVD", device.avd.clone().unwrap_or_else(|| "-".to_string())),
+                    (
+                        "Port",
+                        device
+                            .port
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                ],
+            );
+        });
+        ui.add_space(6.0);
+        if let Some(owner) = &device.owner {
+            info_banner(
+                ui,
+                &format!(
+                    "Owned by {} · {} · {}",
+                    owner.owner, owner.session_id, owner.state
+                ),
+            );
+        } else {
+            muted(ui, "Not currently owned by an AndroidForge session.");
+        }
+        ui.horizontal(|ui| {
+            copy_button(ui, &device.serial, "Copy serial");
+            copy_button(
+                ui,
+                device.resolution.as_deref().unwrap_or("-"),
+                "Copy resolution",
+            );
+            if let Some(session_id) = app
                 .sessions
                 .value
                 .sessions
                 .iter()
                 .find(|session| session.serial.as_deref() == Some(device.serial.as_str()))
+                .map(|session| session.id.clone())
             {
-                ui.label(
-                    RichText::new(format!(
-                        "Current session: {} · {}",
-                        session.id, session.owner
-                    ))
-                    .size(10.0)
-                    .color(theme::MUTED),
-                );
-            }
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                crate::components::copy_button(ui, &device.serial, "Copy serial");
-                if let Some(path) = &device.owner {
-                    let _ = path;
+                if secondary_button(ui, "Open inspector").clicked() {
+                    app.selected_session = Some(session_id.clone());
+                    app.inspector_select_session(Some(session_id.clone()));
+                    app.set_page(Page::Inspector);
+                    app.start_inspector(ui.ctx());
                 }
-            });
+                if secondary_button(ui, "Use as target").clicked() {
+                    app.selected_session = Some(session_id.clone());
+                }
+            }
         });
+    });
 }
-
-#[allow(dead_code)]
-fn _keep_data_state(_state: &DataState<crate::models::DeviceList>) {}

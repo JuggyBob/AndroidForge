@@ -6,13 +6,14 @@ use androidforge_core::output::CommandSuccess;
 use androidforge_core::run::{RunContext, clear_active_run, set_active_run};
 use androidforge_core::util::write_atomic;
 use androidforge_diagnostics::{
-    LogcatStream, Recorder, capture_screenshot, collect_diagnostics, collect_logcat_tail,
-    detect_crashes,
+    LogcatStream, Recorder, capture_frame, capture_screenshot, collect_diagnostics,
+    collect_logcat_peek, collect_logcat_tail, detect_crashes,
 };
 
 use crate::cli::{
-    CaptureCommand, CaptureScreenshotArgs, DiagnosticsCollectArgs, DiagnosticsCommand,
-    LogcatCommand, LogcatStartArgs, LogcatTailArgs, RecordCommand, RecordStartArgs,
+    CaptureCommand, CaptureFrameArgs, CaptureScreenshotArgs, DiagnosticsCollectArgs,
+    DiagnosticsCommand, LogcatCommand, LogcatPeekArgs, LogcatStartArgs, LogcatTailArgs,
+    RecordCommand, RecordStartArgs,
 };
 use crate::commands::common::success;
 use crate::context::CliContext;
@@ -21,6 +22,7 @@ use crate::run_scope::RunScope;
 pub async fn capture(ctx: &CliContext, command: &CaptureCommand) -> Result<CommandSuccess> {
     match command {
         CaptureCommand::Screenshot(args) => screenshot(ctx, args).await,
+        CaptureCommand::Frame(args) => frame(ctx, args).await,
         CaptureCommand::Record { command } => record(ctx, command).await,
     }
 }
@@ -82,6 +84,29 @@ async fn screenshot(ctx: &CliContext, args: &CaptureScreenshotArgs) -> Result<Co
         },
     )
     .await
+}
+
+async fn frame(ctx: &CliContext, args: &CaptureFrameArgs) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let serial = device.serial.clone();
+    let timeout = ctx.parse_timeout(
+        args.timeout.as_deref(),
+        ctx.config.file.timeouts.screenshot_secs,
+    )?;
+    let output = local_output(ctx, &args.output);
+    let adb = ctx.adb()?;
+    let result = capture_frame(&adb, &serial, &output, timeout).await?;
+    Ok(success(
+        "capture.frame",
+        serde_json::to_value(&result)?,
+        format!(
+            "Captured preview frame {}x{} to {}\n",
+            result.width, result.height, result.path
+        ),
+    )
+    .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+    .with_device(serial))
 }
 
 async fn record(ctx: &CliContext, command: &RecordCommand) -> Result<CommandSuccess> {
@@ -330,6 +355,7 @@ async fn collect(ctx: &CliContext, args: &DiagnosticsCollectArgs) -> Result<Comm
 async fn logcat(ctx: &CliContext, command: &LogcatCommand) -> Result<CommandSuccess> {
     match command {
         LogcatCommand::Tail(args) => logcat_tail(ctx, args).await,
+        LogcatCommand::Peek(args) => logcat_peek(ctx, args).await,
         LogcatCommand::Start(args) => logcat_start(ctx, args).await,
         LogcatCommand::Stop => logcat_stop(ctx).await,
         LogcatCommand::Status => logcat_status(ctx).await,
@@ -411,6 +437,53 @@ async fn logcat_tail(ctx: &CliContext, args: &LogcatTailArgs) -> Result<CommandS
         },
     )
     .await
+}
+
+async fn logcat_peek(ctx: &CliContext, args: &LogcatPeekArgs) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    // Read-only peek feeds the desktop live view. Do not silently fall back to
+    // the project package: an empty filter must mean "all processes" so the
+    // panel can show system and crash logs too.
+    let package = args.package.clone();
+    let lines = args
+        .lines
+        .unwrap_or(ctx.config.file.diagnostics.logcat_tail_lines)
+        .clamp(1, 20_000);
+    let result = collect_logcat_peek(
+        &ctx.adb()?,
+        &device.serial,
+        package.as_deref(),
+        Some(lines),
+        Some(ctx.config.file.diagnostics.max_log_bytes),
+        args.level.as_deref(),
+        args.since.as_deref(),
+    )
+    .await?;
+    let preview = result
+        .lines
+        .iter()
+        .rev()
+        .take(40)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(success(
+        "diagnostics.logcat.peek",
+        serde_json::to_value(&result)?,
+        format!(
+            "{} log line(s) from {}{}\n{preview}\n",
+            result.line_count,
+            device.serial,
+            package
+                .as_deref()
+                .map(|package| format!(" for {package}"))
+                .unwrap_or_default()
+        ),
+    )
+    .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+    .with_device(device.serial))
 }
 
 async fn logcat_start(ctx: &CliContext, args: &LogcatStartArgs) -> Result<CommandSuccess> {

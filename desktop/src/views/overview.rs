@@ -1,230 +1,285 @@
 use eframe::egui;
-use egui::{Color32, RichText};
+use egui::{RichText, Vec2};
 use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
-use crate::components::{empty_state, muted, project_strip, section_title, title_row};
-use crate::state::Page;
+use crate::components::*;
+use crate::state::*;
 use crate::theme;
+use crate::views::format_duration;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
-    title_row(
+    page_header(
         ui,
         "Overview",
-        "A compact view of the AndroidForge environment and recent activity.",
+        "Your Android workspace at a glance: environment, ownership and recent evidence.",
     );
     project_strip(app, ui);
-    ui.add_space(8.0);
     if let Some(error) = &app.cli.error {
-        crate::components::error_banner(ui, error);
+        error_banner(ui, error);
         ui.add_space(6.0);
     }
-    for (label, error) in [
-        ("Devices", app.devices.error.as_deref()),
-        ("Sessions", app.sessions.error.as_deref()),
-        ("Runs", app.runs.error.as_deref()),
-    ] {
-        if let Some(error) = error {
-            crate::components::error_banner(ui, &format!("{label}: {error}"));
-            ui.add_space(4.0);
-        }
-    }
 
-    ui.horizontal_wrapped(|ui| {
-        let doctor_status = if app.doctor.value.status.is_empty() {
-            "unknown"
-        } else {
-            app.doctor.value.status.as_str()
-        };
-        stat(
-            ui,
+    let failed = app
+        .runs
+        .value
+        .runs
+        .iter()
+        .filter(|run| matches!(run.status.as_str(), "failed" | "partial"))
+        .count();
+    let active_sessions = app
+        .sessions
+        .value
+        .sessions
+        .iter()
+        .filter(|session| !matches!(session.state.as_str(), "released" | "abandoned" | "failed"))
+        .count();
+    let stale_sessions = app
+        .sessions
+        .value
+        .sessions
+        .iter()
+        .filter(|session| session.stale)
+        .count();
+    let environment = if app.doctor.value.status.is_empty() {
+        "unknown"
+    } else {
+        app.doctor.value.status.as_str()
+    };
+    ui.columns(4, |columns| {
+        metric(
+            &mut columns[0],
             "Environment",
-            doctor_status,
-            theme::status_color(doctor_status),
-            "doctor result / checks",
+            &theme::status_label(environment),
+            theme::status_color(environment),
+            "doctor status",
         );
-        stat(
-            ui,
+        metric(
+            &mut columns[1],
             "Devices",
             &app.devices.value.devices.len().to_string(),
             theme::BLUE,
-            "connected Android devices",
+            "connected",
         );
-        let active_sessions = app
-            .sessions
-            .value
-            .sessions
-            .iter()
-            .filter(|session| session.state != "released" && session.state != "abandoned")
-            .count();
-        stat(
-            ui,
+        metric(
+            &mut columns[2],
             "Sessions",
             &active_sessions.to_string(),
-            theme::GREEN,
-            "non-tombstone sessions",
+            if stale_sessions > 0 {
+                theme::YELLOW
+            } else {
+                theme::GREEN
+            },
+            if stale_sessions > 0 {
+                "stale ownership"
+            } else {
+                "active"
+            },
         );
-        let failed = app
-            .runs
-            .value
-            .runs
-            .iter()
-            .filter(|run| run.status == "failed" || run.status == "partial")
-            .count();
-        stat(
-            ui,
+        metric(
+            &mut columns[3],
             "Runs",
             &app.runs.value.runs.len().to_string(),
             if failed > 0 { theme::RED } else { theme::GREEN },
-            "recent runs in the current project",
+            if failed > 0 {
+                "failures to triage"
+            } else {
+                "recent history"
+            },
         );
     });
 
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     ui.columns(2, |columns| {
-        environment(&mut columns[0], app);
-        active_sessions(&mut columns[1], app);
+        environment_panel(app, &mut columns[0]);
+        actions_panel(app, &mut columns[1], failed);
     });
 
-    ui.add_space(10.0);
-    section_title(ui, "Recent runs");
+    ui.add_space(12.0);
+    section_label(ui, "Recent runs");
     if app.runs.value.runs.is_empty() {
         empty_state(
             ui,
             "No runs yet",
-            "Start a fixture, conformance flow or external run to populate this list.",
+            "Run a fixture, conformance flow or external command to build a report.",
         );
     } else {
-        runs_table(app, ui);
+        recent_runs(app, ui);
     }
 }
 
-fn stat(ui: &mut egui::Ui, label: &str, value: &str, color: Color32, detail: &str) {
-    let dark = ui.style().visuals.dark_mode;
-    egui::Frame::new()
-        .fill(if dark {
-            theme::DARK_SURFACE
-        } else {
-            theme::LIGHT_SURFACE
-        })
-        .stroke(egui::Stroke::new(
-            1.0,
-            if dark {
-                theme::DARK_BORDER
-            } else {
-                theme::LIGHT_BORDER
-            },
-        ))
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.set_min_width(150.0);
-            ui.label(RichText::new(label).size(10.0).color(theme::MUTED));
-            ui.label(RichText::new(value).size(18.0).strong().color(color));
-            ui.label(RichText::new(detail).size(9.0).color(theme::MUTED));
-        });
-}
-
-fn environment(ui: &mut egui::Ui, app: &App) {
-    section_title(ui, "Environment health");
-    let warnings = app
-        .doctor
-        .value
-        .checks
-        .iter()
-        .filter(|check| check.status != "ok")
-        .collect::<Vec<_>>();
-    if warnings.is_empty() {
-        muted(ui, "All reported checks are healthy.");
-    } else {
-        for check in warnings.iter().take(6) {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("● {}", check.status))
-                        .size(10.0)
-                        .color(theme::status_color(&check.status)),
-                );
-                ui.label(RichText::new(&check.name).size(11.0).strong());
-                ui.label(RichText::new(&check.detail).size(10.0).color(theme::MUTED));
+fn environment_panel(app: &mut App, ui: &mut egui::Ui) {
+    card_min_height(ui, 238.0, |ui| {
+        ui.horizontal(|ui| {
+            section_title(ui, "Workspace health");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if secondary_button(ui, "Open setup").clicked() {
+                    app.open_setup(SetupSection::Environment);
+                }
             });
-        }
-        if warnings.len() > 6 {
-            muted(ui, format!("{} more warning(s)", warnings.len() - 6));
-        }
-    }
-    ui.add_space(4.0);
-    if let Some(resolution) = &app.cli.resolution {
-        ui.horizontal(|ui| {
-            muted(ui, "CLI:");
-            ui.label(
-                RichText::new(resolution.path.display().to_string())
-                    .size(10.0)
-                    .monospace(),
-            );
-            crate::components::copy_button(ui, &resolution.path.display().to_string(), "copy");
         });
-    }
-    if let Some(age) = app.doctor.age() {
-        muted(ui, format!("updated {}s ago", age.as_secs()));
-    }
+        let blocking = app
+            .doctor
+            .value
+            .checks
+            .iter()
+            .filter(|check| check.blocking)
+            .collect::<Vec<_>>();
+        let warnings = app
+            .doctor
+            .value
+            .checks
+            .iter()
+            .filter(|check| check.status != "ok")
+            .collect::<Vec<_>>();
+        if app.doctor.value.checks.is_empty() {
+            muted(
+                ui,
+                "Run the environment check to see SDK, ADB and device readiness.",
+            );
+        } else if warnings.is_empty() {
+            success_banner(ui, "All reported checks are healthy.");
+        } else {
+            for check in warnings.iter().take(5) {
+                ui.horizontal(|ui| {
+                    status_pill(ui, &check.status, theme::status_color(&check.status));
+                    ui.label(RichText::new(&check.name).size(11.0).strong());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&check.detail).size(10.0).color(theme::MUTED),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(
+                        check
+                            .impact
+                            .clone()
+                            .unwrap_or_else(|| "No additional impact reported.".to_string()),
+                    );
+                });
+            }
+            if warnings.len() > 5 {
+                muted(
+                    ui,
+                    format!("{} more check(s) need attention", warnings.len() - 5),
+                );
+            }
+            if !blocking.is_empty() {
+                ui.add_space(4.0);
+                warning_banner(
+                    ui,
+                    &format!("{} blocking requirement(s) are not ready.", blocking.len()),
+                );
+            }
+        }
+        ui.add_space(4.0);
+        if let Some(resolution) = &app.cli.resolution {
+            path_row(ui, &resolution.path.display().to_string());
+        }
+        if let Some(age) = app.doctor.age() {
+            small(ui, format!("updated {}s ago", age.as_secs()));
+        }
+    });
 }
 
-fn active_sessions(ui: &mut egui::Ui, app: &App) {
-    section_title(ui, "Sessions");
-    if app.sessions.value.sessions.is_empty() {
-        muted(ui, "No sessions are currently recorded.");
-        return;
-    }
-    for session in app.sessions.value.sessions.iter().take(6) {
-        ui.horizontal(|ui| {
-            let color = theme::status_color(&session.state);
-            ui.label(RichText::new("●").size(10.0).color(color));
-            ui.label(
-                RichText::new(session.serial.as_deref().unwrap_or("-"))
-                    .size(11.0)
-                    .strong(),
+fn actions_panel(app: &mut App, ui: &mut egui::Ui, failed: usize) {
+    card_min_height(ui, 238.0, |ui| {
+        section_title(ui, "Next actions");
+        if failed > 0 {
+            warning_banner(
+                ui,
+                &format!("{failed} run(s) failed or partially completed."),
             );
-            ui.label(
-                RichText::new(format!("{} · {}", session.owner, session.state))
-                    .size(10.0)
-                    .color(theme::MUTED),
-            );
-            if session.stale {
-                ui.label(RichText::new("stale").size(10.0).color(theme::RED));
+            ui.add_space(4.0);
+            if primary_button(ui, "Triage latest failure").clicked() {
+                app.open_triage(None, ui.ctx());
+            }
+            ui.add_space(4.0);
+        }
+        ui.horizontal_wrapped(|ui| {
+            if secondary_button(ui, "Refresh").clicked() {
+                app.manual_refresh(ui.ctx());
+            }
+            if secondary_button(ui, "Start session").clicked() {
+                app.session_form = Some(SessionForm {
+                    owner: app.settings.owner.clone(),
+                    headless: true,
+                    ..Default::default()
+                });
+            }
+            if secondary_button(ui, "Run project flow").clicked() {
+                app.run_form = Some(RunForm::default());
+            }
+            if secondary_button(ui, "Open runs").clicked() {
+                app.set_page(Page::Runs);
             }
         });
-    }
-    if app.sessions.value.sessions.len() > 6 {
-        muted(
-            ui,
-            format!("{} more session(s)", app.sessions.value.sessions.len() - 6),
-        );
-    }
+        ui.add_space(6.0);
+        section_label(ui, "Current target");
+        if let Some(session) = app.selected_session_info() {
+            kv_grid(
+                ui,
+                "overview-target",
+                &[
+                    ("Session", session.id),
+                    ("Owner", session.owner),
+                    ("Device", session.serial.unwrap_or_else(|| "-".to_string())),
+                    ("State", theme::status_label(&session.state)),
+                ],
+            );
+        } else if let Some(device) = app.devices.value.devices.first() {
+            kv_grid(
+                ui,
+                "overview-device",
+                &[
+                    ("Device", device.serial.clone()),
+                    (
+                        "Model",
+                        device.model.clone().unwrap_or_else(|| "-".to_string()),
+                    ),
+                    (
+                        "Android",
+                        device
+                            .android_version
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                ],
+            );
+        } else {
+            muted(
+                ui,
+                "No device or session is selected. Start one from Setup.",
+            );
+        }
+    });
 }
 
-fn runs_table(app: &mut App, ui: &mut egui::Ui) {
-    let ctx = ui.ctx().clone();
+fn recent_runs(app: &mut App, ui: &mut egui::Ui) {
     let runs = app.runs.value.runs.clone();
+    let ctx = ui.ctx().clone();
+    let mut open = None;
     TableBuilder::new(ui)
         .sense(egui::Sense::click())
-        .striped(true)
+        .striped(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(210.0).at_least(150.0))
-        .column(Column::initial(70.0))
-        .column(Column::remainder().at_least(90.0))
-        .column(Column::initial(70.0))
-        .column(Column::initial(90.0))
-        .header(22.0, |mut header| {
-            for name in ["Run", "Status", "Project", "Steps", "Duration"] {
+        .column(Column::initial(380.0).at_least(220.0))
+        .column(Column::initial(80.0))
+        .column(Column::initial(150.0))
+        .column(Column::initial(80.0))
+        .column(Column::remainder())
+        .column(Column::initial(60.0))
+        .header(24.0, |mut header| {
+            for name in ["Run", "Status", "Scenario", "Duration", "", ""] {
                 header.col(|ui| {
-                    ui.label(RichText::new(name).size(10.0).strong().color(theme::MUTED));
+                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
                 });
             }
         })
         .body(|body| {
-            body.rows(24.0, runs.len(), |mut row| {
+            body.rows(28.0, runs.len().min(8), |mut row| {
                 let run = &runs[row.index()];
-                let selected = app.selected_run.as_deref() == Some(run.run_id.as_str());
-                row.set_selected(selected);
+                row.set_selected(app.selected_run.as_deref() == Some(run.run_id.as_str()));
                 row.col(|ui| {
                     ui.add(
                         egui::Label::new(RichText::new(&run.run_id).size(10.0).monospace())
@@ -233,41 +288,30 @@ fn runs_table(app: &mut App, ui: &mut egui::Ui) {
                     .on_hover_text(&run.run_id);
                 });
                 row.col(|ui| {
-                    ui.label(
-                        RichText::new(&run.status)
-                            .size(10.0)
-                            .color(theme::status_color(&run.status)),
-                    );
+                    status_pill(ui, &run.status, theme::status_color(&run.status));
                 });
                 row.col(|ui| {
-                    ui.label(RichText::new(&run.project).size(11.0));
-                });
-                row.col(|ui| {
-                    ui.label(
-                        RichText::new(format!("{}/{}", run.failed_steps, run.steps)).size(10.0),
-                    );
+                    ui.label(RichText::new(&run.command).size(10.0).color(theme::MUTED));
                 });
                 row.col(|ui| {
                     ui.label(RichText::new(format_duration(run.duration_ms)).size(10.0));
                 });
+                row.col(|_ui| {});
+                row.col(|ui| {
+                    if ui.small_button("Open").clicked() {
+                        open = Some(run.run_id.clone());
+                    }
+                });
                 if row.response().clicked() {
-                    app.open_run(run.run_id.clone(), &ctx);
-                    app.set_page(Page::Runs);
+                    open = Some(run.run_id.clone());
                 }
             });
         });
-}
-
-pub fn format_duration(milliseconds: u64) -> String {
-    if milliseconds < 1000 {
-        format!("{milliseconds}ms")
-    } else if milliseconds < 60_000 {
-        format!("{:.1}s", milliseconds as f64 / 1000.0)
-    } else {
-        format!(
-            "{}m {}s",
-            milliseconds / 60_000,
-            (milliseconds % 60_000) / 1000
-        )
+    if let Some(run_id) = open {
+        app.open_run(run_id, &ctx);
+        app.set_page(Page::Runs);
     }
 }
+
+#[allow(dead_code)]
+fn _keep_vec(_: Vec2) {}

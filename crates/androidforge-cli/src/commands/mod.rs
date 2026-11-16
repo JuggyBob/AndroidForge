@@ -5,6 +5,7 @@ pub mod common;
 pub mod devices;
 pub mod diagnostics;
 pub mod doctor;
+pub mod maintenance;
 pub mod report;
 pub mod session;
 pub mod system;
@@ -143,6 +144,10 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
             let ctx = CliContext::new(cli)?;
             report::report(&ctx, command).await
         }
+        Command::Maintenance { command } => {
+            let ctx = CliContext::new(cli)?;
+            maintenance::maintenance(&ctx, command).await
+        }
     }
 }
 
@@ -193,6 +198,7 @@ pub fn canonical_name(command: &Command) -> String {
         },
         Command::Run { command } => format!("run.{}", run_name(command)),
         Command::Report { command } => format!("report.{}", report_name(command)),
+        Command::Maintenance { command } => format!("maintenance.{}", maintenance_name(command)),
         Command::Adb(_) => "adb".to_string(),
     }
 }
@@ -210,6 +216,7 @@ fn session_name(command: &SessionCommand) -> &'static str {
         SessionCommand::Use { .. } => "use",
         SessionCommand::Current => "current",
         SessionCommand::Gc(_) => "gc",
+        SessionCommand::Prune(_) => "prune",
         SessionCommand::Restart(_) => "restart",
     }
 }
@@ -262,6 +269,7 @@ fn app_name(command: &AppCommand) -> &'static str {
 fn ui_name(command: &UiCommand) -> &'static str {
     match command {
         UiCommand::Dump(_) => "dump",
+        UiCommand::Inspect(_) => "inspect",
         UiCommand::Find(_) => "find",
         UiCommand::Tap(_) => "tap",
         UiCommand::LongPress(_) => "long-press",
@@ -284,6 +292,7 @@ fn ui_name(command: &UiCommand) -> &'static str {
 fn capture_name(command: &CaptureCommand) -> String {
     match command {
         CaptureCommand::Screenshot(_) => "capture.screenshot".to_string(),
+        CaptureCommand::Frame(_) => "capture.frame".to_string(),
         CaptureCommand::Record { command } => format!(
             "capture.record.{}",
             match command {
@@ -322,12 +331,22 @@ fn run_name(command: &RunCommand) -> &'static str {
     }
 }
 
+fn maintenance_name(command: &crate::cli::MaintenanceCommand) -> &'static str {
+    match command {
+        crate::cli::MaintenanceCommand::Summary => "summary",
+        crate::cli::MaintenanceCommand::Clean(_) => "clean",
+    }
+}
+
 fn report_name(command: &ReportCommand) -> &'static str {
     match command {
         ReportCommand::List { .. } => "list",
         ReportCommand::Show { .. } => "show",
         ReportCommand::Path { .. } => "path",
         ReportCommand::Prune(_) => "prune",
+        ReportCommand::Reconcile(_) => "reconcile",
+        ReportCommand::Compare(_) => "compare",
+        ReportCommand::Flaky(_) => "flaky",
         ReportCommand::Import { .. } => "import",
     }
 }

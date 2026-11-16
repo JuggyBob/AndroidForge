@@ -8,6 +8,75 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.3.0] - 2026-11-16
+
+Third alpha, released as one integrated desktop and backend update.
+
+### Added
+
+- First-run setup wizard covering CLI discovery and compatibility, actionable environment diagnostics,
+  workspace/project selection, a safe device verification step and a final readiness summary. The
+  wizard does not install APKs or reset user data.
+- Actionable `doctor` fields: `required`, `blocking`, `impact` and `suggestion`, so missing or broken
+  components explain why they matter and what to do next.
+- GitHub release update checks and a verified CLI repair path. Downloads are explicit, checked against
+  the published SHA-256, staged, validated and rolled back on failure. The previous executable is kept.
+- Failure triage with failure metadata, build identity, artifacts, related live views and copyable
+  Markdown/JSON reports.
+- Compatible run comparison with project/scenario matching, build/environment change warnings, step
+  regressions, new/resolved failures, duration deltas and artifact differences.
+- Flaky-step analysis with a transparent minimum-run heuristic and per-step observation history.
+- Run lifecycle outcomes `cancelled`, `interrupted`, `timed_out` and `abandoned`, creator PID/host
+  metadata, `report reconcile`, and startup reconciliation of unfinished runs.
+- Read-only live capture contracts: `capture frame`, `diagnostics logcat peek --since`, `ui inspect`,
+  plus `report compare`, `report flaky`, `session prune` and `maintenance summary|clean`.
+- Native live logcat panel with bounded buffers, incremental tailing, package/level/search filters,
+  pause/resume, follow-latest, crash/ANR highlighting, disconnect state and export.
+- Native periodic device preview and semantic UIAutomator inspector with hierarchy tree expansion,
+  search, raw XML, bounds highlighting, selector copying, tap/long-press/type/scroll/back/home actions
+  and a clearly labelled coordinate fallback. Preview is documented as periodic capture, not video.
+- Maintenance center with storage accounting, dry-run previews, explicit confirmation, active-session
+  protection and terminal-only pruning. Preview state is cleared after a successful cleanup.
+- Portable ZIP and per-user Inno Setup installer, including both executables, license, documentation,
+  Start Menu/optional desktop shortcuts and an uninstaller. User configuration and artifacts are kept
+  outside the install directory and are not removed by upgrade or uninstall.
+- Embedded Inter and JetBrains Mono fonts with OFL license files.
+- Comprehensive desktop redesign: navigation groups, typography scale, semantic colors, reusable
+  cards/tables/badges/empty states, sticky wizard footer, keyboard shortcuts, responsive layouts and
+  automatic Windows DPI handling.
+- JSON schemas for analysis and maintenance results, plus expanded run/product documentation.
+
+### Changed
+
+- Workspace version is `0.3.0`; the desktop refuses a CLI whose version or envelope schema does not match.
+- CLI locator also checks the per-user install directory and `PATH`.
+- Emulator detached-process handling now keeps an invisible console for hidden children, avoiding a
+  stray visible Windows Terminal/QEMU console window on headless starts.
+- Cancellation no longer opens an error dialog; it reports the cancelled outcome in the operation panel
+  and reconciles the run as `cancelled` while leaving the session intact.
+- Operation duration freezes at the final measured duration instead of continuing to climb.
+
+### Fixed
+
+- Settings icon renders as a painted gear rather than relying on an unsupported font glyph.
+- Long paths in cards truncate with copy/open actions instead of spilling under adjacent cards.
+- Logcat tag columns clip with ellipsis and no longer overlap message text.
+- Logcat treats an empty package filter as all processes, and incremental tailing uses the previous
+  device timestamp instead of suppressing repeated identical lines.
+- Maintenance preview no longer remains visible after data has been removed.
+- Inspector duplicate error banners are deduplicated and disconnected previews show an overlay while
+  retaining the last captured frame.
+- Sticky setup footer keeps Back/Continue/Finish reachable at 1280×720 and smaller layouts.
+
+### Known limitations
+
+- Binaries are unsigned. Windows SmartScreen may warn; no publisher identity is claimed.
+- Device preview is periodic screenshots (roughly 1–5 FPS), not a low-latency video stream.
+- Physical-device, Maestro, instrumentation-package, snapshot-restore and root-only paths remain
+  unvalidated in this release.
+- The update checker only offers a compatible CLI sidecar. It does not silently install a new desktop
+  build.
+
 ## [0.2.0] - 2026-11-16
 
 Second alpha. Adds the native AndroidForge Desktop cockpit while keeping the CLI as the authoritative
@@ -129,6 +198,7 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.1.0

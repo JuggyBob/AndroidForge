@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use androidforge_core::analysis::{analyze_flaky, compare_reports};
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::BuildIdentity;
 use androidforge_core::output::CommandSuccess;
@@ -10,7 +11,10 @@ use androidforge_core::run::{
 };
 use androidforge_core::util::parse_duration;
 
-use crate::cli::{ReportCommand, RunCommand, RunEndArgs, RunExecArgs, RunStartArgs};
+use crate::cli::{
+    ReportCommand, ReportCompareArgs, ReportFlakyArgs, ReportReconcileArgs, RunCommand, RunEndArgs,
+    RunExecArgs, RunStartArgs,
+};
 use crate::commands::common::success;
 use crate::context::CliContext;
 use crate::junit::import_junit;
@@ -104,9 +108,13 @@ async fn run_end(ctx: &CliContext, args: &RunEndArgs) -> Result<CommandSuccess> 
         Some("passed" | "pass" | "success") => RunStatus::Passed,
         Some("failed" | "fail" | "failure") => RunStatus::Failed,
         Some("partial") => RunStatus::Partial,
+        Some("cancelled" | "canceled") => RunStatus::Cancelled,
+        Some("interrupted") => RunStatus::Interrupted,
+        Some("timed-out" | "timed_out" | "timeout") => RunStatus::TimedOut,
+        Some("abandoned") => RunStatus::Abandoned,
         Some(other) => {
             return Err(ForgeError::invalid_argument(format!(
-                "unknown run status '{other}'; use passed, failed or partial"
+                "unknown run status '{other}'; use passed, failed, partial, cancelled, interrupted, timed-out or abandoned"
             )));
         }
     };
@@ -114,7 +122,10 @@ async fn run_end(ctx: &CliContext, args: &RunEndArgs) -> Result<CommandSuccess> 
         RunStatus::Passed => 0,
         RunStatus::Failed => 6,
         RunStatus::Partial => 10,
-        _ => 0,
+        RunStatus::Cancelled => 130,
+        RunStatus::Interrupted | RunStatus::Abandoned => 11,
+        RunStatus::TimedOut => 124,
+        RunStatus::Running => 0,
     };
     let exit_code = args
         .exit_code
@@ -308,6 +319,9 @@ pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<Command
             ))
         }
         ReportCommand::Prune(args) => prune(ctx, args).await,
+        ReportCommand::Reconcile(args) => reconcile(ctx, args).await,
+        ReportCommand::Compare(args) => compare(ctx, args).await,
+        ReportCommand::Flaky(args) => flaky(ctx, args).await,
         ReportCommand::Import { command } => match command {
             crate::cli::ReportImportCommand::Junit { paths } => {
                 import_junit_report(ctx, paths).await
@@ -474,6 +488,279 @@ fn collect_xml_files(
         }
     }
     Ok(())
+}
+
+fn report_age_seconds(started_at: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(started_at)
+        .map(|started| {
+            chrono::Utc::now()
+                .signed_duration_since(started.with_timezone(&chrono::Utc))
+                .num_seconds()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_reconcile_outcome(value: Option<&str>) -> Result<(RunStatus, i32, String)> {
+    match value.unwrap_or("interrupted") {
+        "interrupted" => Ok((
+            RunStatus::Interrupted,
+            11,
+            "run was interrupted before it finalized".to_string(),
+        )),
+        "cancelled" | "canceled" => Ok((
+            RunStatus::Cancelled,
+            130,
+            "operation was cancelled before the run finalized".to_string(),
+        )),
+        "timed-out" | "timed_out" | "timeout" => Ok((
+            RunStatus::TimedOut,
+            124,
+            "operation timed out before the run finalized".to_string(),
+        )),
+        "abandoned" => Ok((
+            RunStatus::Abandoned,
+            11,
+            "run was abandoned without a live owner".to_string(),
+        )),
+        other => Err(ForgeError::invalid_argument(format!(
+            "unknown reconcile outcome '{other}'; use interrupted, cancelled, timed-out or abandoned"
+        ))),
+    }
+}
+
+fn should_auto_reconcile(run: &RunContext) -> Result<Option<String>> {
+    let age = report_age_seconds(&run.report.started_at);
+    if let Some(pid) = run.metadata.creator_pid {
+        if androidforge_process::process_exists(pid) {
+            return Ok(None);
+        }
+        return Ok(Some(format!(
+            "creator pid {pid} is no longer running (run age {age}s)"
+        )));
+    }
+    if age > 2 * 60 * 60 {
+        return Ok(Some(format!(
+            "legacy running report is {age}s old and has no creator pid"
+        )));
+    }
+    Ok(None)
+}
+
+async fn reconcile(ctx: &CliContext, args: &ReportReconcileArgs) -> Result<CommandSuccess> {
+    if args.run.is_some() && args.latest_running {
+        return Err(ForgeError::invalid_argument(
+            "choose --run or --latest-running, not both",
+        ));
+    }
+    let explicit = args.run.is_some() || args.latest_running;
+    if args.outcome.is_some() && !explicit {
+        return Err(
+            ForgeError::invalid_argument("--outcome requires --run or --latest-running")
+                .with_suggestion(
+                    "Run without --outcome to reconcile only runs whose creator process is gone.",
+                ),
+        );
+    }
+    let (target_status, exit_code, default_reason) =
+        parse_reconcile_outcome(args.outcome.as_deref())?;
+    let summaries = list_runs(&ctx.paths.artifacts_dir)?;
+    let targets: Vec<(String, Option<String>)> = if let Some(spec) = &args.run {
+        vec![(spec.clone(), None)]
+    } else if args.latest_running {
+        summaries
+            .iter()
+            .filter(|run| run.status == RunStatus::Running)
+            .max_by(|left, right| left.started_at.cmp(&right.started_at))
+            .map(|run| vec![(run.run_id.clone(), None)])
+            .unwrap_or_default()
+    } else {
+        summaries
+            .iter()
+            .filter(|run| run.status == RunStatus::Running)
+            .map(|run| (run.run_id.clone(), None))
+            .collect()
+    };
+
+    let mut changed = Vec::new();
+    let mut skipped = Vec::new();
+    for (spec, _) in targets {
+        let dir = match resolve_report_dir(ctx, &spec) {
+            Ok(dir) => dir,
+            Err(error) if args.run.is_some() => return Err(error),
+            Err(error) => {
+                skipped.push(serde_json::json!({
+                    "target": spec,
+                    "reason": error.message().to_string(),
+                }));
+                continue;
+            }
+        };
+        let mut run = match RunContext::open_dir(dir, ctx.redactor()) {
+            Ok(run) => run,
+            Err(error) => {
+                skipped.push(serde_json::json!({
+                    "target": spec,
+                    "reason": error.message().to_string(),
+                }));
+                continue;
+            }
+        };
+        if run.report.status != RunStatus::Running {
+            skipped.push(serde_json::json!({
+                "target": run.run_id,
+                "reason": format!("run is already {:?}", run.report.status),
+            }));
+            continue;
+        }
+        let reason = if explicit {
+            default_reason.clone()
+        } else {
+            match should_auto_reconcile(&run)? {
+                Some(reason) => reason,
+                None => {
+                    skipped.push(serde_json::json!({
+                        "target": run.run_id,
+                        "reason": "creator process is still alive; not reconciling automatically",
+                    }));
+                    continue;
+                }
+            }
+        };
+        let previous = run.report.status;
+        if !ctx.dry_run {
+            run.add_note(format!(
+                "reconciled as {}: {reason}",
+                format!("{target_status:?}").to_lowercase()
+            ));
+            run.finalize_with_reason(target_status, exit_code, &reason)?;
+        }
+        changed.push(serde_json::json!({
+            "run_id": run.run_id,
+            "previous_status": previous,
+            "status": target_status,
+            "reason": reason,
+            "dry_run": ctx.dry_run,
+        }));
+    }
+    let result = serde_json::json!({
+        "dry_run": ctx.dry_run,
+        "reconciled": changed,
+        "skipped": skipped,
+        "scanned": summaries.len(),
+    });
+    let human = format!(
+        "{} {} running run(s); {} skipped; {} scanned.\n",
+        if ctx.dry_run {
+            "Would reconcile"
+        } else {
+            "Reconciled"
+        },
+        changed.len(),
+        skipped.len(),
+        summaries.len()
+    );
+    Ok(success("report.reconcile", result, human))
+}
+
+async fn compare(ctx: &CliContext, args: &ReportCompareArgs) -> Result<CommandSuccess> {
+    let current_dir = resolve_report_dir(ctx, &args.run)?;
+    let current = RunContext::open_dir(current_dir, ctx.redactor())?;
+    let baseline_id = if let Some(baseline) = &args.baseline {
+        baseline.clone()
+    } else {
+        let summaries = list_runs(&ctx.paths.artifacts_dir)?;
+        summaries
+            .iter()
+            .filter(|run| {
+                run.run_id != current.run_id
+                    && run.project == current.report.project
+                    && run.command == current.report.command
+                    && run.status != RunStatus::Running
+            })
+            .find(|run| run.status == RunStatus::Passed)
+            .or_else(|| {
+                summaries.iter().find(|run| {
+                    run.run_id != current.run_id
+                        && run.project == current.report.project
+                        && run.command == current.report.command
+                        && run.status != RunStatus::Running
+                })
+            })
+            .map(|run| run.run_id.clone())
+            .ok_or_else(|| {
+                ForgeError::new(
+                    ErrorCode::InvalidArgument,
+                    format!(
+                        "no compatible baseline run found for {} ({})",
+                        current.report.project, current.report.command
+                    ),
+                )
+                .with_suggestion("Pass --baseline <run> explicitly or run the same scenario again.")
+            })?
+    };
+    let baseline_dir = resolve_report_dir(ctx, &baseline_id)?;
+    let baseline = RunContext::open_dir(baseline_dir, ctx.redactor())?;
+    let comparison = compare_reports(&current.report, &baseline.report);
+    let human = format!(
+        "Compared {} with baseline {}\nstatus: {} -> {}\nduration: {}ms -> {}ms ({:+}ms)\nnew failures: {}\nresolved failures: {}\n",
+        comparison.current_run_id,
+        comparison.baseline_run_id,
+        format!("{:?}", comparison.baseline_status).to_lowercase(),
+        format!("{:?}", comparison.current_status).to_lowercase(),
+        comparison.baseline_duration_ms,
+        comparison.current_duration_ms,
+        comparison.duration_delta_ms,
+        if comparison.new_failures.is_empty() {
+            "none".to_string()
+        } else {
+            comparison.new_failures.join(", ")
+        },
+        if comparison.resolved_failures.is_empty() {
+            "none".to_string()
+        } else {
+            comparison.resolved_failures.join(", ")
+        }
+    );
+    Ok(success(
+        "report.compare",
+        serde_json::to_value(&comparison)?,
+        human,
+    ))
+}
+
+async fn flaky(ctx: &CliContext, args: &ReportFlakyArgs) -> Result<CommandSuccess> {
+    let summaries = list_runs(&ctx.paths.artifacts_dir)?;
+    let mut reports = Vec::new();
+    for summary in summaries.into_iter().take(args.limit.max(1)) {
+        if let Ok(run) = RunContext::open(&ctx.paths.artifacts_dir, &summary.run_id, ctx.redactor())
+        {
+            reports.push(run.report);
+        }
+    }
+    let report = analyze_flaky(&reports, args.min_runs);
+    let human = format!(
+        "Analyzed {} run(s); {} flaky step(s).\n{}",
+        report.runs_analyzed,
+        report
+            .steps
+            .iter()
+            .filter(|step| step.classification == "flaky")
+            .count(),
+        report
+            .steps
+            .iter()
+            .filter(|step| step.classification == "flaky")
+            .map(|step| format!(
+                "  {}: {} ({}/{} failed, {} executions)\n",
+                step.step_name, step.command, step.failures, step.executions, step.executions
+            ))
+            .collect::<String>()
+    );
+    Ok(success(
+        "report.flaky",
+        serde_json::to_value(&report)?,
+        human,
+    ))
 }
 
 async fn prune(ctx: &CliContext, args: &crate::cli::ReportPruneArgs) -> Result<CommandSuccess> {

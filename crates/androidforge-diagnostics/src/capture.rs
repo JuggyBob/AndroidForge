@@ -7,7 +7,8 @@ use androidforge_core::model::ArtifactRef;
 use androidforge_core::paths::ForgePaths;
 use androidforge_core::run::RunContext;
 use androidforge_core::util::{
-    ensure_dir, now_rfc3339, read_json, short_id, slugify, write_json_atomic,
+    ensure_dir, now_rfc3339, read_json, sha256_hex, short_id, slugify, write_atomic,
+    write_json_atomic,
 };
 use androidforge_process::{DetachedSpec, kill_tree, process_exists, shell_quote, spawn_detached};
 use chrono::Utc;
@@ -22,6 +23,20 @@ pub struct ScreenshotResult {
     pub local_path: String,
     pub width: u32,
     pub height: u32,
+    pub sha256: String,
+    pub captured_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_size: Option<(u32, u32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameResult {
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: u64,
     pub sha256: String,
     pub captured_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +120,68 @@ pub async fn capture_screenshot(
         width,
         height,
         sha256,
+        captured_at: now_rfc3339(),
+        display_size,
+        notes,
+    })
+}
+
+/// Capture a single preview frame directly to a local PNG without creating a
+/// run, artifact manifest or report. Intended for the desktop inspector.
+pub async fn capture_frame(
+    adb: &AdbClient,
+    serial: &str,
+    output_path: &std::path::Path,
+    timeout: Duration,
+) -> Result<FrameResult> {
+    let output = adb
+        .exec_out_args(
+            serial,
+            &["screencap".to_string(), "-p".to_string()],
+            Some(timeout),
+            Some(64 * 1024 * 1024),
+        )
+        .await?;
+    if output.stdout_truncated {
+        return Err(ForgeError::new(
+            ErrorCode::CommandFailed,
+            "preview frame exceeded the 64 MiB capture limit",
+        )
+        .device(serial.to_string()));
+    }
+    let bytes = output.stdout;
+    if bytes.len() < 24 || &bytes[..8] != PNG_SIGNATURE {
+        return Err(ForgeError::new(
+            ErrorCode::CommandFailed,
+            "screencap did not return a valid PNG",
+        )
+        .with_context_string("bytes", bytes.len().to_string())
+        .with_suggestion("Check whether the device display is available and awake.")
+        .device(serial.to_string()));
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        ensure_dir(parent)?;
+    }
+    write_atomic(output_path, &bytes)?;
+    let mut notes = Vec::new();
+    let display_size = adb.display_size(serial).await;
+    if let Some((display_width, display_height)) = display_size
+        && (display_width != width || display_height != height)
+    {
+        notes.push(format!(
+            "preview dimensions {width}x{height} differ from display size {display_width}x{display_height}"
+        ));
+    }
+    Ok(FrameResult {
+        path: output_path.to_string_lossy().into_owned(),
+        width,
+        height,
+        bytes: bytes.len() as u64,
+        sha256: sha256_hex(&bytes),
         captured_at: now_rfc3339(),
         display_size,
         notes,

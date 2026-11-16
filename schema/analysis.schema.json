@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/analysis.schema.json",
+  "title": "AndroidForge run analysis results",
+  "description": "Result payloads returned by `report compare` and `report flaky` under the command envelope.",
+  "$defs": {
+    "field_change": {
+      "type": "object",
+      "required": ["field", "current", "baseline", "changed"],
+      "properties": {
+        "field": { "type": "string" },
+        "current": { "type": "string" },
+        "baseline": { "type": "string" },
+        "changed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "step_comparison": {
+      "type": "object",
+      "required": ["name", "command", "change"],
+      "properties": {
+        "name": { "type": "string" },
+        "command": { "type": "string" },
+        "current_status": { "type": ["string", "null"] },
+        "baseline_status": { "type": ["string", "null"] },
+        "current_duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "baseline_duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "duration_delta_ms": { "type": ["integer", "null"] },
+        "current_failure": { "type": ["string", "null"] },
+        "baseline_failure": { "type": ["string", "null"] },
+        "change": {
+          "enum": [
+            "regressed",
+            "fixed",
+            "failed_both",
+            "unchanged",
+            "added",
+            "removed",
+            "unknown"
+          ]
+        },
+        "current_artifacts": { "type": "integer", "minimum": 0 },
+        "baseline_artifacts": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "current_run_id",
+        "baseline_run_id",
+        "comparable",
+        "current_status",
+        "baseline_status",
+        "step_changes"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "generated_at": { "type": "string" },
+        "current_run_id": { "type": "string" },
+        "baseline_run_id": { "type": "string" },
+        "comparable": { "type": "boolean" },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "build_changes": { "type": "array", "items": { "$ref": "#/$defs/field_change" } },
+        "environment_changes": { "type": "array", "items": { "$ref": "#/$defs/field_change" } },
+        "step_changes": { "type": "array", "items": { "$ref": "#/$defs/step_comparison" } },
+        "new_failures": { "type": "array", "items": { "type": "string" } },
+        "resolved_failures": { "type": "array", "items": { "type": "string" } },
+        "artifacts_added": { "type": "array", "items": { "type": "string" } },
+        "artifacts_removed": { "type": "array", "items": { "type": "string" } },
+        "current_status": { "type": "string" },
+        "baseline_status": { "type": "string" },
+        "current_duration_ms": { "type": "integer", "minimum": 0 },
+        "baseline_duration_ms": { "type": "integer", "minimum": 0 },
+        "duration_delta_ms": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "flaky_observation": {
+      "type": "object",
+      "required": ["run_id", "started_at", "run_status", "step_status", "duration_ms"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "started_at": { "type": "string" },
+        "run_status": { "type": "string" },
+        "step_status": { "type": "string" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "failure_code": { "type": ["string", "null"] },
+        "failure_message": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "flaky_step": {
+      "type": "object",
+      "required": [
+        "key",
+        "command",
+        "step_name",
+        "executions",
+        "successes",
+        "failures",
+        "skipped",
+        "sufficient_evidence",
+        "classification",
+        "heuristic"
+      ],
+      "properties": {
+        "key": { "type": "string" },
+        "command": { "type": "string" },
+        "step_name": { "type": "string" },
+        "executions": { "type": "integer", "minimum": 0 },
+        "successes": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "sufficient_evidence": { "type": "boolean" },
+        "classification": {
+          "enum": ["insufficient_evidence", "stable_success", "stable_failure", "flaky"]
+        },
+        "heuristic": { "type": "string" },
+        "observations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/flaky_observation" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "flaky_report": {
+      "type": "object",
+      "required": ["schema_version", "generated_at", "project", "runs_analyzed", "min_runs", "steps", "heuristic"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "generated_at": { "type": "string" },
+        "project": { "type": "string" },
+        "runs_analyzed": { "type": "integer", "minimum": 0 },
+        "min_runs": { "type": "integer", "minimum": 2 },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/flaky_step" } },
+        "heuristic": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/comparison" },
+    { "$ref": "#/$defs/flaky_report" }
+  ]
+}

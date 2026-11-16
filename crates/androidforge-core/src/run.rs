@@ -25,12 +25,19 @@ pub enum RunStatus {
     Passed,
     Failed,
     Partial,
+    Cancelled,
     Interrupted,
+    TimedOut,
+    Abandoned,
 }
 
 impl RunStatus {
     pub fn is_success(self) -> bool {
         matches!(self, Self::Passed)
+    }
+
+    pub fn is_terminal(self) -> bool {
+        !matches!(self, Self::Running)
     }
 }
 
@@ -190,6 +197,12 @@ pub struct RunMetadata {
     pub device: Option<Device>,
     #[serde(default)]
     pub build: BuildIdentity,
+    /// PID of the AndroidForge process that created the run. Optional because
+    /// reports written before reconciliation support did not record it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_host: Option<String>,
     #[serde(default)]
     pub tool_versions: BTreeMap<String, String>,
     pub started_at: String,
@@ -282,6 +295,8 @@ impl RunContext {
             session_id: options.session_id,
             device: options.device,
             build: options.build,
+            creator_pid: Some(std::process::id()),
+            creator_host: std::env::var("COMPUTERNAME").ok(),
             tool_versions: options.tool_versions,
             started_at: report.started_at.clone(),
             notes: Vec::new(),
@@ -300,11 +315,15 @@ impl RunContext {
 
     pub fn open(artifacts_root: &Path, run_id: &str, redactor: Redactor) -> Result<Self> {
         let dir = artifacts_root.join("runs").join(run_id);
+        Self::open_dir(dir, redactor)
+    }
+
+    pub fn open_dir(dir: PathBuf, redactor: Redactor) -> Result<Self> {
         let report_path = dir.join("report.json");
         if !report_path.is_file() {
             return Err(ForgeError::new(
                 ErrorCode::InvalidArgument,
-                format!("run '{run_id}' was not found at {}", dir.display()),
+                format!("run was not found at {}", dir.display()),
             )
             .with_suggestion(
                 "Use `androidforge report path <run>` or `androidforge report show latest`.",
@@ -315,8 +334,8 @@ impl RunContext {
             return Err(ForgeError::new(
                 ErrorCode::Internal,
                 format!(
-                    "run {run_id} uses report schema {}; this build supports {}",
-                    report.schema_version, REPORT_SCHEMA_VERSION
+                    "run {} uses report schema {}; this build supports {}",
+                    report.run_id, report.schema_version, REPORT_SCHEMA_VERSION
                 ),
             ));
         }
@@ -340,6 +359,8 @@ impl RunContext {
                 session_id: report.session_id.clone(),
                 device: report.device.clone(),
                 build: report.build.clone(),
+                creator_pid: None,
+                creator_host: None,
                 tool_versions: BTreeMap::new(),
                 started_at: report.started_at.clone(),
                 notes: Vec::new(),
@@ -530,6 +551,19 @@ impl RunContext {
     }
 
     pub fn finalize(&mut self, status: RunStatus, exit_code: i32) -> Result<()> {
+        self.finalize_with_reason(
+            status,
+            exit_code,
+            "the step did not finish before the run was finalized",
+        )
+    }
+
+    pub fn finalize_with_reason(
+        &mut self,
+        status: RunStatus,
+        exit_code: i32,
+        reason: &str,
+    ) -> Result<()> {
         for step in &mut self.report.steps {
             if step.status == StepStatus::Running {
                 step.status = StepStatus::Failed;
@@ -537,7 +571,7 @@ impl RunContext {
                 step.duration_ms = duration_from(&step.started_at);
                 step.failure = Some(FailureInfo {
                     code: ErrorCode::Interrupted,
-                    message: "the step did not finish before the run was finalized".to_string(),
+                    message: reason.to_string(),
                     failed_operation: step.name.clone(),
                     recoverable: true,
                     suggestions: vec![

@@ -51,26 +51,30 @@ Errors carry a stable `ErrorCode`, message, recoverability, suggestions, context
    the report says it passed.
 3. **Workers** — background threads run CLI calls and send typed events over `mpsc`; the egui frame only
    drains events and renders. Refreshes are interval-driven and pinned while an operation is running.
-4. **Views/dialogs** — Overview, Devices, Sessions, Runs, run details/evidence and operation output.
-   Confirmation and error dialogs render above ordinary windows.
+4. **Views/dialogs** - Setup/onboarding, Overview, Devices, Sessions, Runs, Triage, Compare, Logcat,
+   Inspector, Maintenance, run details/evidence and operation output. Confirmation and error dialogs
+   render above ordinary windows.
 
 CLI resolution order is explicit settings path, executable beside the desktop, workspace `target/debug`
 or `target/release` during development, then `PATH`. The compatibility probe checks `--version` and the
 report schema before enabling actions. Unknown schemas are refused with a desktop error instead of
 mis-parsing.
 
-P0 is read-only. P1 actions are start/attach/release/stop/restart, APK inspect/dry-run/install,
-fixture/conformance/hook launch, output streaming and cancellation. Every destructive action has an
-explicit confirmation. Install closes the install window before confirming and reopens it with measured
-identity; run details request `report show`/`report path` and never infer from process exit codes.
+Read-only surfaces are environment/runs/evidence plus logcat, preview, hierarchy inspection, analysis and
+maintenance previews. Controlled actions are start/attach/release/stop/restart, APK inspect/dry-run/install,
+fixture/conformance/hook launch, semantic UI actions, confirmed cleanup, output streaming and cancellation.
+Every destructive action has an explicit confirmation. Install closes the install window before
+confirming and reopens it with measured identity; run details request `report show`/`report path` and
+never infer from process exit codes. Update checks use the public GitHub release; a CLI repair download is
+verified against the published SHA-256 and staged before replacement.
 
 Cancellation is limited to operations that can be terminated safely: installs, fixtures, conformance flows and
 hooks. Session lifecycle operations (start/attach/release/stop/restart) run to completion because killing
 their child tree could leave a half-owned emulator or an inconsistent lock. For cancellable operations the
 desktop walks the Windows process snapshot, terminates descendants deepest-first, and falls back to
 `taskkill /T /F`. It never calls `session stop` or `session release`; the emulator is not a child of a
-cancelled run and stays alive. The UI keeps a session reminder and explains that the final report may be
-incomplete.
+cancelled run and stays alive. The UI reconciles the unfinished run as `cancelled`; startup reconciliation
+marks abandoned `running` reports `interrupted` instead of leaving them running forever.
 
 The desktop uses eframe 0.37 with the glow renderer and embedded PNG/ICO assets. There is no WebView,
 HTML, JavaScript, Node, React or browser frontend, and no network service.

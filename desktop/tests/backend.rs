@@ -23,7 +23,11 @@ fn mock_cli() -> &'static MockCli {
         } else {
             "androidforge"
         });
-        std::fs::write(&source, MOCK_SOURCE).unwrap();
+        std::fs::write(
+            &source,
+            MOCK_SOURCE.replace("__VERSION__", env!("CARGO_PKG_VERSION")),
+        )
+        .unwrap();
         let status = std::process::Command::new("rustc")
             .args(["--edition", "2021", "-o"])
             .arg(&exe)
@@ -45,7 +49,7 @@ fn runner() -> CliRunner {
 #[test]
 fn probes_a_matching_cli_and_parses_schema_support() {
     let info = compatibility::probe(&runner()).unwrap();
-    assert_eq!(info.version, "0.2.0");
+    assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
     assert_eq!(info.report_schema, 1);
 }
 
@@ -172,7 +176,7 @@ fn emit(text: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--version") {
-        println!("androidforge 0.2.0");
+        println!("androidforge __VERSION__");
         return;
     }
     if args.iter().any(|arg| arg == "schema") {

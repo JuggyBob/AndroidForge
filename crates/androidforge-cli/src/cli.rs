@@ -206,6 +206,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ReportCommand,
     },
+    /// Inspect or clean AndroidForge-owned storage.
+    Maintenance {
+        #[command(subcommand)]
+        command: MaintenanceCommand,
+    },
     /// Unrestricted raw ADB passthrough. This is explicitly unsafe.
     Adb(AdbArgs),
 }
@@ -256,6 +261,8 @@ pub enum SessionCommand {
     },
     Current,
     Gc(SessionGcArgs),
+    /// Remove old released/abandoned/failed session tombstones.
+    Prune(SessionPruneArgs),
     Restart(SessionRestartArgs),
 }
 
@@ -337,6 +344,14 @@ pub struct SessionGcArgs {
     pub reclaim: bool,
     #[arg(long)]
     pub stop: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct SessionPruneArgs {
+    #[arg(long)]
+    pub older_than: Option<String>,
+    #[arg(long)]
+    pub keep_last: Option<usize>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -586,6 +601,8 @@ pub struct SelectorArgs {
 #[derive(Debug, Subcommand)]
 pub enum UiCommand {
     Dump(UiDumpArgs),
+    /// Dump and return the parsed hierarchy without creating a run artifact.
+    Inspect(UiInspectArgs),
     Find(UiFindArgs),
     Tap(UiTapArgs),
     LongPress(UiTapArgs),
@@ -606,6 +623,13 @@ pub enum UiCommand {
 
 #[derive(Debug, Args)]
 pub struct UiDumpArgs {
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct UiInspectArgs {
+    /// Also write the raw XML to this local path.
     #[arg(long)]
     pub output: Option<PathBuf>,
 }
@@ -706,6 +730,8 @@ pub struct UiKeyEventArgs {
 #[derive(Debug, Subcommand)]
 pub enum CaptureCommand {
     Screenshot(CaptureScreenshotArgs),
+    /// Capture a single preview frame without creating a run or artifact.
+    Frame(CaptureFrameArgs),
     Record {
         #[command(subcommand)]
         command: RecordCommand,
@@ -718,6 +744,15 @@ pub struct CaptureScreenshotArgs {
     pub label: Option<String>,
     #[arg(long)]
     pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub timeout: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CaptureFrameArgs {
+    /// Destination PNG path. Parent directories are created.
+    #[arg(long)]
+    pub output: PathBuf,
     #[arg(long)]
     pub timeout: Option<String>,
 }
@@ -768,6 +803,8 @@ pub struct DiagnosticsCollectArgs {
 #[derive(Debug, Subcommand)]
 pub enum LogcatCommand {
     Tail(LogcatTailArgs),
+    /// Read a bounded logcat window without creating a run or artifact.
+    Peek(LogcatPeekArgs),
     Start(LogcatStartArgs),
     Stop,
     Status,
@@ -783,6 +820,20 @@ pub struct LogcatTailArgs {
     pub duration: Option<String>,
     #[arg(long)]
     pub crash: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct LogcatPeekArgs {
+    #[arg(long)]
+    pub package: Option<String>,
+    #[arg(long)]
+    pub lines: Option<usize>,
+    /// Minimum Android log priority: verbose, debug, info, warn, error, fatal.
+    #[arg(long)]
+    pub level: Option<String>,
+    /// Only print lines at or after this device timestamp (MM-DD HH:MM:SS.mmm).
+    #[arg(long)]
+    pub since: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1091,6 +1142,28 @@ pub struct RunExecArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum MaintenanceCommand {
+    /// Show storage paths, usage and cleanup candidates.
+    Summary,
+    /// Prune old terminal sessions and run artifacts.
+    Clean(MaintenanceCleanArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct MaintenanceCleanArgs {
+    #[arg(long)]
+    pub older_than: Option<String>,
+    #[arg(long)]
+    pub keep_last: Option<usize>,
+    /// Include released/failed/abandoned session tombstones.
+    #[arg(long)]
+    pub sessions: bool,
+    /// Include historical runs whose reports are terminal.
+    #[arg(long)]
+    pub runs: bool,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ReportCommand {
     List {
         #[arg(long, default_value_t = 20)]
@@ -1103,6 +1176,12 @@ pub enum ReportCommand {
         run: String,
     },
     Prune(ReportPruneArgs),
+    /// Reconcile runs left in the running state by a dead or cancelled operation.
+    Reconcile(ReportReconcileArgs),
+    /// Compare a run with a compatible baseline.
+    Compare(ReportCompareArgs),
+    /// Analyze recent runs for flaky steps.
+    Flaky(ReportFlakyArgs),
     Import {
         #[command(subcommand)]
         command: ReportImportCommand,
@@ -1115,6 +1194,32 @@ pub struct ReportPruneArgs {
     pub older_than: Option<String>,
     #[arg(long)]
     pub keep_last: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportReconcileArgs {
+    #[arg(long)]
+    pub run: Option<String>,
+    #[arg(long)]
+    pub latest_running: bool,
+    /// Outcome for explicitly targeted runs: interrupted, cancelled, timed-out or abandoned.
+    #[arg(long)]
+    pub outcome: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportCompareArgs {
+    pub run: String,
+    #[arg(long)]
+    pub baseline: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportFlakyArgs {
+    #[arg(long, default_value_t = 30)]
+    pub limit: usize,
+    #[arg(long, default_value_t = 3)]
+    pub min_runs: usize,
 }
 
 #[derive(Debug, Subcommand)]

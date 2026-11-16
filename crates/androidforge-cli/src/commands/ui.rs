@@ -5,8 +5,8 @@ use androidforge_core::session::Session;
 use androidforge_core::util::write_atomic;
 
 use crate::cli::{
-    UiCommand, UiDumpArgs, UiKeyEventArgs, UiScrollArgs, UiScrollToArgs, UiSettleArgs, UiSwipeArgs,
-    UiTextArgs, UiWaitArgs,
+    UiCommand, UiDumpArgs, UiInspectArgs, UiKeyEventArgs, UiScrollArgs, UiScrollToArgs,
+    UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
 };
 use crate::commands::common::{require_selector, success};
 use crate::context::CliContext;
@@ -28,6 +28,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             )
             .await
         }
+        UiCommand::Inspect(args) => inspect(ctx, session.as_ref(), &device, args).await,
         UiCommand::Find(args) => {
             let selector = require_selector(&args.selector)?;
             execute_in_run!(
@@ -334,6 +335,48 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             .await
         }
     }
+}
+
+async fn inspect(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiInspectArgs,
+) -> Result<CommandSuccess> {
+    let ui = ctx.ui_manager()?;
+    let hierarchy = ui.dump(&device.serial).await?;
+    let mut output_path = None;
+    if let Some(output) = &args.output {
+        let path = if output.is_absolute() {
+            output.clone()
+        } else {
+            ctx.paths.cwd.join(output)
+        };
+        write_atomic(&path, hierarchy.xml.as_bytes())?;
+        output_path = Some(path.to_string_lossy().into_owned());
+    }
+    let human = format!(
+        "Inspected {} node(s) from {}{}\n",
+        hierarchy.nodes.len(),
+        hierarchy
+            .package_name
+            .as_deref()
+            .unwrap_or(device.serial.as_str()),
+        output_path
+            .as_ref()
+            .map(|path| format!("; XML at {path}"))
+            .unwrap_or_default()
+    );
+    Ok(success(
+        "ui.inspect",
+        serde_json::json!({
+            "hierarchy": hierarchy,
+            "output_path": output_path,
+        }),
+        human,
+    )
+    .with_optional_session(session.map(|session| session.id.clone()))
+    .with_device(device.serial.clone()))
 }
 
 async fn dump(

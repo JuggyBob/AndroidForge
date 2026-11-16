@@ -163,14 +163,18 @@ fn apply_creation_flags(command: &mut Command, hide_window: bool) {
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // DETACHED_PROCESS is essential for the emulator: its qemu child otherwise
-    // inherits the caller's stdout/stderr handles, so a captured `session start`
-    // would not return until the emulator exits. The explicit log files are the
-    // only output we want from these managed children.
-    let mut flags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS;
-    if hide_window {
-        flags |= CREATE_NO_WINDOW;
-    }
+    // Managed children must outlive the CLI invocation that started them, so
+    // their stdout/stderr are redirected to explicit log files. When the window
+    // should be hidden we keep a console, but an invisible one
+    // (CREATE_NO_WINDOW): the Android emulator passes its console to the qemu
+    // child, and spawning that child with a detached parent makes Windows open
+    // a visible Windows Terminal tab. DETACHED_PROCESS gives no console at all,
+    // which is correct when a visible emulator window is desired.
+    let flags = if hide_window {
+        CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    } else {
+        CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+    };
     command.creation_flags(flags);
 }
 
