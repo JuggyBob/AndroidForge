@@ -61,7 +61,22 @@ live preview. The 26 `NOT RUN` certification checks remain coverage gaps and wer
   repeated the full-observation ref tap plus the cross-project context warning successfully.
 - The local installer installed CLI/desktop `0.9.2` and uninstalled cleanly with the install
   directory removed.
-- Downloaded-asset and release metadata verification is recorded after publication.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.2>; title
+  `AndroidForge v0.9.2 - Certification Follow-up`; not a prerelease; marked latest.
+- Tag: `v0.9.2`, tag object `3467e2a0b704615421165ff8f3df25db03bd5881`, commit
+  `6363d4870fec14403e78a8dfd439e86918998386`; Release workflow `44158300496` and main CI
+  `44158295960` passed.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (5,209,134 bytes),
+    `4f52fa73ef08f09382ae0689aa51b613ba8d93e16bff3605511d9e2980d842e8`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,974,139 bytes),
+    `a456c7f84598a4b6ff2c95150ed2568655edce401a2d559fd25ab14f6dc0b69b`.
+  - `androidforge-windows-x86_64-setup.exe` (9,798,231 bytes),
+    `fab98c52aede52b6a63dfbc6aa987945deba2fb1f2a14238b0b88d0333183474`.
+- The downloaded portable ZIP reported CLI/desktop `0.9.2` and exposed the updated hook schema. The
+  downloaded installer installed CLI/desktop `0.9.2` and uninstalled cleanly with the install
+  directory removed.
+- v0.6.0, v0.7.0, v0.7.1, v0.8.0, v0.9.0 and v0.9.1 releases, tags and assets remain intact.
 
 ## v0.9.1 verification (2026-11-17)
 
@@ -874,13 +889,3 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
-
-
-
-
-
-
-
-
-
-
