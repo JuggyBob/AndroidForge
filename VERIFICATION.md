@@ -78,8 +78,27 @@ Environment: Android 16 / API 36 emulator `emulator-5554`, session `ses-a4465e20
 - The portable ZIP was extracted into a clean directory; CLI and desktop reported `0.6.0`; new help
   pages loaded; the desktop launched with title `AndroidForge` and stayed responsive.
 - The installer installed CLI/desktop `0.6.0` and uninstalled cleanly with the install directory removed.
-- All three local asset SHA-256 values matched `SHA256SUMS.txt`. Published-asset download results are
-  appended after publication.
+- All three local asset SHA-256 values matched `SHA256SUMS.txt`. CI produces independent binaries and
+  hashes; published-asset download results are recorded below.
+
+### Published release
+
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.6.0>
+- Title: `AndroidForge v0.6.0 - Agent Memory`; not a prerelease.
+- Tag: `v0.6.0`, tag object `2066615dc4484748fea88f391cbc1d265541658b`, commit
+  `26f837660d53e38575d50a2d28aafc6f832acce4`.
+- CI Release workflow `44039413660` passed and uploaded the assets.
+- The published assets were downloaded and matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (4,758,822 bytes),
+    `f072ab10174d6fb82e6b876a7bb29e1ff8cf647672e862b31d2b0f52c44b5381`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,452,997 bytes),
+    `7c73ae7b1d3021bd6bf2b299ba8f6613bbda4d041c6f270b42cd4257f0c3371e`.
+  - `androidforge-windows-x86_64-setup.exe` (9,464,168 bytes),
+    `f2d5b90d579f4dc419cb149aef8918f15f31ed72e51150d952cdab05e35e91fa`.
+- The downloaded portable ZIP reported CLI/desktop `0.6.0`; new bundle/APK help pages loaded; the
+  desktop launched directly on Ownership with title `AndroidForge`.
+- The downloaded installer installed CLI/desktop `0.6.0` and uninstalled cleanly with the install
+  directory removed.
 
 ### Not exercised
 
@@ -166,6 +185,25 @@ inside the AndroidForge example adapters. Two claims were checked and not reprod
 - The downloaded portable ZIP reported CLI/desktop `0.5.0`; `--help`/`--version` were non-interactive;
   the desktop launched with title `AndroidForge`.
 - The downloaded installer installed CLI/desktop `0.5.0` and uninstalled cleanly.
+
+### Published release
+
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.6.0>
+- Title: `AndroidForge v0.6.0 - Agent Memory`; not a prerelease.
+- Tag: `v0.6.0`, tag object `2066615dc4484748fea88f391cbc1d265541658b`, commit
+  `26f837660d53e38575d50a2d28aafc6f832acce4`.
+- CI Release workflow `44039413660` passed and uploaded the assets.
+- The published assets were downloaded and matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (4,758,822 bytes),
+    `f072ab10174d6fb82e6b876a7bb29e1ff8cf647672e862b31d2b0f52c44b5381`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,452,997 bytes),
+    `7c73ae7b1d3021bd6bf2b299ba8f6613bbda4d041c6f270b42cd4257f0c3371e`.
+  - `androidforge-windows-x86_64-setup.exe` (9,464,168 bytes),
+    `f2d5b90d579f4dc419cb149aef8918f15f31ed72e51150d952cdab05e35e91fa`.
+- The downloaded portable ZIP reported CLI/desktop `0.6.0`; new bundle/APK help pages loaded; the
+  desktop launched directly on Ownership with title `AndroidForge`.
+- The downloaded installer installed CLI/desktop `0.6.0` and uninstalled cleanly with the install
+  directory removed.
 
 ### Not exercised
 
@@ -403,3 +441,4 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
