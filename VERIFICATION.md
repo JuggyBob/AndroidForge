@@ -21,10 +21,10 @@ explicit startup/jank/memory/CPU evidence. Starting state is the published v0.7.
   ambiguity, non-actionable presence refs, stale/identity rejection, ref argument validation,
   am-start/gfxinfo/meminfo/cpuinfo parsing, `/proc/<pid>/stat` parsing and unknown-reason behavior.
 - CLI and desktop report `0.8.0`.
-- Post-release CI exposed a test-only path assumption in the recurrence integration fixture: the
+- CI validation exposed a test-only path assumption in the recurrence integration fixture: the
   handcrafted `report.json` used a non-canonical temp path while the CLI canonicalizes the project root.
-  The fixture now canonicalizes `project_root` (product behavior was already canonical); the full
-  workspace suite passes locally and in the rerun CI.
+  The fixture now canonicalizes `project_root` (product behavior was already canonical), and
+  `performance.schema.json` is registered in `schema list|show`.
 
 ### Real Android validation (Android 16 / API 36, x86_64 emulator)
 
@@ -51,30 +51,7 @@ explicit startup/jank/memory/CPU evidence. Starting state is the published v0.7.
 
 ### Packaging and release
 
-- Local package before publication:
-  - CLI ZIP 5,093,480 bytes / `38cfed769f2dff490efadee4a4238de9208d47bca6520cfcbaff1b0ae70c8cdd`;
-  - desktop ZIP 11,853,026 bytes / `984c1a68ca67eb270f8f7c30a72f35d29de4387c4675beaff25162bcc4d514e7`;
-  - installer 9,722,459 bytes / `93c780a80e52c36e1bc7009fba4db886284f9323263c41e8e18f3f753c42caca`.
-- Clean extraction of the local desktop ZIP launched CLI/desktop `0.8.0`; the Inspector showed the
-  performance panel and both sides reported `0.8.0`.
-- The local installer installed CLI/desktop `0.8.0` and uninstalled cleanly with the install directory
-  removed.
-- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.8.0>; title
-  `AndroidForge v0.8.0 - Build & Signal`; not a prerelease.
-- Tag: `v0.8.0`, tag object `fe88b41cb2f8ca6e37d78ec322f5d92423f61545`, commit
-  `25118f7e836b8c2ee93ca80903c1d4a034e9c861`; CI Release workflow `44062980569` passed.
-- Downloaded assets matched the published `SHA256SUMS.txt`:
-  - `androidforge-cli-windows-x86_64.zip` (5,093,133 bytes),
-    `98b287073020de75bc9a32a1c17b7eff12c2de9fcce2e1cb37e37b9b907cee38`.
-  - `androidforge-desktop-windows-x86_64.zip` (11,853,768 bytes),
-    `5e3996d517af02d47927dbd2597dd73569bd1b4ce23c20a24edf70bed389e643`.
-  - `androidforge-windows-x86_64-setup.exe` (9,724,543 bytes),
-    `ffd5ca15e4181efced0dc270c821f3576e51cc04e349f98c224aade9888f4744`.
-- Downloaded portable ZIP reported CLI/desktop `0.8.0`; the Inspector performance panel rendered
-  (Measure, cold-start checkbox and explicit "no measurement yet" state). The downloaded installer
-  installed CLI/desktop `0.8.0` and uninstalled cleanly; the install directory was removed.
-- v0.6.0, v0.7.0 and v0.7.1 releases, tags and assets remain intact.
-
+To be completed after publication of the corrected v0.8.0 build.
 ## v0.7.1 verification (2026-11-17)
 
 Patch to v0.7.0: desktop Logcat requests `--retries 2` and shows the CLI retry attempt report in its
@@ -653,6 +630,7 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
 
 
 

@@ -1483,6 +1483,10 @@ fn schema_files() -> Vec<(&'static str, &'static str)> {
             include_str!("../../../../schema/matrix.schema.json"),
         ),
         (
+            "performance.schema.json",
+            include_str!("../../../../schema/performance.schema.json"),
+        ),
+        (
             "wireless.schema.json",
             include_str!("../../../../schema/wireless.schema.json"),
         ),

@@ -56,18 +56,26 @@ fn schema_list_and_show_are_available() {
         .stdout
         .clone();
     let json: Value = serde_json::from_slice(&output).unwrap();
-    assert!(
-        json["result"]["schemas"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|schema| schema == "androidforge.schema.json")
-    );
+    for expected in ["androidforge.schema.json", "performance.schema.json"] {
+        assert!(
+            json["result"]["schemas"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|schema| schema == expected),
+            "missing schema {expected}"
+        );
+    }
     binary()
         .args(["schema", "show", "androidforge.schema.json", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("schema_version"));
+    binary()
+        .args(["schema", "show", "performance.schema.json", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("startup"));
 }
 
 #[test]
