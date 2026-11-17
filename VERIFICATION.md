@@ -17,7 +17,19 @@ moving or rewriting the v0.7.0 tag.
   desktop ZIP 11,673,504 bytes / `254ccb27375ef3daf436fb3d9e3650f76a52435d49b5ea94e5aa57bd92458aa9`;
   installer 9,603,589 bytes / `91cd1c52b1c204d245ca19d5ef9576398eba3e7cf9ec9984f4fb97f7f8cb58a0`.
 - Clean extraction launched CLI/desktop `0.7.1`; the installer installed and uninstalled cleanly.
-- Published-asset download and checksum verification results are recorded after publication.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.1>; title
+  `AndroidForge v0.7.1 - Desktop Retry Presentation`; not a prerelease.
+- Tag: `v0.7.1`, tag object `e29fd9bb28d049f37a02eb3c7630ff0a5a666ce9`, commit
+  `6fa6ed92913c4ceb90b59ed71dcc56fadc4fafd2`; CI Release workflow `44051888329` passed.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (4,944,700 bytes),
+    `8eb8defaff93a81ec75f17cad675fc90dadfac0102d7e782bc9500e45013fd67`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,673,413 bytes),
+    `a7f2c000c3ef6b7b0ae42274cc2b490d81725728a1ea681c3d835a43ec42970a`.
+  - `androidforge-windows-x86_64-setup.exe` (9,597,189 bytes),
+    `eef78ce87f5714c4c6cbaa2b449250a0fbb8cdd7eddb40595d30f37269ed0680`.
+- Downloaded portable ZIP reported CLI/desktop `0.7.1` and launched the Logcat page; the installer
+  installed and uninstalled cleanly.
 - v0.7.0 release assets and tag remain intact.
 
 ## v0.7.0 verification (2026-11-17)
