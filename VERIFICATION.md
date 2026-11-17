@@ -21,6 +21,10 @@ explicit startup/jank/memory/CPU evidence. Starting state is the published v0.7.
   ambiguity, non-actionable presence refs, stale/identity rejection, ref argument validation,
   am-start/gfxinfo/meminfo/cpuinfo parsing, `/proc/<pid>/stat` parsing and unknown-reason behavior.
 - CLI and desktop report `0.8.0`.
+- Post-release CI exposed a test-only path assumption in the recurrence integration fixture: the
+  handcrafted `report.json` used a non-canonical temp path while the CLI canonicalizes the project root.
+  The fixture now canonicalizes `project_root` (product behavior was already canonical); the full
+  workspace suite passes locally and in the rerun CI.
 
 ### Real Android validation (Android 16 / API 36, x86_64 emulator)
 
@@ -649,6 +653,7 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
 
 
 

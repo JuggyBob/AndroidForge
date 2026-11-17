@@ -631,7 +631,7 @@ fn write_memory_report(
         "run_id": run_id,
         "command": "conformance.run",
         "project": "RecurrenceTest",
-        "project_root": root.to_string_lossy(),
+        "project_root": androidforge_core::util::canonicalize_or_self(root).to_string_lossy(),
         "build": {
             "package": "com.example.recurrence",
             "version_name": "1.0",
