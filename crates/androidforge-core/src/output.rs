@@ -25,6 +25,15 @@ pub struct Envelope {
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<DeviceRef>,
+    /// Output profile used for this response. Absent in full mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// One-line decision summary in compact/brief mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Short next commands in compact/brief mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -49,6 +58,10 @@ pub struct CommandSuccess {
     pub run_id: Option<String>,
     pub duration_ms: u64,
     pub exit_code: i32,
+    /// One-line decision summary used by compact/brief output.
+    pub summary: Option<String>,
+    /// Short next commands used by compact/brief output.
+    pub next: Vec<String>,
 }
 
 impl CommandSuccess {
@@ -64,6 +77,8 @@ impl CommandSuccess {
             run_id: None,
             duration_ms: 0,
             exit_code: 0,
+            summary: None,
+            next: Vec::new(),
         }
     }
 
@@ -108,15 +123,30 @@ impl CommandSuccess {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct OutputOptions {
     pub json: bool,
     pub quiet: bool,
+    /// Minified JSON and compact/brief result shaping.
+    pub compact: bool,
+    /// Profile name included in the envelope (`compact` or `brief`).
+    pub profile: Option<String>,
 }
 
 impl OutputOptions {
     pub fn new(json: bool, quiet: bool) -> Self {
-        Self { json, quiet }
+        Self {
+            json,
+            quiet,
+            compact: false,
+            profile: None,
+        }
+    }
+
+    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
+        self.compact = true;
+        self.profile = Some(profile.into());
+        self
     }
 }
 
@@ -132,12 +162,15 @@ pub fn emit_success(options: OutputOptions, success: &CommandSuccess) -> Result<
             device: success.device_serial.as_ref().map(|serial| DeviceRef {
                 serial: serial.clone(),
             }),
+            profile: options.profile.clone(),
+            summary: success.summary.clone(),
+            next: success.next.clone(),
             result: Some(success.result.clone()),
             error: None,
             artifacts: success.artifacts.clone(),
             duration_ms: success.duration_ms,
         };
-        write_json(&envelope)?;
+        write_json(&envelope, options.compact)?;
     } else if !options.quiet {
         let mut stdout = io::stdout().lock();
         if !success.human.is_empty() {
@@ -199,12 +232,15 @@ pub fn emit_error(
             run_id,
             session_id,
             device: device_serial.map(|serial| DeviceRef { serial }),
+            profile: options.profile.clone(),
+            summary: options.compact.then(|| body.message.clone()),
+            next: Vec::new(),
             result: None,
             error: Some(body),
             artifacts: error.body().artifacts.clone(),
             duration_ms,
         };
-        write_json(&envelope)?;
+        write_json(&envelope, options.compact)?;
     } else if !options.quiet {
         let mut stderr = io::stderr().lock();
         let _ = writeln!(
@@ -298,9 +334,13 @@ pub fn emit_error(
     Ok(())
 }
 
-fn write_json<T: Serialize>(value: &T) -> Result<()> {
+fn write_json<T: Serialize>(value: &T, compact: bool) -> Result<()> {
     let mut stdout = io::stdout().lock();
-    serde_json::to_writer_pretty(&mut stdout, value)?;
+    if compact {
+        serde_json::to_writer(&mut stdout, value)?;
+    } else {
+        serde_json::to_writer_pretty(&mut stdout, value)?;
+    }
     stdout
         .write_all(b"\n")
         .and_then(|_| stdout.flush())
@@ -381,6 +421,9 @@ mod tests {
             run_id: None,
             session_id: None,
             device: None,
+            profile: None,
+            summary: None,
+            next: Vec::new(),
             result: Some(serde_json::json!({"count": 0})),
             error: None,
             artifacts: Vec::new(),
@@ -407,6 +450,9 @@ mod tests {
             run_id: None,
             session_id: None,
             device: None,
+            profile: None,
+            summary: None,
+            next: Vec::new(),
             result: Some(success.result.clone()),
             error: None,
             artifacts: Vec::new(),

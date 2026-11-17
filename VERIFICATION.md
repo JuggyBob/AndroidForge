@@ -1,8 +1,63 @@
 # Verification record
 
-This document records what was actually run for the `0.8.0` Alpha delivery, the `0.7.1` patch, and the
-`0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation,
+This document records what was actually run for the `0.9.0` Alpha delivery, the `0.8.0` delivery, the
+`0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation,
 desktop workflow validation and packaging validation from areas that were not exercised.
+
+## v0.9.0 verification (2026-11-17)
+
+### Scope
+
+Agent Mode: full/compact/brief output profiles, `agent brief`, compact observations/diffs/receipts,
+brief context/agent-test/diagnosis/performance projections, shorter refs/tokens, command aliases and
+config/env defaults. Starting state is the published v0.8.0 commit.
+
+### Automated checks
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` (289 passed, 0 failed, 16 test executables) and the release build passed.
+- New tests cover profile precedence (CLI > env > `[agent]` config > full), minification, summary and
+  next-command extraction, list caps/totals/truncation, compact observations/diffs/receipts, brief
+  context/agent-test/diagnosis/performance projections, error compaction, short refs/tokens, aliases,
+  schema registration and unchanged full output.
+- A representative payload test asserts compact observation output is less than half of full, brief
+  observation less than a third, and brief performance less than a quarter.
+- CLI and desktop report `0.9.0`.
+
+### Real Android validation (Android 16 / API 36, x86_64 emulator)
+
+Measured on the same Settings screen:
+
+- `ui observe`: 12,357 bytes full, 4,464 compact (63.9% smaller), 3,015 brief (75.6% smaller).
+  Compact/brief output retained token/age/stale/foreground/actionable/context identity and explicit
+  totals; full output was unchanged.
+- `ui tap --receipt`: 8,863 bytes full, 3,525 compact (60.2% smaller), 3,353 brief (62.2% smaller).
+  Receipts retained effect, completeness, action, session/device, before/after tokens and changes;
+  duplicate target/action-result payloads were removed.
+- `agent test --dry-run`: 8,707 bytes full, 1,094 brief (87.4% smaller), with final status, stage
+  counts, failure, run id and report path retained.
+- `report explain`: 22,145 bytes full, 4,241 brief (80.8% smaller), with diagnosis summary/code,
+  status, fingerprint, run id and next actions retained.
+- `diagnostics performance`: 11,535 bytes full, 816 brief (92.9% smaller), with startup, jank, PSS and
+  CPU summaries retained.
+- `agent brief` returned a compact session/device/screen snapshot with observation token and next
+  commands; `--output-profile full` restored the full payload.
+- Short refs/tokens were 15/16 characters, aliases resolved, and stale-ref behaviour remained unchanged.
+- Profile selection worked from CLI flags, `ANDROIDFORGE_PROFILE`, `[agent] profile` and
+  `--output-profile full` override.
+
+### Packaging and release
+
+- Local package:
+  - CLI ZIP 5,168,615 bytes / `a02020274c720ba282dd34793f5f8952b5db986aaeadea6675d32a96ca6ebdbc`;
+  - desktop ZIP 11,929,973 bytes / `ee28a037126128780f33f6abe367c29c1317d7a18444d66d7ff230a8d7dfb5ac`;
+  - installer 9,774,718 bytes / `ed1f9c3295ccb7d32b0e12c7597591ed4796cc551ca7cd982e9303d303543602`.
+- Clean extraction launched CLI/desktop `0.9.0`; `agent brief`, compact profile output and
+  `schema show agent-brief.schema.json` succeeded. The Inspector performance panel rendered with
+  desktop 0.9.0 and CLI 0.9.0.
+- The local installer installed CLI/desktop `0.9.0`, reported the agent-brief schema and uninstalled
+  cleanly with the install directory removed.
+- Downloaded-asset and release metadata verification is recorded after publication.
 
 ## v0.8.0 verification (2026-11-17)
 
@@ -648,6 +703,10 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
+
+
+
 
 
 

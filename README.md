@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.8.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.9.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -72,13 +72,22 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Evidence | Screenshots, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
 | Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time, startup/jank/memory/CPU evidence |
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
-| Agent context | `context`, compact observation tokens, `ui diff`, stable refs, action receipts, postconditions and exact next-action argv |
+| Agent context | `context`, `agent brief`, compact observations/diffs, stable refs, action receipts, postconditions and exact next-action argv |
 | Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints, recurrence memory, `report explain/history/recurrences` and diagnostic bundles |
 | Orchestration | Idempotent `session ensure`, read-only `doctor fix --plan`, transparent `agent test`, APK resolution, `--only-if-changed` and sequential `agent matrix` |
 | Desktop | Native egui/eframe cockpit: onboarding, context, matrix, ownership, devices with health/wireless, sessions, runs, triage with explanations/receipts/recurrence/bundle previews, comparison, live logcat, inspector, repair planning, maintenance and updates |
 | Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
+| Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
+
+## What is new in v0.9.0
+
+- **Agent output profiles:** `--output-profile full|compact|brief`, `--compact`, `--brief`, `ANDROIDFORGE_PROFILE` and `[agent] profile`. Full output stays the default and unchanged. Compact minifies JSON, caps lists, drops optional repetition, and adds a one-line `summary` plus short `next` commands. Brief is the decision-oriented projection for context, `agent test`, `report explain` and performance.
+- **`agent brief`:** one small project/session/device/app/screen snapshot for the start of an agent turn, with the current observation token and next commands.
+- **Compact observations, receipts and diffs:** node lists are capped with explicit totals/truncation flags, optional node duplication is removed, and receipts keep effect/completeness/identity while dropping redundant payloads.
+- **Short handles and commands:** refs use 12 hex characters, observation tokens use 12 hex characters, and common commands have aliases (`ui o/d/t/w`, `app i/l`, `diagnostics perf`, `report why`, `agent b`, `context ctx`). Selector aliases include `--id`, `--desc` and `--token`.
+- **Measured reduction:** on an Android 16 emulator, the same Settings observation fell from 12,357 to 4,464 bytes compact (63.9%) and 3,015 bytes brief (75.6%); a performance report fell from 11,535 to 816 bytes brief (92.9%); `report explain` fell from 22,145 to 4,241 bytes brief (80.8%).
 
 ## What is new in v0.8.0
 
@@ -169,7 +178,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.8.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.9.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -217,7 +226,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.8.0)
+### Agent loop quick start (v0.9.0)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -251,6 +260,10 @@ androidforge agent matrix --avd Pixel_8_API_35 --avd Pixel_8_API_36 --flow confo
 # Resolve an existing APK without running Gradle, then install only if it changed.
 androidforge apk resolve --variant debug --json
 androidforge app install build\\app-debug.apk --only-if-changed --json
+
+# Use short aliases and a compact result.
+androidforge ui o --session ses-... --compact --json
+androidforge ui t --session ses-... --ref el-... --token obs-... --json
 androidforge app install build\\outputs\\bundle.apks --only-if-changed --session ses-... --json
 androidforge app install build\\base.apk --split build\\config.arm64_v8a.apk --session ses-... --json
 
@@ -325,6 +338,11 @@ flow = ".androidforge/conformance/release-smoke.toml"
 
 [build.variants]
 debug = ["app/build/outputs/apk/debug/*.apk"]
+
+[agent]
+profile = "compact"
+max_items = 40
+max_text_chars = 240
 ```
 
 Fixtures, hooks, conformance manifests and the environment contract are documented in
@@ -370,10 +388,10 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.8.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD matrix. v0.8.0 adds split/`.apks` install identity, refs for text,
-clear, scroll, wait and assert, and explicit startup/jank/memory/CPU evidence on top of v0.7.x
-matrix and device control. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.9.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
+emulators, including a two-AVD matrix. v0.9.0 adds agent output profiles, `agent brief`, shorter
+refs/tokens, command aliases and measured output reduction on top of v0.8.0 split-artifact identity,
+refs and performance evidence. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -405,6 +423,9 @@ Validated:
   ref-based text/clear/scroll/wait and stale-ref refusal, and startup/jank/memory/CPU measurement
   with an explicit cold start. The desktop performance panel was compiled and exercised against
   the same CLI.
+- v0.9.0 real-emulator validation: full/compact/brief observations, compact action receipts,
+  brief `agent test`/`report explain`/performance, short refs/tokens, aliases and config/env profile
+  selection. Measured reductions are recorded in [VERIFICATION.md](VERIFICATION.md).
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
@@ -463,6 +484,9 @@ Bug reports, focused pull requests and real-app reproductions are welcome. Read
 MIT. See [LICENSE](LICENSE).
 
 Copyright (c) 2026 JuggyBob.
+
+
+
 
 
 

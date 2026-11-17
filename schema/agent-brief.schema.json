@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/agent-brief.schema.json",
+  "title": "AndroidForge agent brief",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project",
+    "session",
+    "device",
+    "app",
+    "screen",
+    "last_run",
+    "next_actions"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "project": { "type": ["object", "null"], "additionalProperties": true },
+    "session": { "type": ["object", "null"], "additionalProperties": true },
+    "device": { "type": ["object", "null"], "additionalProperties": true },
+    "app": { "type": ["object", "null"], "additionalProperties": true },
+    "screen": { "type": ["object", "null"], "additionalProperties": true },
+    "last_run": { "type": ["object", "null"], "additionalProperties": true },
+    "next_actions": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

@@ -16,6 +16,9 @@
       "properties": { "serial": { "type": "string" } },
       "additionalProperties": true
     },
+    "profile": { "enum": ["compact", "brief"] },
+    "summary": { "type": "string" },
+    "next": { "type": "array", "items": { "type": "string" } },
     "result": {},
     "error": { "$ref": "#/$defs/error" },
     "artifacts": {
@@ -57,3 +60,4 @@
   },
   "additionalProperties": false
 }
+

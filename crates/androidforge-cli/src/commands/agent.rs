@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::cli::{
     AgentCommand, AgentTestArgs, AppInstallArgs, Cli, ConformanceCommand, ConformanceRunArgs,
-    FixtureCommand, FixtureRunArgs, SessionEnsureArgs,
+    ContextArgs, FixtureCommand, FixtureRunArgs, SessionEnsureArgs,
 };
 use crate::commands::common::success;
 use crate::commands::{apk, app, automation, session};
@@ -26,6 +26,7 @@ use crate::context::CliContext;
 
 pub async fn agent(cli: &Cli, command: &AgentCommand) -> Result<CommandSuccess> {
     match command {
+        AgentCommand::Brief => brief(cli).await,
         AgentCommand::Test(args) => test(cli, args).await,
         AgentCommand::Matrix(args) => crate::commands::matrix::matrix(cli, args).await,
     }
@@ -464,6 +465,32 @@ fn pipeline_failure(cli: &Cli, stage: &str, error: ForgeError) -> Result<Command
     finalize(&ctx, state)
 }
 
+async fn brief(cli: &Cli) -> Result<CommandSuccess> {
+    let args = ContextArgs {
+        include: Vec::new(),
+        full: false,
+        refresh_screen: false,
+        no_screen: false,
+    };
+    let mut success = crate::commands::context::context(cli, &args).await?;
+    success.command = "agent.brief".to_string();
+    success.session_id = success
+        .result
+        .get("session")
+        .and_then(|session| session.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    success.device_serial = success
+        .result
+        .get("device")
+        .and_then(|device| device.get("serial"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let session = success.session_id.as_deref().unwrap_or("no session");
+    let device = success.device_serial.as_deref().unwrap_or("no device");
+    success.human = format!("Agent brief: {session} · {device}\n");
+    Ok(success)
+}
 async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
     if args.apk.is_none() && args.variant.is_none() && args.flow.is_none() && args.fixture.is_none()
     {

@@ -8,6 +8,39 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.9.0] - 2026-11-17
+
+Agent Mode. Adds compact/brief output profiles, a start-of-turn brief, shorter handles and command
+aliases without changing full JSON output.
+
+### Added
+
+- `--output-profile full|compact|brief`, `--compact`, `--brief`, `ANDROIDFORGE_PROFILE`,
+  `[agent] profile`, `--max-items` and `--max-text-chars`. Full remains the default.
+  Compact/brief output is minified, caps lists with explicit totals/truncation metadata, removes
+  optional repetition, and adds envelope `profile`, `summary` and `next` fields.
+- `agent brief` returns one small project/session/device/app/screen/last-run snapshot with the current
+  observation token and short next commands.
+- Compact observations, diffs and action receipts: node payloads are capped, optional duplicate node
+  fields are removed, and receipts keep effect/completeness/identity while dropping redundant target
+  and action payloads.
+- Brief projections for `context`, `agent test`, `report explain`, `diagnostics performance`, APK
+  install/diff results and errors. Comparable summaries preserve package, status, failure stage,
+  metrics, split counts and evidence pointers.
+- Short handles: element refs and observation tokens use 12 hex characters, with collision detection
+  that extends refs deterministically. Existing longer observation tokens remain readable.
+- Command aliases: `ui o/d/t/w`, `app i/l`, `diagnostics perf`, `report why`, `agent b`, `context ctx`.
+  Selector aliases: `--id` (`--resource-id`), `--desc` (`--content-desc`) and `--token`
+  (`--expect-token`).
+- `schema/agent-brief.schema.json`; envelope `profile`/`summary`/`next`; adapter `[agent]` section.
+
+### Changed
+
+- `ui observe`, `ui diff`, action receipts, `agent test`, `context`, `report explain` and performance
+  carry compact/brief projections when requested. Full output is unchanged.
+- `schema list|show` includes `agent-brief.schema.json`.
+- Workspace, CLI, desktop, installer and compatibility version are `0.9.0`.
+
 ## [0.8.0] - 2026-11-17
 
 Build & Signal. Adds honest split-artifact identity, stable refs for the remaining semantic actions,
@@ -445,7 +478,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.0
 [0.8.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.8.0
 [0.7.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.1
 [0.7.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.0
@@ -455,4 +489,5 @@ First public alpha of the local-first AndroidForge CLI.
 [0.3.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.1.0
+
 

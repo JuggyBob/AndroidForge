@@ -282,6 +282,10 @@ impl ForgeError {
         &self.body
     }
 
+    pub fn body_mut(&mut self) -> &mut ErrorBody {
+        &mut self.body
+    }
+
     pub fn into_body(self) -> ErrorBody {
         *self.body
     }

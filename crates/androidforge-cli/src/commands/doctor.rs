@@ -1214,6 +1214,18 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         "Transparent ensure/inspect/install/fixture/conformance/explain stages with dry-run.",
     );
     add(
+        "agent.brief",
+        "supported",
+        &["local state", "optional adb"],
+        "One small project/session/device/app/screen snapshot with short next commands.",
+    );
+    add(
+        "agent.output_profiles",
+        "supported",
+        &["none"],
+        "Full, compact and brief JSON profiles with minification, explicit caps, counts, summaries and next commands.",
+    );
+    add(
         "capture.screenshot",
         if has_adb { "supported" } else { "unsupported" },
         &["adb"],
@@ -1485,6 +1497,10 @@ fn schema_files() -> Vec<(&'static str, &'static str)> {
         (
             "performance.schema.json",
             include_str!("../../../../schema/performance.schema.json"),
+        ),
+        (
+            "agent-brief.schema.json",
+            include_str!("../../../../schema/agent-brief.schema.json"),
         ),
         (
             "wireless.schema.json",

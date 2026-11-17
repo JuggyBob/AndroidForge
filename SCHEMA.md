@@ -38,6 +38,8 @@ The schema files:
 | `bundle.schema.json` | Diagnostic bundle manifest, checksummed payloads and exclusions. |
 | `health.schema.json` | Read-only device health report and unknown reasons. |
 | `matrix.schema.json` | Sequential matrix plan/results, per-target health and cleanup. |
+| `performance.schema.json` | `diagnostics performance` startup, jank, memory, CPU, command evidence and unknown reasons. |
+| `agent-brief.schema.json` | `agent brief` project/session/device/app/screen/last-run snapshot and next actions. |
 | `wireless.schema.json` | Wireless pair/connect/disconnect results (never pairing codes). |
 
 Every schema is versioned with `schema_version = 1`, `adapter_version = 1`, fixture `version = 1`, and conformance `version = 1`. Unknown adapter fields are rejected deliberately.
@@ -77,6 +79,8 @@ The new schemas cover:
   frame/jank percentiles, meminfo PSS/RSS/heaps, CPU percentages, command/evidence excerpts and
   `unknown_reason` for every unavailable metric. Values are measured or explicitly unknown; nothing is
   inferred from a version string or a missing field.
+- `agent-brief.schema.json` - the compact project/session/device/app/screen/last-run snapshot returned
+  by `agent brief`, with `next_actions` and warnings.
 
 Fingerprints are `sha256:` values over a versioned normalized material string. They intentionally ignore
 run ids, timestamps, temporary paths, memory addresses and dynamic numeric ids. See
@@ -106,6 +110,8 @@ Every meaningful command with `--json` writes exactly one object to stdout:
 Rules:
 
 - `schema_version`, `status`, `command`, `exit_code` and `duration_ms` are always present.
+- `profile`, `summary` and `next` appear only with `--output-profile compact|brief` (or equivalent
+  config/env defaults). `profile` is `compact` or `brief`; full output remains unchanged.
 - `status` is `success`, `error`, `failed` or `blocked`. `failed` and `blocked` are used by pipeline-style
   commands that preserve a structured `result` instead of an error body.
 - Success responses put command-specific data in `result`.
@@ -277,4 +283,6 @@ sessions, largest runs and the terminal-session list. `maintenance clean` defaul
 requires `--yes` for deletion; `--sessions`, `--runs`, `--older-than` and `--keep-last` select the
 eligible set. Active sessions and running runs are always excluded. The result lists every pruned
 session and deleted run. Both payloads are described by `schema/maintenance.schema.json`.
+
+
 

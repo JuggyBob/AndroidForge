@@ -39,6 +39,11 @@ debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
 release = ["app/build/outputs/apk/release/app-release.apk"]
 
+[agent]
+profile = "compact"
+max_items = 40
+max_text_chars = 240
+
 [health]
 battery_warn_percent = 15
 storage_warn_bytes = 536870912
@@ -84,6 +89,10 @@ patterns are configured, conventional `app/build/outputs/apk` locations are trie
 `conventional_fallback = false`. `default_module`
 filters candidates to that module directory; `max_candidates` bounds inspection. Equal timestamps with
 different content are reported as ambiguity rather than guessed.
+
+`[agent]` sets the default output profile for agent-facing commands. `profile` is `full` (default),
+`compact` or `brief`; `max_items` and `max_text_chars` bound compact/brief lists and text. CLI flags
+(`--output-profile`, `--compact`, `--brief`, `--max-items`, `--max-text-chars`) override the adapter.
 
 `[health]` configures read-only warnings for `devices health` and matrix preflight:
 
@@ -237,3 +246,4 @@ version, APK/installed hash and certificate when known).
 
 `adapter_version = 1` is frozen for this release. Unsupported versions fail with `E_ADAPTER_INVALID`.
 `min_androidforge_version` is checked before commands run. Future versions require migration.
+

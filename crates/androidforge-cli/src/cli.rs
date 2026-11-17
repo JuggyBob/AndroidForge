@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -16,6 +16,26 @@ pub struct Cli {
     /// Machine-readable JSON on stdout. Diagnostics and progress go to stderr.
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Output detail profile. `compact` minifies and caps evidence; `brief` is the smallest decision-oriented view.
+    #[arg(long, global = true, value_enum, env = "ANDROIDFORGE_PROFILE")]
+    pub output_profile: Option<OutputProfile>,
+
+    /// Shorthand for `--output-profile brief`.
+    #[arg(long, global = true)]
+    pub brief: bool,
+
+    /// Shorthand for `--output-profile compact`.
+    #[arg(long, global = true)]
+    pub compact: bool,
+
+    /// Maximum list items in compact/brief output.
+    #[arg(long, global = true, env = "ANDROIDFORGE_MAX_ITEMS")]
+    pub max_items: Option<usize>,
+
+    /// Maximum characters for text fields in compact/brief output.
+    #[arg(long, global = true, env = "ANDROIDFORGE_MAX_TEXT_CHARS")]
+    pub max_text_chars: Option<usize>,
 
     /// Trace external command argv, timeouts and exit codes to stderr.
     #[arg(long, global = true)]
@@ -57,6 +77,28 @@ pub struct Cli {
     pub command: Command,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum OutputProfile {
+    Full,
+    Compact,
+    Brief,
+}
+
+impl OutputProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Compact => "compact",
+            Self::Brief => "brief",
+        }
+    }
+
+    pub fn is_compact(self) -> bool {
+        self != Self::Full
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Inspect host, SDK, ADB, emulator, tools, AVDs, disks and sessions.
@@ -65,6 +107,7 @@ pub enum Command {
         command: Option<DoctorCommand>,
     },
     /// Compact, agent-oriented snapshot of the project, session, device, app and screen.
+    #[command(alias = "ctx")]
     Context(ContextArgs),
     /// Run a transparent high-level agent workflow.
     Agent {
@@ -259,7 +302,11 @@ pub struct ContextArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AgentCommand {
+    /// One small project/session/device/app/screen snapshot for an agent turn.
+    #[command(alias = "b")]
+    Brief,
     /// Run the transparent ensure/inspect/install/conformance/explain pipeline.
+    #[command(alias = "t")]
     Test(AgentTestArgs),
     /// Run the same flow against multiple independent AVDs or serials, sequentially.
     Matrix(AgentMatrixArgs),
@@ -641,9 +688,11 @@ pub enum SnapshotCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum AppCommand {
+    #[command(alias = "i")]
     Install(AppInstallArgs),
     Uninstall(AppUninstallArgs),
     ClearData(AppPackageArgs),
+    #[command(alias = "l")]
     Launch(AppLaunchArgs),
     ForceStop(AppPackageArgs),
     Kill(AppPackageArgs),
@@ -800,17 +849,17 @@ pub struct ApkVerifyArgs {
 pub struct SelectorArgs {
     #[arg(long = "ref")]
     pub reference: Option<String>,
-    #[arg(long = "expect-token")]
+    #[arg(long = "expect-token", alias = "token")]
     pub expect_token: Option<String>,
     #[arg(long)]
     pub text: Option<String>,
     #[arg(long)]
     pub contains: Option<String>,
-    #[arg(long = "content-desc")]
+    #[arg(long = "content-desc", alias = "desc")]
     pub content_desc: Option<String>,
     #[arg(long = "content-desc-contains", alias = "desc-contains")]
     pub content_desc_contains: Option<String>,
-    #[arg(long = "resource-id")]
+    #[arg(long = "resource-id", alias = "id")]
     pub resource_id: Option<String>,
     #[arg(long = "class")]
     pub class: Option<String>,
@@ -836,14 +885,18 @@ pub enum UiCommand {
     /// Dump and return the parsed hierarchy without creating a run artifact.
     Inspect(UiInspectArgs),
     /// Capture a compact semantic observation and persist an observation token.
+    #[command(alias = "o")]
     Observe(UiObserveArgs),
     /// Compare a previous observation with a new or stored observation.
+    #[command(alias = "d")]
     Diff(UiDiffArgs),
     Find(UiFindArgs),
+    #[command(alias = "t")]
     Tap(UiTapArgs),
     LongPress(UiTapArgs),
     Text(UiTextArgs),
     Clear(UiSelectorArgs),
+    #[command(alias = "w")]
     Wait(UiWaitArgs),
     Assert(UiWaitArgs),
     Settle(UiSettleArgs),
@@ -1103,6 +1156,7 @@ pub enum DiagnosticsCommand {
     },
     Inspect(DiagnosticsInspectArgs),
     /// Measure startup, jank, memory and CPU explicitly.
+    #[command(alias = "perf")]
     Performance(DiagnosticsPerformanceArgs),
 }
 
@@ -1526,6 +1580,7 @@ pub enum ReportCommand {
     /// Analyze recent runs for flaky steps.
     Flaky(ReportFlakyArgs),
     /// Explain a failure deterministically and return exact next commands.
+    #[command(alias = "why")]
     Explain(ReportExplainArgs),
     /// Show every stored occurrence of a deterministic failure fingerprint.
     History(ReportHistoryArgs),

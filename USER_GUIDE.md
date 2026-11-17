@@ -29,13 +29,36 @@ cargo build --workspace --release
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
-## 2.1 Agent loop commands (v0.8.0)
+## 2.1 Agent loop commands (v0.9.0)
 
 These commands reduce repeated discovery and inspection. They keep the same JSON envelope, exit codes
 and evidence rules as the rest of the CLI.
 
-### Context
+### Agent brief and output profiles
 
+```powershell
+androidforge agent brief --project . --json
+androidforge agent brief --session <ID> --json
+androidforge ui observe --session <ID> --output-profile compact --json
+androidforge diagnostics performance com.example.app --cold --session <ID> --brief --json
+```
+
+`agent brief` is one small snapshot for the start of a turn: project, session, device, app, screen
+observation, last run and deterministic next actions. It uses the brief profile automatically.
+
+Full JSON remains the default. `--output-profile compact` / `--compact` minifies JSON, caps lists with
+explicit totals and truncation flags, removes optional repetition, and adds a one-line `summary` plus
+short `next` commands. `--output-profile brief` / `--brief` returns the smallest decision-oriented view
+for context, observations, diffs, receipts, `agent test`, `report explain` and performance. Use
+`--output-profile full` to override a compact default. Defaults can also come from `[agent] profile`
+in `.androidforge/project.toml` or `ANDROIDFORGE_PROFILE=full|compact|brief`. `--max-items` and
+`--max-text-chars` control the caps.
+
+Refs and observation tokens are 12 hex characters by default. Common aliases are `ui o/d/t/w`,
+`app i/l`, `diagnostics perf`, `report why`, `agent b` and `context ctx`; selector aliases include
+`--id`, `--desc` and `--token`.
+
+### Context
 ```powershell
 androidforge context --project . --json
 androidforge context --session <ID> --json
@@ -76,7 +99,7 @@ androidforge ui diff --session <ID> --from obs-... --full --json
 
 Default observations contain interactive `actionable` nodes, non-interactive `context` text, focus,
 foreground package/activity, display and visible text. Each node includes `clickable` and `enabled`;
-`token` is the preferred observation token and `id` is a backward-compatible alias.
+`token` is the preferred 12-hex observation token and `id` is a backward-compatible alias.
 `actionable_total`/`actionable_truncated` and `context_total`/`context_truncated` state whether the
 compact view was capped. `--full` returns the complete parsed hierarchy plus all nodes. Observation
 tokens are session-scoped, boot-id-scoped, kept in the local AndroidForge state directory and expire
@@ -138,6 +161,11 @@ default_variant = "debug"
 debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
 
+[agent]
+profile = "compact"
+max_items = 40
+max_text_chars = 240
+
 [health]
 battery_warn_percent = 15
 storage_warn_bytes = 536870912
@@ -163,7 +191,7 @@ androidforge ui wait --session <ID> --ref el-... --expect-token obs-... --timeou
 androidforge ui assert --session <ID> --ref el-... --expect-token obs-... --json
 ```
 
-A `ref` is an opaque handle scoped to one observation token, session and device. AndroidForge re-reads
+A `ref` is an opaque handle (12 hex characters) scoped to one observation token, session and device. AndroidForge re-reads
 the hierarchy and validates the node identity immediately before dispatch. Expired tokens, removed or
 changed nodes, wrong devices and non-actionable nodes are explicit errors; there is no text or
 coordinate fallback. Text/clear require an editable field, scroll requires a scrollable node, and
@@ -387,6 +415,11 @@ default_variant = "debug"
 debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
 
+[agent]
+profile = "compact"
+max_items = 40
+max_text_chars = 240
+
 [health]
 battery_warn_percent = 15
 storage_warn_bytes = 536870912
@@ -497,6 +530,11 @@ default_variant = "debug"
 [build.variants]
 debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
+
+[agent]
+profile = "compact"
+max_items = 40
+max_text_chars = 240
 
 [health]
 battery_warn_percent = 15
@@ -873,7 +911,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.8.0` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.9.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents
@@ -888,6 +926,8 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 8. Treat `--yes`, `--fresh`, `clear-data`, snapshot load, time/network changes and raw ADB as destructive.
 9. In the desktop, check the selected project/session in every confirmation; closing the app does not
    release or stop anything. Cancelling a run preserves the emulator.
+
+
 
 
 

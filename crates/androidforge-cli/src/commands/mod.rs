@@ -183,6 +183,7 @@ pub fn canonical_name(command: &Command) -> String {
         },
         Command::Context(_) => "context".to_string(),
         Command::Agent { command } => match command {
+            crate::cli::AgentCommand::Brief => "agent.brief".to_string(),
             crate::cli::AgentCommand::Test(_) => "agent.test".to_string(),
             crate::cli::AgentCommand::Matrix(_) => "agent.matrix".to_string(),
         },

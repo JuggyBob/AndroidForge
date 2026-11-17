@@ -1,4 +1,5 @@
 mod cli;
+mod compact;
 #[macro_use]
 mod run_scope;
 mod commands;
@@ -86,14 +87,19 @@ async fn run() -> i32 {
         }
     };
     let command_name = canonical_name(&cli.command);
-    let output = OutputOptions::new(cli.json, cli.quiet);
+    let plan = compact::resolve(&cli);
+    let mut output = OutputOptions::new(cli.json, cli.quiet);
+    if plan.is_compact() {
+        output = output.with_profile(plan.profile.as_str());
+    }
     match commands::execute(&cli).await {
         Ok(mut success) => {
             if success.duration_ms == 0 {
                 success.duration_ms = started.elapsed().as_millis() as u64;
             }
+            compact::apply_success(&mut success, plan);
             let exit_code = success.exit_code;
-            if let Err(error) = emit_success(output, &success) {
+            if let Err(error) = emit_success(output.clone(), &success) {
                 let _ = emit_error(
                     output,
                     &command_name,
@@ -107,7 +113,8 @@ async fn run() -> i32 {
             }
             exit_code
         }
-        Err(error) => {
+        Err(mut error) => {
+            compact::apply_error(&mut error, plan);
             let duration = started.elapsed().as_millis() as u64;
             let session = error.body().session_id.clone();
             let device = error.body().device_serial.clone();
@@ -205,6 +212,8 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
             || arg == "--yes"
             || arg == "--quiet"
             || arg == "--no-failure-capture"
+            || arg == "--brief"
+            || arg == "--compact"
             || arg.starts_with("--json=")
             || arg.starts_with("--trace=")
             || arg.starts_with("--dry-run=")
@@ -215,7 +224,13 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
         }
         if matches!(
             arg.as_ref(),
-            "--session" | "--serial" | "--project" | "--run"
+            "--session"
+                | "--serial"
+                | "--project"
+                | "--run"
+                | "--output-profile"
+                | "--max-items"
+                | "--max-text-chars"
         ) {
             index += 2;
             continue;
@@ -224,6 +239,9 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
             || arg.starts_with("--serial=")
             || arg.starts_with("--project=")
             || arg.starts_with("--run=")
+            || arg.starts_with("--output-profile=")
+            || arg.starts_with("--max-items=")
+            || arg.starts_with("--max-text-chars=")
         {
             index += 1;
             continue;

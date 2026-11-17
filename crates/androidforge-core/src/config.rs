@@ -201,6 +201,45 @@ impl Default for DiagnosticsSection {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentProfile {
+    #[default]
+    Full,
+    Compact,
+    Brief,
+}
+
+impl AgentProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Compact => "compact",
+            Self::Brief => "brief",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentSection {
+    /// Default output profile for agent-oriented commands.
+    pub profile: AgentProfile,
+    /// Maximum list items in compact/brief output.
+    pub max_items: usize,
+    /// Maximum characters for text fields in compact/brief output.
+    pub max_text_chars: usize,
+}
+
+impl Default for AgentSection {
+    fn default() -> Self {
+        Self {
+            profile: AgentProfile::Full,
+            max_items: 40,
+            max_text_chars: 240,
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TimeoutsSection {
@@ -326,6 +365,7 @@ pub struct ForgeConfigFile {
     pub ui: UiSection,
     pub maestro: MaestroSection,
     pub diagnostics: DiagnosticsSection,
+    pub agent: AgentSection,
     pub health: HealthSection,
     pub timeouts: TimeoutsSection,
     pub sdk: SdkSection,
@@ -345,6 +385,7 @@ impl Default for ForgeConfigFile {
             ui: UiSection::default(),
             maestro: MaestroSection::default(),
             diagnostics: DiagnosticsSection::default(),
+            agent: AgentSection::default(),
             health: HealthSection::default(),
             timeouts: TimeoutsSection::default(),
             sdk: SdkSection::default(),
@@ -677,6 +718,20 @@ impl ForgeConfig {
                 ));
             }
         }
+        if file.agent.max_items == 0 || file.agent.max_items > 500 {
+            issues.push(issue(
+                Severity::Error,
+                "agent.max_items",
+                "agent.max_items must be between 1 and 500".to_string(),
+            ));
+        }
+        if !(16..=10_000).contains(&file.agent.max_text_chars) {
+            issues.push(issue(
+                Severity::Error,
+                "agent.max_text_chars",
+                "agent.max_text_chars must be between 16 and 10000".to_string(),
+            ));
+        }
         if file.diagnostics.max_log_bytes < 64 * 1024 {
             issues.push(issue(
                 Severity::Warning,
@@ -985,6 +1040,38 @@ mod tests {
         assert!(config.validate().valid);
     }
 
+    #[test]
+    fn agent_profile_and_limits_are_typed_and_validated() {
+        let config = config_from(
+            "adapter_version = 1\n[agent]\nprofile = \"brief\"\nmax_items = 12\nmax_text_chars = 80\n",
+            "",
+        );
+        assert_eq!(config.file.agent.profile, AgentProfile::Brief);
+        assert_eq!(config.file.agent.max_items, 12);
+        assert_eq!(config.file.agent.max_text_chars, 80);
+
+        let mut invalid = config.clone();
+        invalid.file.agent.max_items = 0;
+        let validation = invalid.validate();
+        assert!(!validation.valid);
+        assert!(
+            validation
+                .issues
+                .iter()
+                .any(|issue| issue.field == "agent.max_items")
+        );
+
+        let mut invalid = config.clone();
+        invalid.file.agent.max_text_chars = 4;
+        let validation = invalid.validate();
+        assert!(!validation.valid);
+        assert!(
+            validation
+                .issues
+                .iter()
+                .any(|issue| issue.field == "agent.max_text_chars")
+        );
+    }
     #[test]
     fn rejects_unknown_adapter_fields() {
         let temp = tempfile::tempdir().unwrap();

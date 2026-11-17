@@ -2,24 +2,25 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.8.0 agent loop
+## 0. The v0.9.0 agent loop
 
 The shortest reliable loop is:
 
 ```powershell
 androidforge doctor --json
-androidforge context --project . --json
+androidforge agent brief --project . --json
 androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
-androidforge ui observe --session ses-... --json
-androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --receipt --json
+androidforge ui observe --session ses-... --output-profile compact --json
+androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --receipt --output-profile compact --json
 androidforge report explain latest --json
 androidforge report recurrences --project . --json
 androidforge report bundle latest --output .\\evidence.zip --json
 androidforge ui observe --session ses-... --json
 androidforge ui tap --session ses-... --ref el-... --expect-token obs-... --json
 androidforge ui text "hello" --session ses-... --ref el-... --expect-token obs-... --json
+androidforge ui wait --session ses-... --ref el-... --expect-token obs-... --timeout 5s --json
 androidforge app install .\bundle.apks --only-if-changed --session ses-... --json
-androidforge diagnostics performance com.example.app --cold --session ses-... --json
+androidforge diagnostics performance com.example.app --cold --session ses-... --output-profile brief --json
 androidforge agent matrix --avd Pixel_8_API_35 --avd Pixel_8_API_36 --flow conformance --json
 androidforge context --session ses-... --json
 androidforge session release --session ses-... --owner MyAgent --json
@@ -30,6 +31,9 @@ own, what is on screen, did my action produce the expected result and what chang
 run fail, whether that failure is new/recurring/regressed, and where the portable evidence bundle is.
 
 ### 0.1 Command safety classes
+
+Output-profile flags (`--output-profile`, `--compact`, `--brief`, `--max-items`, `--max-text-chars`)
+only change the JSON presentation; they never change which device actions are allowed or performed.
 
 Read-only commands (safe to run for discovery; `context` may still capture and persist a screen
 observation unless `--dry-run` is used):
@@ -85,6 +89,34 @@ Every `next_actions` entry is a suggestion:
 
 Never execute an action blindly. The argv is exact, but it is not run automatically.
 
+### 0.2.1 Agent brief and output profiles
+
+```powershell
+androidforge agent brief --project . --json
+androidforge agent brief --session ses-... --json
+androidforge ui observe --session ses-... --output-profile compact --json
+androidforge diagnostics performance com.example.app --cold --session ses-... --brief --json
+```
+
+`agent brief` is one small project/session/device/app/screen snapshot for the start of a turn. It
+returns the current observation token, compact actionable/context nodes and short next commands.
+
+Full JSON remains the default and unchanged. Choose a profile with one of:
+
+- `--output-profile compact` or `--compact`: minified JSON, capped lists with explicit totals, optional
+  repetition removed, one-line `summary`, short `next` commands.
+- `--output-profile brief` or `--brief`: the smallest decision-oriented view. It is especially effective
+  for `context`, `agent test`, `report explain`, `diagnostics performance`, observations, diffs and
+  action receipts.
+- `--output-profile full`: explicitly override a compact default from `[agent]` or the environment.
+
+Defaults can come from `[agent] profile` in `.androidforge/project.toml` or
+`ANDROIDFORGE_PROFILE=full|compact|brief`. `--max-items` and `--max-text-chars` bound compact output.
+Full detail remains available by re-running without the profile or with `--output-profile full`.
+
+Common aliases: `ui o/d/t/w` (observe/diff/tap/wait), `app i/l` (install/launch), `diagnostics perf`,
+`report why` (explain), `agent b` (brief), `context ctx`. Selector aliases include `--id`
+(`--resource-id`), `--desc` (`--content-desc`) and `--token` (`--expect-token`).
 ### 0.3 Session acquisition and leases
 
 ```powershell
@@ -310,7 +342,7 @@ androidforge ui wait --session ses-... --ref el-... --expect-token obs-... --tim
 androidforge ui assert --session ses-... --ref el-... --expect-token obs-... --json
 ```
 
-Every observed actionable/context/scrollable node has a deterministic opaque `ref`. A ref is valid only
+Every observed actionable/context/scrollable node has a deterministic opaque `ref` (12 hex characters by default). A ref is valid only
 with its observation token and the same session/device. Immediately before dispatch, the CLI re-reads the
 hierarchy and verifies path, class, package, resource id, text, content description, bounds, enabled and
 actionable state. It refuses with explicit errors when the token expired, the node disappeared or
@@ -711,5 +743,7 @@ If a human may have the desktop open:
 
 The desktop reads the same `report.json`, `metadata.json`, `manifest.json` and artifact paths described in
 [SCHEMA.md](SCHEMA.md); it never produces a separate report format.
+
+
 
 

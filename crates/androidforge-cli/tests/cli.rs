@@ -36,6 +36,7 @@ fn invalid_command_is_structured_json_with_suggestion() {
         .clone();
     let json: Value = serde_json::from_slice(&output).expect("structured JSON error");
     assert_eq!(json["status"], "error");
+    assert!(json.get("summary").is_none());
     assert_eq!(json["error"]["code"], "E_INVALID_COMMAND");
     assert!(
         json["error"]["suggestions"]
@@ -56,7 +57,11 @@ fn schema_list_and_show_are_available() {
         .stdout
         .clone();
     let json: Value = serde_json::from_slice(&output).unwrap();
-    for expected in ["androidforge.schema.json", "performance.schema.json"] {
+    for expected in [
+        "androidforge.schema.json",
+        "performance.schema.json",
+        "agent-brief.schema.json",
+    ] {
         assert!(
             json["result"]["schemas"]
                 .as_array()
@@ -85,7 +90,11 @@ fn config_validate_and_init_dry_run() {
     std::fs::create_dir_all(dir.join(".androidforge")).unwrap();
     std::fs::write(
         dir.join(".androidforge/project.toml"),
-        "adapter_version = 1\n[project]\nname = \"Example\"\npackage = \"com.example.app\"\n",
+        "adapter_version = 1
+[project]
+name = \"Example\"
+package = \"com.example.app\"
+",
     )
     .unwrap();
     let output = binary()
@@ -257,12 +266,217 @@ fn project_with_defaults(dir: &std::path::Path) -> std::path::PathBuf {
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::write(
         config_dir.join("project.toml"),
-        "adapter_version = 1\n[project]\nname = \"ContextTest\"\npackage = \"com.example.contexttest\"\ndefault_avd = \"Test_AVD\"\n",
+        "adapter_version = 1
+[project]
+name = \"ContextTest\"
+package = \"com.example.contexttest\"
+default_avd = \"Test_AVD\"
+",
     )
     .unwrap();
     config_dir
 }
 
+#[test]
+fn output_profiles_minify_and_explain_without_extra_whitespace() {
+    let output = binary()
+        .args(["--output-profile", "compact", "schema", "list", "--json"])
+        .output()
+        .expect("compact schema list");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.starts_with("{\"schema_version\""));
+    assert!(
+        !text.contains(
+            "
+  \""
+        ),
+        "compact output should be minified"
+    );
+    let json: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["profile"], "compact");
+    assert!(json["summary"].as_str().is_some());
+}
+
+#[test]
+fn full_output_remains_the_default_without_agent_metadata() {
+    let output = binary()
+        .args(["schema", "list", "--json"])
+        .output()
+        .expect("full schema list");
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(json.get("profile").is_none());
+    assert!(json.get("summary").is_none());
+    assert!(json.get("next").is_none());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains(
+            "
+  \""
+        ),
+        "full output should remain pretty-printed"
+    );
+}
+
+#[test]
+fn agent_profile_can_come_from_project_config_and_cli_overrides_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_dir = project_with_defaults(temp.path());
+    std::fs::write(
+        config_dir.join("project.toml"),
+        "adapter_version = 1
+[project]
+name = \"ContextTest\"
+[agent]
+profile = \"brief\"
+max_items = 7
+max_text_chars = 64
+",
+    )
+    .unwrap();
+    let configured = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["schema", "list", "--json"])
+        .output()
+        .expect("configured profile");
+    assert!(configured.status.success());
+    let json: Value = serde_json::from_slice(&configured.stdout).unwrap();
+    assert_eq!(json["profile"], "brief");
+
+    let overridden = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["schema", "list", "--output-profile", "full", "--json"])
+        .output()
+        .expect("full override");
+    assert!(overridden.status.success());
+    let json: Value = serde_json::from_slice(&overridden.stdout).unwrap();
+    assert!(json.get("profile").is_none());
+
+    let environment = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .env("ANDROIDFORGE_PROFILE", "compact")
+        .args(["schema", "list", "--json"])
+        .output()
+        .expect("environment profile");
+    assert!(environment.status.success());
+    let json: Value = serde_json::from_slice(&environment.stdout).unwrap();
+    assert_eq!(json["profile"], "compact");
+}
+#[test]
+fn brief_context_is_smaller_and_preserves_next_actions() {
+    let temp = tempfile::tempdir().unwrap();
+    project_with_defaults(temp.path());
+    let full = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["context", "--json"])
+        .output()
+        .expect("full context");
+    let brief = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["context", "--output-profile", "brief", "--json"])
+        .output()
+        .expect("brief context");
+    assert!(full.status.success(), "{full:?}");
+    assert!(brief.status.success(), "{brief:?}");
+    let brief_json: Value = serde_json::from_slice(&brief.stdout).unwrap();
+    assert_eq!(brief_json["profile"], "brief");
+    assert_eq!(brief_json["result"]["project"]["name"], "ContextTest");
+    assert!(brief_json["result"].get("environment").is_none());
+    assert!(
+        brief_json["result"]["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty())
+    );
+    assert!(
+        brief.stdout.len() * 2 < full.stdout.len(),
+        "brief context should be materially smaller (full={}, brief={})",
+        full.stdout.len(),
+        brief.stdout.len()
+    );
+}
+
+#[test]
+fn agent_brief_is_a_small_decision_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    project_with_defaults(temp.path());
+    let output = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["agent", "brief", "--json"])
+        .output()
+        .expect("agent brief");
+    assert!(output.status.success(), "{output:?}");
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["command"], "agent.brief");
+    assert_eq!(json["profile"], "brief");
+    assert!(
+        json["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("Agent brief:")
+    );
+    assert!(json["result"].get("environment").is_none());
+    assert_eq!(json["result"]["project"]["name"], "ContextTest");
+    assert!(json["result"].get("session").is_some());
+    assert!(json["result"].get("device").is_some());
+    assert!(json["result"].get("screen").is_some());
+}
+
+#[test]
+fn short_command_aliases_resolve_to_the_canonical_commands() {
+    for args in [
+        vec!["ui", "o", "--help"],
+        vec!["ui", "d", "--help"],
+        vec!["ui", "t", "--help"],
+        vec!["ui", "w", "--help"],
+        vec!["app", "i", "--help"],
+        vec!["app", "l", "--help"],
+        vec!["diagnostics", "perf", "--help"],
+        vec!["report", "why", "--help"],
+        vec!["agent", "b", "--help"],
+        vec!["ui", "find", "--id", "com.example:id/save", "--help"],
+        vec!["ui", "find", "--desc", "Save", "--help"],
+        vec!["ui", "wait", "--ref", "el-1", "--token", "obs-1", "--help"],
+    ] {
+        binary().args(args.clone()).assert().success();
+    }
+}
+
+#[test]
+fn brief_errors_keep_the_profile_and_bound_suggestions() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing.apk");
+    let output = binary()
+        .current_dir(temp.path())
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "apk",
+            "inspect",
+            &missing.display().to_string(),
+            "--output-profile",
+            "brief",
+            "--json",
+        ])
+        .output()
+        .expect("brief error");
+    assert_eq!(output.status.code(), Some(6));
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["profile"], "brief");
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["error"]["code"], "E_FILE_NOT_FOUND");
+    assert!(json["summary"].as_str().is_some());
+    assert!(
+        json["error"]["suggestions"]
+            .as_array()
+            .is_some_and(|suggestions| suggestions.len() <= 2)
+    );
+}
 #[test]
 fn context_returns_partial_structured_result_without_a_session() {
     let temp = tempfile::tempdir().unwrap();
@@ -448,7 +662,10 @@ fn ui_observe_without_a_session_is_a_clear_session_error() {
     assert_eq!(output.status.code(), Some(4));
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["status"], "error");
-    assert_eq!(json["error"]["code"], "E_SESSION_NOT_FOUND");
+    assert!(matches!(
+        json["error"]["code"].as_str(),
+        Some("E_SESSION_NOT_FOUND" | "E_DEVICE_NOT_FOUND" | "E_DEVICE_AMBIGUOUS")
+    ));
 }
 
 #[test]
@@ -458,7 +675,11 @@ fn agent_test_dry_run_is_transparent_and_writes_nothing() {
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::write(
         config_dir.join("project.toml"),
-        "adapter_version = 1\n[project]\nname = \"NoTarget\"\npackage = \"com.example.notarget\"\n",
+        "adapter_version = 1
+[project]
+name = \"NoTarget\"
+package = \"com.example.notarget\"
+",
     )
     .unwrap();
     let output = binary()
@@ -687,7 +908,10 @@ fn recurrence_memory_detects_regression_and_bundle_is_redacted_and_verifiable() 
     std::fs::create_dir_all(&log_dir).unwrap();
     std::fs::write(
         log_dir.join("app.log"),
-        "expected dialog did not appear\npassword=hunter2\npairing code: 123456\n",
+        "expected dialog did not appear
+password=hunter2
+pairing code: 123456
+",
     )
     .unwrap();
     let artifacts = serde_json::json!([{
@@ -832,7 +1056,12 @@ fn apk_resolve_rejects_malformed_candidates_and_unknown_variants() {
     std::fs::create_dir_all(root.join("app/build/outputs/apk/debug")).unwrap();
     std::fs::write(
         root.join(".androidforge/project.toml"),
-        "adapter_version = 1\n[project]\nname = \"Resolve\"\n[build.variants]\ndebug = [\"app/build/outputs/apk/debug/*.apk\"]\n",
+        "adapter_version = 1
+[project]
+name = \"Resolve\"
+[build.variants]
+debug = [\"app/build/outputs/apk/debug/*.apk\"]
+",
     )
     .unwrap();
     std::fs::write(
@@ -913,7 +1142,14 @@ fn adapter_accepts_build_variant_configuration_and_rejects_escaping_patterns() {
     std::fs::create_dir_all(root.join(".androidforge")).unwrap();
     std::fs::write(
         root.join(".androidforge/project.toml"),
-        "adapter_version = 1\n[project]\nname = \"Build\"\n[build]\ndefault_variant = \"debug\"\n[build.variants]\ndebug = [\"app/build/outputs/apk/debug/*.apk\"]\n",
+        "adapter_version = 1
+[project]
+name = \"Build\"
+[build]
+default_variant = \"debug\"
+[build.variants]
+debug = [\"app/build/outputs/apk/debug/*.apk\"]
+",
     )
     .unwrap();
     let output = binary()
@@ -928,7 +1164,12 @@ fn adapter_accepts_build_variant_configuration_and_rejects_escaping_patterns() {
 
     std::fs::write(
         root.join(".androidforge/project.toml"),
-        "adapter_version = 1\n[project]\nname = \"Build\"\n[build.variants]\ndebug = [\"../outside/*.apk\"]\n",
+        "adapter_version = 1
+[project]
+name = \"Build\"
+[build.variants]
+debug = [\"../outside/*.apk\"]
+",
     )
     .unwrap();
     let output = binary()

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -406,6 +406,15 @@ fn observation_path(paths: &ForgePaths, session_id: &str, token: &str) -> PathBu
     observations_dir(paths, session_id).join(format!("{}.json", sanitize_component(token)))
 }
 
+fn allocate_token(paths: &ForgePaths, session_id: &str) -> String {
+    loop {
+        let candidate = format!("obs-{}", short_id());
+        if !observation_path(paths, session_id, &candidate).exists() {
+            return candidate;
+        }
+    }
+}
+
 fn xml_path(paths: &ForgePaths, session_id: &str, token: &str) -> PathBuf {
     observations_dir(paths, session_id).join(format!("{}.xml", sanitize_component(token)))
 }
@@ -456,7 +465,7 @@ fn display_orientation(rotation: Option<i32>) -> String {
     }
 }
 
-fn reference_for(token: &str, node: &ObservationNode) -> String {
+fn reference_for(token: &str, node: &ObservationNode, length: usize) -> String {
     let bounds = format!(
         "{},{},{},{}",
         node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom
@@ -471,15 +480,14 @@ fn reference_for(token: &str, node: &ObservationNode) -> String {
         node.content_desc.as_deref().unwrap_or(""),
         node.role.as_deref().unwrap_or("")
     );
-    format!(
-        "el-{}",
-        &androidforge_core::util::sha256_hex(material.as_bytes())[..20]
-    )
+    let hash = androidforge_core::util::sha256_hex(material.as_bytes());
+    format!("el-{}", &hash[..length.min(hash.len())])
 }
 
 fn assign_references(observation: &mut Observation) {
     let token = observation.token.clone();
     let mut references = BTreeMap::new();
+    let mut used = BTreeSet::new();
     for node in observation
         .actionable
         .iter()
@@ -488,9 +496,21 @@ fn assign_references(observation: &mut Observation) {
         .chain(observation.focused.iter())
         .chain(observation.nodes.iter().flatten())
     {
-        references
-            .entry(node.path.clone())
-            .or_insert_with(|| reference_for(&token, node));
+        if references.contains_key(&node.path) {
+            continue;
+        }
+        let mut length = 12;
+        let reference = loop {
+            let candidate = reference_for(&token, node, length);
+            if used.insert(candidate.clone()) {
+                break candidate;
+            }
+            length += 4;
+            if length > 32 {
+                break reference_for(&token, node, 64);
+            }
+        };
+        references.insert(node.path.clone(), reference);
     }
     let assign = |node: &mut ObservationNode| {
         if let Some(reference) = references.get(&node.path) {
@@ -826,11 +846,7 @@ pub async fn collect_observation(
     let focus = adb.current_focus(&serial).await;
     let display_size = adb.display_size(&serial).await;
     let boot = boot_id_async(&adb, &serial).await;
-    let token = format!(
-        "obs-{}-{}",
-        chrono::Utc::now().format("%Y%m%d%H%M%S"),
-        short_id()
-    );
+    let token = allocate_token(&ctx.paths, &session.id);
     let observed_at = now_rfc3339();
     let (mut actionable, mut context, mut scrollable, focused) = compact_nodes(&hierarchy);
     if let Some(package) = package_filter {
@@ -1740,6 +1756,7 @@ mod tests {
         assert_eq!(refs.len(), 2);
         assert_ne!(refs[0], refs[1]);
         assert!(refs.iter().all(|value| value.starts_with("el-")));
+        assert!(refs.iter().all(|value| value.len() == 15));
 
         let mut second = first.clone();
         second.id = "obs-ref-2".to_string();
@@ -1748,6 +1765,24 @@ mod tests {
         assert_ne!(
             first.actionable[0].reference,
             second.actionable[0].reference
+        );
+    }
+
+    #[test]
+    fn new_observation_tokens_are_short_session_scoped_and_collision_checked() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(temp.path());
+        let first = allocate_token(&paths, "ses-a");
+        let second = allocate_token(&paths, "ses-a");
+        assert!(first.starts_with("obs-"));
+        assert_eq!(first.len(), 16);
+        assert_ne!(first, second);
+        assert!(!observation_path(&paths, "ses-a", &first).exists());
+        // Old longer tokens remain readable by the same path scheme.
+        assert!(
+            observation_path(&paths, "ses-a", "obs-20260101000000-abcdefabcdef")
+                .to_string_lossy()
+                .contains("obs-20260101000000-abcdefabcdef")
         );
     }
 

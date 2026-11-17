@@ -98,7 +98,15 @@
       },
       "additionalProperties": false
     },
-    "health": {
+    "agent": {
+      "type": "object",
+      "properties": {
+        "profile": { "enum": ["full", "compact", "brief"], "default": "full" },
+        "max_items": { "type": "integer", "minimum": 1, "maximum": 500, "default": 40 },
+        "max_text_chars": { "type": "integer", "minimum": 16, "maximum": 10000, "default": 240 }
+      },
+      "additionalProperties": false
+    },    "health": {
       "type": "object",
       "properties": {
         "battery_warn_percent": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -150,3 +158,4 @@
   },
   "additionalProperties": false
 }
+
