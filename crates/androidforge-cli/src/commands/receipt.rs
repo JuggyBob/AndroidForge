@@ -63,6 +63,16 @@ pub enum ReceiptCompleteness {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceiptElementReference {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub expected_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_node: Option<Value>,
+    pub validation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptObservationRef {
     pub token: String,
     pub observed_at: String,
@@ -136,6 +146,8 @@ pub struct ActionReceipt {
     pub dispatch_state: DispatchState,
     pub target: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<ReceiptElementReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<ReceiptObservationRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<ReceiptObservationRef>,
@@ -165,6 +177,7 @@ pub struct ReceiptBuilder {
     started: Instant,
     warnings: Vec<String>,
     before: Option<Observation>,
+    reference: Option<ReceiptElementReference>,
 }
 
 impl ReceiptBuilder {
@@ -184,11 +197,16 @@ impl ReceiptBuilder {
             started: Instant::now(),
             warnings: Vec::new(),
             before: None,
+            reference: None,
         }
     }
 
     pub fn set_before(&mut self, observation: Observation) {
         self.before = Some(observation);
+    }
+
+    pub fn set_reference(&mut self, reference: ReceiptElementReference) {
+        self.reference = Some(reference);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -282,6 +300,7 @@ impl ReceiptBuilder {
             dispatched,
             dispatch_state,
             target,
+            reference: self.reference,
             before: before_ref,
             after: after_ref,
             effect,
@@ -455,6 +474,8 @@ mod tests {
         bounds: (i32, i32, i32, i32),
     ) -> ObservationNode {
         ObservationNode {
+            reference: None,
+            role: Some("button".to_string()),
             path: path.to_string(),
             depth: 2,
             text: Some(text.to_string()),

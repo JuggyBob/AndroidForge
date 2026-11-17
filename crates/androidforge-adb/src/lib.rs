@@ -7,5 +7,7 @@
 mod client;
 mod devices;
 
-pub use client::{AdbClient, BOOT_COMPLETE_PROP, BOOT_COMPLETED_PROP, ForegroundApp, WakeResult};
+pub use client::{
+    AdbClient, BOOT_COMPLETE_PROP, BOOT_COMPLETED_PROP, ForegroundApp, WakeResult, WirelessResult,
+};
 pub use devices::{parse_devices_output, parse_getprop_output, parse_wm_density, parse_wm_size};

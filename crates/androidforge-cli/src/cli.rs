@@ -261,6 +261,47 @@ pub struct ContextArgs {
 pub enum AgentCommand {
     /// Run the transparent ensure/inspect/install/conformance/explain pipeline.
     Test(AgentTestArgs),
+    /// Run the same flow against multiple independent AVDs or serials, sequentially.
+    Matrix(AgentMatrixArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AgentMatrixArgs {
+    /// AVD target. Repeat for multiple devices.
+    #[arg(long)]
+    pub avd: Vec<String>,
+    /// Connected-device serial target. Repeat for multiple devices.
+    #[arg(long)]
+    pub serial: Vec<String>,
+    /// Flow to run, for example conformance or a path.
+    #[arg(long)]
+    pub flow: Option<String>,
+    #[arg(long)]
+    pub fixture: Option<String>,
+    #[arg(long)]
+    pub apk: Option<PathBuf>,
+    #[arg(long)]
+    pub variant: Option<String>,
+    #[arg(long)]
+    pub owner: Option<String>,
+    #[arg(long)]
+    pub profile: Option<String>,
+    #[arg(long)]
+    pub ttl: Option<String>,
+    #[arg(long)]
+    pub install: bool,
+    /// Stop after the first target failure.
+    #[arg(long)]
+    pub fail_fast: bool,
+    /// Parallel workers. Only 1 (sequential) is currently validated.
+    #[arg(long, default_value_t = 1)]
+    pub parallel: usize,
+    /// Keep matrix-created sessions after the run instead of releasing them.
+    #[arg(long)]
+    pub keep_sessions: bool,
+    /// Per-target child operation timeout, for example 20m.
+    #[arg(long)]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -494,6 +535,39 @@ pub enum DevicesCommand {
     Wait(DevicesWaitArgs),
     Prepare(PrepareArgs),
     Restore,
+    /// Pair with an Android wireless-debugging endpoint using a six-digit code.
+    Pair(DevicesPairArgs),
+    /// Connect to a paired wireless-debugging endpoint.
+    Connect(DevicesEndpointArgs),
+    /// Disconnect a wireless ADB endpoint.
+    Disconnect(DevicesEndpointArgs),
+    /// Collect structured, read-only device health.
+    Health(DevicesHealthArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DevicesPairArgs {
+    /// Pairing endpoint from the device, for example 192.168.1.20:37123.
+    pub endpoint: String,
+    /// Six-digit pairing code. Prefer --code-stdin to keep it out of shell history.
+    #[arg(long, conflicts_with = "code_stdin")]
+    pub code: Option<String>,
+    /// Read the pairing code from stdin.
+    #[arg(long = "code-stdin")]
+    pub code_stdin: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DevicesEndpointArgs {
+    /// ADB wireless endpoint, for example 192.168.1.20:37521.
+    pub endpoint: String,
+}
+
+#[derive(Debug, Args)]
+pub struct DevicesHealthArgs {
+    /// Omit raw command evidence from the result.
+    #[arg(long = "no-evidence")]
+    pub no_evidence: bool,
 }
 
 #[derive(Debug, Args)]
@@ -715,6 +789,10 @@ pub struct ApkVerifyArgs {
 
 #[derive(Debug, Args, Default, Clone)]
 pub struct SelectorArgs {
+    #[arg(long = "ref")]
+    pub reference: Option<String>,
+    #[arg(long = "expect-token")]
+    pub expect_token: Option<String>,
     #[arg(long)]
     pub text: Option<String>,
     #[arg(long)]
@@ -775,6 +853,9 @@ pub struct UiObserveArgs {
     /// Return the complete parsed hierarchy in addition to the compact view.
     #[arg(long)]
     pub full: bool,
+    /// Bounded retries for transient read failures (0-5). This command is read-only.
+    #[arg(long, default_value_t = 0)]
+    pub retries: u32,
     /// Compare against a previous observation token.
     #[arg(long)]
     pub since: Option<String>,
@@ -788,6 +869,9 @@ pub struct UiDiffArgs {
     /// Previous observation token.
     #[arg(long)]
     pub from: String,
+    /// Bounded retries when a fresh target observation is captured (0-5).
+    #[arg(long, default_value_t = 0)]
+    pub retries: u32,
     /// Optional target observation token. A fresh observation is captured when omitted.
     #[arg(long)]
     pub to: Option<String>,
@@ -1033,6 +1117,9 @@ pub enum LogcatCommand {
 
 #[derive(Debug, Args)]
 pub struct LogcatTailArgs {
+    /// Bounded retries for transient read failures (0-5). Logcat reads are read-only.
+    #[arg(long, default_value_t = 0)]
+    pub retries: u32,
     #[arg(long)]
     pub package: Option<String>,
     #[arg(long)]
@@ -1045,6 +1132,9 @@ pub struct LogcatTailArgs {
 
 #[derive(Debug, Args)]
 pub struct LogcatPeekArgs {
+    /// Bounded retries for transient read failures (0-5).
+    #[arg(long, default_value_t = 0)]
+    pub retries: u32,
     #[arg(long)]
     pub package: Option<String>,
     #[arg(long)]
@@ -1575,6 +1665,14 @@ impl SelectorArgs {
             || self.scrollable
             || self.checked
             || self.visible
+    }
+
+    pub fn has_ref(&self) -> bool {
+        self.reference.is_some()
+    }
+
+    pub fn has_non_ref_selector(&self) -> bool {
+        self.has_selector() || self.index.is_some()
     }
 }
 

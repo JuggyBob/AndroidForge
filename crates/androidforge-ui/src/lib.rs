@@ -5,6 +5,7 @@
 
 mod hierarchy;
 mod manager;
+mod reference;
 mod selector;
 
 pub use hierarchy::{Rect, UiHierarchy, UiNode};
@@ -12,4 +13,5 @@ pub use manager::{
     BackResult, FindResult, KeyResult, ScrollResult, ScrollToResult, SettleResult, TapResult,
     TextResult, UiManager, WaitResult,
 };
+pub use reference::NodeExpectation;
 pub use selector::{Selection, Selector, UiMatch, find, select};

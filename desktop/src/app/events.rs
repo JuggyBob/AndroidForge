@@ -434,6 +434,40 @@ impl App {
                     }
                 }
             }
+            AppEvent::Health(result) => {
+                self.health_loading = false;
+                match result {
+                    Ok(health) => {
+                        self.health = Some(health);
+                        self.health_error = None;
+                    }
+                    Err(error) => self.health_error = Some(error),
+                }
+            }
+            AppEvent::Wireless(result) => {
+                self.wireless_loading = false;
+                match result {
+                    Ok(value) => {
+                        self.wireless_result = Some(value);
+                        self.wireless_error = None;
+                    }
+                    Err(error) => self.wireless_error = Some(error),
+                }
+            }
+            AppEvent::Matrix(result) => {
+                self.matrix.loading = false;
+                match result {
+                    Ok(value) => {
+                        self.matrix.result = Some(value);
+                        self.matrix.error = None;
+                        self.toast("Matrix run finished", ToastLevel::Info);
+                        self.refresh_runs(ctx);
+                        self.refresh_sessions(ctx);
+                        self.refresh_devices(ctx);
+                    }
+                    Err(error) => self.matrix.error = Some(error),
+                }
+            }
             AppEvent::RecurrenceHistory(result) => {
                 self.triage.history_loading = false;
                 match result {

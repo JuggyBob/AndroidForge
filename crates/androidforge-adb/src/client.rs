@@ -30,6 +30,20 @@ pub struct WakeResult {
     pub notes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WirelessResult {
+    pub endpoint: String,
+    pub action: String,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+    #[serde(default)]
+    pub already_connected: bool,
+    pub duration_ms: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct AdbClient {
     pub adb: PathBuf,
@@ -734,6 +748,185 @@ impl AdbClient {
         Ok(())
     }
 
+    pub fn validate_endpoint(endpoint: &str) -> Result<String> {
+        let endpoint = endpoint.trim();
+        let (host, port) = endpoint.rsplit_once(':').ok_or_else(|| {
+            ForgeError::new(
+                ErrorCode::WirelessEndpointInvalid,
+                format!("wireless endpoint '{endpoint}' must be HOST:PORT"),
+            )
+            .with_suggestion(
+                "Use the endpoint shown on the device, for example 192.168.1.20:37521.",
+            )
+        })?;
+        let host = host.trim();
+        if host.is_empty()
+            || host.chars().any(char::is_whitespace)
+            || matches!(host, "*" | "0.0.0.0" | "::")
+        {
+            return Err(ForgeError::new(
+                ErrorCode::WirelessEndpointInvalid,
+                format!("wireless endpoint host '{host}' is not a specific device address"),
+            )
+            .with_suggestion("Use the device's LAN address; AndroidForge does not expose ADB on public interfaces."));
+        }
+        let port = port.trim().parse::<u16>().map_err(|_| {
+            ForgeError::new(
+                ErrorCode::WirelessEndpointInvalid,
+                format!("wireless endpoint port '{port}' is not a valid TCP port"),
+            )
+        })?;
+        if port == 0 {
+            return Err(ForgeError::new(
+                ErrorCode::WirelessEndpointInvalid,
+                "wireless endpoint port cannot be 0",
+            ));
+        }
+        Ok(format!("{host}:{port}"))
+    }
+
+    async fn run_secret(&self, args: &[String], timeout: Duration) -> Result<CommandOutput> {
+        // Never trace pairing argv: ADB requires the pairing code as an
+        // argument, and trace output would persist it in logs.
+        let spec = CommandSpec::new(self.adb.to_string_lossy().into_owned())
+            .args(args.iter().cloned())
+            .timeout(timeout)
+            .trace(false)
+            .hide_window(true)
+            .max_stdout(1024 * 1024)
+            .max_stderr(1024 * 1024);
+        Runner::new(false)
+            .run(spec)
+            .await
+            .map_err(|error| map_process_error(error, None))
+    }
+
+    fn pairing_succeeded(output: &CommandOutput) -> bool {
+        let combined = output.combined_text().to_ascii_lowercase();
+        output.success
+            && (combined.contains("successfully paired") || combined.contains("already paired"))
+    }
+
+    fn connect_succeeded(output: &CommandOutput) -> bool {
+        let lower = output.combined_text().to_ascii_lowercase();
+        output.success && (lower.contains("connected to") || lower.contains("already connected"))
+    }
+
+    fn redact_secret(output: &str, secret: &str) -> String {
+        if secret.is_empty() {
+            output.to_string()
+        } else {
+            output.replace(secret, "[REDACTED]")
+        }
+    }
+
+    /// Pair with an Android wireless-debugging endpoint. The pairing code is
+    /// never included in output, JSON, errors or trace logs.
+    pub async fn pair(&self, endpoint: &str, code: &str) -> Result<WirelessResult> {
+        let endpoint = Self::validate_endpoint(endpoint)?;
+        let code = code.trim();
+        if code.len() != 6 || !code.chars().all(|ch| ch.is_ascii_digit()) {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "wireless pairing codes are six digits",
+            )
+            .with_suggestion("Read the six-digit code from the device's Wireless debugging screen.")
+            .with_suggestion("Prefer --code-stdin to keep the code out of shell history."));
+        }
+        let started = Instant::now();
+        let args = vec![s("pair"), endpoint.clone(), code.to_string()];
+        let output = self.run_secret(&args, Duration::from_secs(60)).await?;
+        let stdout = Self::redact_secret(&output.stdout_text(), code);
+        let stderr = Self::redact_secret(&output.stderr_text(), code);
+        let combined = format!("{}\n{}", stdout, stderr);
+        let success = Self::pairing_succeeded(&output);
+        if !success {
+            let mut error = ForgeError::new(
+                ErrorCode::WirelessPairingFailed,
+                format!("ADB could not pair with {endpoint}"),
+            )
+            .with_context_string("endpoint", endpoint.clone())
+            .with_suggestion(
+                "Confirm the pairing endpoint and code on the device's Wireless debugging screen.",
+            )
+            .with_suggestion("The pairing port is different from the connection port.")
+            .with_suggestion("Pairing codes are never stored or logged.");
+            if !combined.trim().is_empty() {
+                error = error.with_context_string("adb_output", truncate_context(combined.trim()));
+            }
+            return Err(error);
+        }
+        Ok(WirelessResult {
+            endpoint,
+            action: "pair".to_string(),
+            success: true,
+            message: Some(truncate_context(combined.trim())),
+            serial: None,
+            already_connected: false,
+            duration_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub async fn connect(&self, endpoint: &str) -> Result<WirelessResult> {
+        let endpoint = Self::validate_endpoint(endpoint)?;
+        let started = Instant::now();
+        let output = self
+            .run_secret(&[s("connect"), endpoint.clone()], Duration::from_secs(30))
+            .await?;
+        let text = output.combined_text();
+        let lower = text.to_ascii_lowercase();
+        let already_connected = lower.contains("already connected");
+        let success = Self::connect_succeeded(&output);
+        if !success {
+            return Err(ForgeError::new(
+                ErrorCode::WirelessConnectFailed,
+                format!("ADB could not connect to {endpoint}"),
+            )
+            .with_context_string("endpoint", endpoint.clone())
+            .with_context_string("adb_output", truncate_context(text.trim()))
+            .with_suggestion("Confirm the device is paired and the connect endpoint is correct.")
+            .with_suggestion("The connect port changes when wireless debugging restarts."));
+        }
+        Ok(WirelessResult {
+            endpoint: endpoint.clone(),
+            action: "connect".to_string(),
+            success: true,
+            message: Some(truncate_context(text.trim())),
+            serial: Some(endpoint),
+            already_connected,
+            duration_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub async fn disconnect(&self, endpoint: &str) -> Result<WirelessResult> {
+        let endpoint = Self::validate_endpoint(endpoint)?;
+        let started = Instant::now();
+        let output = self
+            .run_secret(
+                &[s("disconnect"), endpoint.clone()],
+                Duration::from_secs(15),
+            )
+            .await?;
+        let text = output.combined_text();
+        if !output.success {
+            return Err(ForgeError::new(
+                ErrorCode::WirelessConnectFailed,
+                format!("ADB could not disconnect {endpoint}"),
+            )
+            .with_context_string("endpoint", endpoint)
+            .with_context_string("adb_output", truncate_context(text.trim())));
+        }
+        Ok(WirelessResult {
+            endpoint,
+            action: "disconnect".to_string(),
+            success: true,
+            message: Some(truncate_context(text.trim())),
+            serial: None,
+            already_connected: false,
+            duration_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
     pub async fn raw_passthrough(
         &self,
         serial: Option<&str>,
@@ -1099,5 +1292,79 @@ mod tests {
             app.activity.as_deref(),
             Some("com.example.app.MainActivity")
         );
+    }
+
+    #[test]
+    fn wireless_endpoint_validation_rejects_unsafe_or_malformed_hosts() {
+        assert_eq!(
+            AdbClient::validate_endpoint("192.168.1.20:37521").unwrap(),
+            "192.168.1.20:37521"
+        );
+        assert_eq!(
+            AdbClient::validate_endpoint("[::1]:5555").unwrap(),
+            "[::1]:5555"
+        );
+        for endpoint in [
+            "192.168.1.20",
+            "0.0.0.0:5555",
+            "*:5555",
+            "host:0",
+            "host:notaport",
+            "host:70000",
+            "bad host:5555",
+        ] {
+            assert!(
+                AdbClient::validate_endpoint(endpoint).is_err(),
+                "{endpoint} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn wireless_success_parsing_and_pairing_code_redaction() {
+        let output = CommandOutput {
+            program: "adb".to_string(),
+            args: vec!["pair".to_string()],
+            exit_code: Some(0),
+            success: true,
+            stdout: b"Successfully paired to 192.168.1.20:37123 [guid=adb-123]\n".to_vec(),
+            stderr: Vec::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            duration_ms: 10,
+            timed_out: false,
+        };
+        assert!(AdbClient::pairing_succeeded(&output));
+        let redacted = AdbClient::redact_secret("Failed with pairing code 123456", "123456");
+        assert!(!redacted.contains("123456"));
+        assert!(redacted.contains("[REDACTED]"));
+
+        let rejected = CommandOutput {
+            program: "adb".to_string(),
+            args: vec!["pair".to_string()],
+            exit_code: Some(1),
+            success: false,
+            stdout: Vec::new(),
+            stderr: b"Failed to authenticate\n".to_vec(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            duration_ms: 10,
+            timed_out: false,
+        };
+        assert!(!AdbClient::pairing_succeeded(&rejected));
+
+        let connected = CommandOutput {
+            program: "adb".to_string(),
+            args: vec!["connect".to_string()],
+            exit_code: Some(0),
+            success: true,
+            stdout: b"already connected to 192.168.1.20:37521\n".to_vec(),
+            stderr: Vec::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            duration_ms: 10,
+            timed_out: false,
+        };
+        assert!(AdbClient::connect_succeeded(&connected));
     }
 }

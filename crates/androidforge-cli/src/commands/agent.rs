@@ -27,6 +27,7 @@ use crate::context::CliContext;
 pub async fn agent(cli: &Cli, command: &AgentCommand) -> Result<CommandSuccess> {
     match command {
         AgentCommand::Test(args) => test(cli, args).await,
+        AgentCommand::Matrix(args) => crate::commands::matrix::matrix(cli, args).await,
     }
 }
 

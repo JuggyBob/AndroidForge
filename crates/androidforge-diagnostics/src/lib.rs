@@ -4,6 +4,7 @@ mod alarms;
 mod capture;
 mod collect;
 mod device_state;
+mod health;
 mod jobs;
 mod logcat;
 mod notifications;
@@ -16,6 +17,10 @@ pub use capture::{
 pub use collect::{CollectionResult, DiagnosticDump, capture_failure_bundle, collect_diagnostics};
 pub use device_state::{
     BatteryState, DeviceStateManager, DozeState, NetworkState, StandbyState, TimeState,
+};
+pub use health::{
+    BatteryHealth, DeviceHealth, HealthEvidence, HealthThresholds, MemoryHealth, NetworkHealth,
+    ScreenHealth, StorageHealth, ThermalHealth, collect_health,
 };
 pub use jobs::{JobInfo, JobList, JobRunResult, JobSelector, JobWaitResult, Jobs};
 pub use logcat::{

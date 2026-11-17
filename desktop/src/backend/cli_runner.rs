@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -14,6 +14,8 @@ pub struct Invocation {
     pub project: Option<PathBuf>,
     pub cwd: Option<PathBuf>,
     pub timeout: Duration,
+    /// Optional stdin bytes, used for secrets such as wireless pairing codes.
+    pub stdin: Option<Vec<u8>>,
 }
 
 impl Invocation {
@@ -23,6 +25,7 @@ impl Invocation {
             project: None,
             cwd: None,
             timeout: Duration::from_secs(60),
+            stdin: None,
         }
     }
 
@@ -38,6 +41,11 @@ impl Invocation {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    pub fn stdin(mut self, bytes: Vec<u8>) -> Self {
+        self.stdin = Some(bytes);
         self
     }
 }
@@ -82,7 +90,11 @@ impl CliRunner {
             command.current_dir(cwd);
         }
         command.args(&invocation.args);
-        command.stdin(Stdio::null());
+        command.stdin(if invocation.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         hide_console(&mut command);
@@ -97,6 +109,11 @@ impl CliRunner {
             source,
         })?;
         let pid = child.id();
+        if let Some(input) = &invocation.stdin
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            let _ = stdin.write_all(input);
+        }
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 

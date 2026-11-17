@@ -247,6 +247,22 @@ fn screen_card(ui: &mut egui::Ui, snapshot: &Value) {
                     .size(9.5)
                     .color(theme::MUTED),
                 );
+                if let (Some(reference), Some(token)) =
+                    (node["ref"].as_str(), screen["token"].as_str())
+                {
+                    let command = format!(
+                        "androidforge ui tap --ref {reference} --expect-token {token} --json"
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(reference)
+                                .size(8.5)
+                                .monospace()
+                                .color(theme::BLUE),
+                        );
+                        copy_button(ui, &command, "Copy ref action");
+                    });
+                }
             }
         }
     });

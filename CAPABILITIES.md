@@ -22,11 +22,16 @@
 | `ui.observation` | supported | adb, uiautomator | Compact semantic observations, session/boot-scoped tokens, semantic diffs and `--full` hierarchy. |
 | `ui.postconditions` | supported | adb, uiautomator | One action plus observation polling; no hidden action retries. |
 | `ui.receipts` | supported | adb, uiautomator | Before/after tokens, semantic diff, deterministic effect classification and explicit completeness. |
+| `ui.element_refs` | supported | adb, uiautomator | Opaque refs scoped to one observation token, with strict identity validation and no fallback. |
 | `diagnosis.explain` | supported | local reports | Deterministic categories, confidence, evidence, stable fingerprints and exact argv next actions. No LLM. |
 | `diagnosis.recurrence` | supported | local reports | Project-scoped new/recurring/regressed/unknown memory derived from existing run reports; no second database. |
 | `diagnostics.bundle` | supported | local reports | Redacted, size-bounded, checksummed ZIP plus Markdown/JSON evidence summaries and dry-run preview. |
+| `devices.health` | supported | adb | Read-only battery/thermal/storage/memory/network/screen/uptime report with unknown reasons. |
+| `devices.wireless` | supported | adb | Standard pair/connect/disconnect wrappers; pairing codes are never logged or returned. |
+| `retry.read_only` | supported | none | Opt-in bounded retries (max 5, 20s window) for observe/diff/logcat reads only. |
 | `repair.plan` | supported | local toolchain | Strictly read-only environment repair planning; does not install or edit anything. |
 | `agent.pipeline` | supported | adb, project adapter | Transparent ensure/inspect/install/fixture/conformance/explain stages with dry-run. |
+| `agent.matrix` | supported | adb, emulator, project adapter | Sequential one-session-per-target matrix, health preflight, fail-fast and partial aggregates; parallel rejected. |
 | `apk.inspect` | supported | aapt2 | Package, version, SDKs, label, launchable activity, architectures, hash. |
 | `apk.verify` | supported | aapt2, apksigner, Java | Local signature verification. No signing automation. |
 | `apk.resolve` | supported | aapt2, project config | Deterministic newest valid variant output; never runs Gradle; ambiguity is explicit. |
@@ -81,7 +86,7 @@
 - `avd list`; `avd clone` is present only to return a structured `E_UNSUPPORTED_OPERATION` with alternatives.
 - `emulator start|status|stop`.
 - `snapshot list|save|load|delete`.
-- `session start|ensure|attach|claim|list|inspect|status|release|stop|use|current|gc|restart`.
+- `devices pair|connect|disconnect|health`.\n- `session start|ensure|attach|claim|list|inspect|status|release|stop|use|current|gc|restart`.
   `session list --active` hides released/failed tombstones; a released tombstone can still stop its
   owned emulator if nobody else owns it. `session stop|release|restart` require the matching `--owner`
   (or `ANDROIDFORGE_OWNER`) unless `--force` is used for a deliberate takeover.
@@ -101,7 +106,7 @@
 ### UI
 
 - `ui dump|inspect|observe|diff|find|tap|long-press|text|clear|wait|assert|settle|scroll|scroll-to|swipe|back|home|keyevent|hide-keyboard|focused`.
-- `ui observe` returns compact semantics and a session/boot-scoped token; `ui diff` compares tokens.
+- `ui observe` returns compact semantics, a session/boot-scoped token and stable `ref` values; `ui diff` compares tokens.
 - `tap`, `long-press`, `text` and `scroll` accept `--wait-for-text`, `--wait-for-absent-text`,
   `--wait-for-value`, `--wait-for-package`, `--wait-for-activity` and `--timeout` postconditions.
 - The same actions accept `--receipt` / `--receipt-full` for before/after tokens, semantic diff,
@@ -116,6 +121,10 @@
 - `doctor fix --plan|--check`; strictly read-only repair planning.
 - `agent test` with `--dry-run`, `--apk`, `--variant`, `--session-id`, `--avd`, `--serial`, `--owner`,
   `--profile`, `--ttl`, `--install`, `--flow` and `--fixture`.
+- `agent matrix` with repeated `--avd`/`--serial`, `--flow`, `--fixture`, `--apk`, `--variant`,
+  `--install`, `--fail-fast`, `--dry-run` and cleanup reporting. `--parallel` >1 is explicitly rejected.
+- `ui observe|diff` and logcat peek/tail accept `--retries`; `ui tap|long-press` accept `--ref` and
+  `--expect-token`.
 
 ### Evidence and diagnostics
 
@@ -154,4 +163,4 @@
 
 ## Verified versus unverified
 
-The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery introduced and exercised the agent loop: compact context, semantic observations and diffs, postconditions, session ensure, read-only repair planning, deterministic explanations and the agent pipeline. The `0.5.0` delivery fixed the issues reported by three independent app agents: shared-host port selection, UIAutomator recovery, pipeline status, project-scoped run discovery, observation shape, compact diffs, selector guidance, desktop help/version and session project binding. The `0.6.0` delivery added and exercised action receipts on a real emulator, real installed-APK diff/only-if-changed, recurrence classification, redacted bundle creation/verification and the Context/Ownership desktop pages. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.
+The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery introduced and exercised the agent loop: compact context, semantic observations and diffs, postconditions, session ensure, read-only repair planning, deterministic explanations and the agent pipeline. The `0.5.0` delivery fixed the issues reported by three independent app agents: shared-host port selection, UIAutomator recovery, pipeline status, project-scoped run discovery, observation shape, compact diffs, selector guidance, desktop help/version and session project binding. The `0.6.0` delivery added and exercised action receipts on a real emulator, real installed-APK diff/only-if-changed, recurrence classification, redacted bundle creation/verification and the Context/Ownership desktop pages. The `0.7.0` delivery added and exercised a two-AVD matrix (API 36 and 34), stable refs with stale rejection, device health, disconnect/recovery and read-only retry reporting, plus the Matrix and device health desktop workflows. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.

@@ -3,6 +3,7 @@ use std::path::Path;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::ArtifactRef;
 use androidforge_core::output::CommandSuccess;
+use androidforge_core::retry::ReadOnlyOperation;
 use androidforge_core::run::{RunContext, clear_active_run, set_active_run};
 use androidforge_core::util::write_atomic;
 use androidforge_diagnostics::{
@@ -15,7 +16,7 @@ use crate::cli::{
     DiagnosticsCommand, LogcatCommand, LogcatPeekArgs, LogcatStartArgs, LogcatTailArgs,
     RecordCommand, RecordStartArgs,
 };
-use crate::commands::common::success;
+use crate::commands::common::{self, success};
 use crate::context::CliContext;
 use crate::run_scope::RunScope;
 
@@ -383,13 +384,20 @@ async fn logcat_tail(ctx: &CliContext, args: &LogcatTailArgs) -> Result<CommandS
         Some(&device),
         true,
         |run| async {
-            let adb = ctx.adb()?;
-            let result = collect_logcat_tail(
-                &adb,
-                &serial,
-                package.as_deref(),
-                Some(lines),
-                Some(max_bytes),
+            let (result, retry_report) = common::retry_read_only(
+                ReadOnlyOperation::LogcatTail,
+                args.retries,
+                || async {
+                    let adb = ctx.adb()?;
+                    collect_logcat_tail(
+                        &adb,
+                        &serial,
+                        package.as_deref(),
+                        Some(lines),
+                        Some(max_bytes),
+                    )
+                    .await
+                },
             )
             .await?;
             let raw = run.write_text_artifact(
@@ -417,6 +425,12 @@ async fn logcat_tail(ctx: &CliContext, args: &LogcatTailArgs) -> Result<CommandS
             if let Some(object) = json.as_object_mut() {
                 object.insert("raw_artifact".to_string(), serde_json::json!(&artifacts[0].path));
                 object.insert("filtered_artifact".to_string(), serde_json::json!(&artifacts[1].path));
+                if args.retries > 0 {
+                    object.insert(
+                        "retry".to_string(),
+                        serde_json::to_value(&retry_report).unwrap_or(serde_json::Value::Null),
+                    );
+                }
                 if let Some(duration) = &duration {
                     object.insert(
                         "duration_note".to_string(),
@@ -450,16 +464,20 @@ async fn logcat_peek(ctx: &CliContext, args: &LogcatPeekArgs) -> Result<CommandS
         .lines
         .unwrap_or(ctx.config.file.diagnostics.logcat_tail_lines)
         .clamp(1, 20_000);
-    let result = collect_logcat_peek(
-        &ctx.adb()?,
-        &device.serial,
-        package.as_deref(),
-        Some(lines),
-        Some(ctx.config.file.diagnostics.max_log_bytes),
-        args.level.as_deref(),
-        args.since.as_deref(),
-    )
-    .await?;
+    let (result, retry_report) =
+        common::retry_read_only(ReadOnlyOperation::LogcatPeek, args.retries, || async {
+            collect_logcat_peek(
+                &ctx.adb()?,
+                &device.serial,
+                package.as_deref(),
+                Some(lines),
+                Some(ctx.config.file.diagnostics.max_log_bytes),
+                args.level.as_deref(),
+                args.since.as_deref(),
+            )
+            .await
+        })
+        .await?;
     let preview = result
         .lines
         .iter()
@@ -469,9 +487,18 @@ async fn logcat_peek(ctx: &CliContext, args: &LogcatPeekArgs) -> Result<CommandS
         .cloned()
         .collect::<Vec<_>>()
         .join("\n");
+    let mut json = serde_json::to_value(&result)?;
+    if args.retries > 0
+        && let Some(object) = json.as_object_mut()
+    {
+        object.insert(
+            "retry".to_string(),
+            serde_json::to_value(&retry_report).unwrap_or(serde_json::Value::Null),
+        );
+    }
     Ok(success(
         "diagnostics.logcat.peek",
-        serde_json::to_value(&result)?,
+        json,
         format!(
             "{} log line(s) from {}{}\n{preview}\n",
             result.line_count,

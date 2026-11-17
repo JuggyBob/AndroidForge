@@ -14,6 +14,7 @@ pub mod output;
 pub mod paths;
 pub mod recurrence;
 pub mod redact;
+pub mod retry;
 pub mod run;
 pub mod session;
 pub mod toolchain;

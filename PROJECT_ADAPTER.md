@@ -39,6 +39,12 @@ debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
 release = ["app/build/outputs/apk/release/app-release.apk"]
 
+[health]
+battery_warn_percent = 15
+storage_warn_bytes = 536870912
+thermal_warn_code = 3
+matrix_preflight = true
+
 [ui]
 backend = "uiautomator"
 default_timeout_secs = 15
@@ -78,6 +84,15 @@ patterns are configured, conventional `app/build/outputs/apk` locations are trie
 `conventional_fallback = false`. `default_module`
 filters candidates to that module directory; `max_candidates` bounds inspection. Equal timestamps with
 different content are reported as ambiguity rather than guessed.
+
+`[health]` configures read-only warnings for `devices health` and matrix preflight:
+
+- `battery_warn_percent` (default 15) warns only when the battery is below the threshold and not charging.
+- `storage_warn_bytes` (default 512 MiB) warns when `/data` free space is lower.
+- `thermal_warn_code` (default 3, Android `severe`) warns at or above that thermal status.
+- `matrix_preflight` (default true) collects health before each matrix target.
+
+Unknown health metrics are reported with reasons and do not reject a target.
 
 ## Fixture format
 

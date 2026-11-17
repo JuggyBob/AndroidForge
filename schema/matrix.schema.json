@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/matrix.schema.json",
+  "title": "AndroidForge sequential device matrix",
+  "type": "object",
+  "required": ["schema_version", "matrix_run_id", "aggregate_status", "target_results"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "matrix_run_id": { "type": "string", "pattern": "^matrix-" },
+    "project": { "type": "string" },
+    "project_root": { "type": "string" },
+    "flow": { "type": ["string", "null"] },
+    "fixture": { "type": ["string", "null"] },
+    "build": { "type": "object" },
+    "targets_requested": { "type": "integer", "minimum": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": "string", "format": "date-time" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "aggregate_status": { "enum": ["passed", "failed", "partial", "cancelled", "interrupted"] },
+    "passed": { "type": "integer", "minimum": 0 },
+    "failed": { "type": "integer", "minimum": 0 },
+    "skipped": { "type": "integer", "minimum": 0 },
+    "cleanup_policy": { "type": "object" },
+    "target_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target", "status", "started_at", "ended_at", "duration_ms", "cleanup"],
+        "properties": {
+          "target": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": { "enum": ["avd", "serial"] },
+              "name": { "type": "string" },
+              "serial": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "status": { "enum": ["passed", "failed", "skipped"] },
+          "session_id": { "type": ["string", "null"] },
+          "acquisition_mode": { "type": ["string", "null"] },
+          "serial": { "type": ["string", "null"] },
+          "api_level": { "type": ["integer", "null"] },
+          "model": { "type": ["string", "null"] },
+          "health": { "type": ["object", "null"] },
+          "health_warnings": { "type": "array", "items": { "type": "string" } },
+          "run_id": { "type": ["string", "null"] },
+          "artifact_directory": { "type": ["string", "null"] },
+          "failure_code": { "type": ["string", "null"] },
+          "failure_message": { "type": ["string", "null"] },
+          "cleanup": { "type": "string" },
+          "child_status": { "type": ["string", "null"] },
+          "child_exit_code": { "type": ["integer", "null"] },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -76,6 +76,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(12.0);
     diagnosis_panel(app, ui);
     ui.add_space(12.0);
+    receipt_panel(ui, &report);
+    ui.add_space(12.0);
     recurrence_panel(app, ui);
     ui.add_space(12.0);
     bundle_panel(app, ui);
@@ -307,6 +309,112 @@ fn diagnosis_panel(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(RichText::new(warning).size(9.0).color(theme::RED));
                 }
             }
+        }
+    });
+}
+
+fn receipt_panel(ui: &mut egui::Ui, report: &crate::models::RunReport) {
+    let receipt = report.steps.iter().find_map(|step| {
+        step.details
+            .get("receipt")
+            .or_else(|| {
+                step.failure
+                    .as_ref()
+                    .and_then(|failure| failure.context.get("receipt"))
+            })
+            .cloned()
+    });
+    let Some(receipt) = receipt else {
+        return;
+    };
+    card(ui, |ui| {
+        section_title(ui, "Action receipt");
+        let effect = receipt["effect"].as_str().unwrap_or("unknown");
+        let completeness = receipt["completeness"].as_str().unwrap_or("incomplete");
+        ui.horizontal_wrapped(|ui| {
+            status_pill(ui, effect, theme::status_color(effect));
+            status_pill(
+                ui,
+                completeness,
+                if completeness == "complete" {
+                    theme::GREEN
+                } else {
+                    theme::YELLOW
+                },
+            );
+            if let Some(state) = receipt["dispatch_state"].as_str() {
+                status_pill(ui, state, theme::MUTED);
+            }
+        });
+        let empty = "not available".to_string();
+        kv_grid(
+            ui,
+            "triage-receipt",
+            &[
+                (
+                    "Action",
+                    receipt["action"].as_str().unwrap_or("-").to_string(),
+                ),
+                (
+                    "Before token",
+                    receipt["before"]["token"]
+                        .as_str()
+                        .unwrap_or(&empty)
+                        .to_string(),
+                ),
+                (
+                    "After token",
+                    receipt["after"]["token"]
+                        .as_str()
+                        .unwrap_or(&empty)
+                        .to_string(),
+                ),
+                (
+                    "Semantic changes",
+                    format!(
+                        "{} added · {} removed · {} modified",
+                        receipt["changes"]["added_total"].as_u64().unwrap_or(0),
+                        receipt["changes"]["removed_total"].as_u64().unwrap_or(0),
+                        receipt["changes"]["modified_total"].as_u64().unwrap_or(0)
+                    ),
+                ),
+                (
+                    "Postcondition",
+                    receipt["postcondition"]["result"]
+                        .as_str()
+                        .unwrap_or("not requested")
+                        .to_string(),
+                ),
+                (
+                    "Duration",
+                    receipt["duration_ms"]
+                        .as_u64()
+                        .map(crate::views::format_duration)
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+            ],
+        );
+        if let Some(reference) = receipt.get("reference") {
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new(format!(
+                    "Ref {} · expected token {} · validation {}",
+                    reference["ref"].as_str().unwrap_or("-"),
+                    reference["expected_token"].as_str().unwrap_or("-"),
+                    reference["validation"].as_str().unwrap_or("-")
+                ))
+                .size(9.0)
+                .monospace()
+                .color(theme::MUTED),
+            );
+        }
+        for warning in receipt["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+        {
+            ui.label(RichText::new(warning).size(9.0).color(theme::YELLOW));
         }
     });
 }

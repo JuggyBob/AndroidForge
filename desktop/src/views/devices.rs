@@ -211,4 +211,166 @@ fn details(app: &mut App, ui: &mut egui::Ui, device: &crate::models::Device) {
             }
         });
     });
+    card(ui, |ui| {
+        section_title(ui, "Device health");
+        ui.horizontal(|ui| {
+            if secondary_button(ui, "Read health").clicked() {
+                app.refresh_health(&device.serial, ui.ctx());
+            }
+            if app.health_loading && app.health_serial.as_deref() == Some(device.serial.as_str()) {
+                ui.spinner();
+            }
+        });
+        if let Some(error) = &app.health_error {
+            error_banner(ui, error);
+        }
+        if app.health_serial.as_deref() == Some(device.serial.as_str())
+            && let Some(health) = &app.health
+        {
+            kv_grid(
+                ui,
+                "device-health",
+                &[
+                    (
+                        "ADB state",
+                        health["adb_state"].as_str().unwrap_or("-").to_string(),
+                    ),
+                    (
+                        "Battery",
+                        format!(
+                            "{}% {}",
+                            health["battery"]["level_percent"]
+                                .as_u64()
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "?".to_string()),
+                            health["battery"]["status"].as_str().unwrap_or("unknown")
+                        ),
+                    ),
+                    (
+                        "Battery temperature",
+                        health["battery"]["temperature_c"]
+                            .as_f64()
+                            .map(|value| format!("{value:.1} C"))
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                    (
+                        "Thermal",
+                        health["thermal"]["status"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_string(),
+                    ),
+                    (
+                        "Data free",
+                        health["storage"]["available_bytes"]
+                            .as_u64()
+                            .map(|value| format!("{} MiB", value / (1024 * 1024)))
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                    (
+                        "Memory available",
+                        health["memory"]["available_bytes"]
+                            .as_u64()
+                            .map(|value| format!("{} MiB", value / (1024 * 1024)))
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                    (
+                        "Network",
+                        format!(
+                            "wifi={} airplane={} interface={}",
+                            health["network"]["wifi_enabled"]
+                                .as_bool()
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            health["network"]["airplane_mode"]
+                                .as_bool()
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            health["network"]["active_interface"]
+                                .as_str()
+                                .unwrap_or("unknown")
+                        ),
+                    ),
+                    (
+                        "Screen",
+                        format!(
+                            "interactive={} locked={}",
+                            health["screen"]["interactive"]
+                                .as_bool()
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            health["screen"]["locked"]
+                                .as_bool()
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "unknown".to_string())
+                        ),
+                    ),
+                    (
+                        "Uptime",
+                        health["uptime_seconds"]
+                            .as_u64()
+                            .map(|value| format!("{value}s"))
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                ],
+            );
+            if let Some(warnings) = health["warnings"].as_array() {
+                for warning in warnings.iter().filter_map(|value| value.as_str()) {
+                    warning_banner(ui, warning);
+                }
+            }
+        }
+    });
+    ui.add_space(8.0);
+    card(ui, |ui| {
+        section_title(ui, "Wireless ADB");
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Endpoint").size(9.5).color(theme::MUTED));
+            ui.add(
+                egui::TextEdit::singleline(&mut app.wireless_endpoint)
+                    .desired_width(220.0)
+                    .hint_text("192.168.1.20:37521"),
+            );
+            ui.label(RichText::new("Pairing code").size(9.5).color(theme::MUTED));
+            ui.add(
+                egui::TextEdit::singleline(&mut app.wireless_code)
+                    .password(true)
+                    .desired_width(90.0)
+                    .hint_text("6 digits"),
+            );
+        });
+        ui.horizontal(|ui| {
+            if secondary_button(ui, "Pair").clicked() && !app.wireless_loading {
+                let code = std::mem::take(&mut app.wireless_code);
+                app.wireless_pair(app.wireless_endpoint.trim().to_string(), code, ui.ctx());
+            }
+            if secondary_button(ui, "Connect").clicked() && !app.wireless_loading {
+                app.wireless_connect(app.wireless_endpoint.trim().to_string(), ui.ctx());
+            }
+            if secondary_button(ui, "Disconnect").clicked() && !app.wireless_loading {
+                app.wireless_disconnect(app.wireless_endpoint.trim().to_string(), ui.ctx());
+            }
+            if app.wireless_loading {
+                ui.spinner();
+            }
+        });
+        small(
+            ui,
+            "The pairing code is held only in memory, sent to the CLI through stdin and never logged. The pairing port is not the connection port.",
+        );
+        if let Some(error) = &app.wireless_error {
+            error_banner(ui, error);
+        }
+        if let Some(result) = &app.wireless_result {
+            success_banner(
+                ui,
+                &format!(
+                    "{} {} · serial {}",
+                    result["action"].as_str().unwrap_or("wireless"),
+                    result["endpoint"].as_str().unwrap_or("-"),
+                    result["serial"].as_str().unwrap_or("-")
+                ),
+            );
+        }
+    });
 }

@@ -14,8 +14,9 @@ use androidforge_ui::{Rect, UiHierarchy, UiNode};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{UiDiffArgs, UiObserveArgs};
-use crate::commands::common::success;
+use crate::commands::common::{self, success};
 use crate::context::CliContext;
+use androidforge_core::retry::ReadOnlyOperation;
 
 pub const OBSERVATION_SCHEMA_VERSION: u32 = 1;
 const OBSERVATION_RETENTION: usize = 20;
@@ -41,6 +42,11 @@ impl From<Rect> for ObservationBounds {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ObservationNode {
+    /// Opaque handle valid only within this observation token.
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub path: String,
     pub depth: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +90,29 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn role_for(node: &UiNode) -> String {
+    let class = node.class.as_deref().unwrap_or("").to_ascii_lowercase();
+    if node.editable_like() {
+        "edit_text".to_string()
+    } else if class.contains("button") {
+        "button".to_string()
+    } else if class.contains("checkbox") || class.contains("switch") {
+        "toggle".to_string()
+    } else if class.contains("tab") {
+        "tab".to_string()
+    } else if node.scrollable {
+        "scrollable".to_string()
+    } else if node.clickable || node.long_clickable {
+        "actionable".to_string()
+    } else if class.contains("image") {
+        "image".to_string()
+    } else if class.contains("textview") || class.contains("text") {
+        "text".to_string()
+    } else {
+        "other".to_string()
+    }
+}
+
 fn non_empty(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -95,6 +124,8 @@ impl ObservationNode {
     fn from_node(node: &UiNode) -> Self {
         let password = node.password;
         Self {
+            reference: None,
+            role: Some(role_for(node)),
             path: node.path.clone(),
             depth: node.depth,
             text: if password {
@@ -425,6 +456,205 @@ fn display_orientation(rotation: Option<i32>) -> String {
     }
 }
 
+fn reference_for(token: &str, node: &ObservationNode) -> String {
+    let bounds = format!(
+        "{},{},{},{}",
+        node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom
+    );
+    let material = format!(
+        "v1|{token}|{}|{}|{}|{}|{}|{}|{bounds}|{}",
+        node.path,
+        node.class.as_deref().unwrap_or(""),
+        node.package.as_deref().unwrap_or(""),
+        node.resource_id.as_deref().unwrap_or(""),
+        node.text.as_deref().unwrap_or(""),
+        node.content_desc.as_deref().unwrap_or(""),
+        node.role.as_deref().unwrap_or("")
+    );
+    format!(
+        "el-{}",
+        &androidforge_core::util::sha256_hex(material.as_bytes())[..20]
+    )
+}
+
+fn assign_references(observation: &mut Observation) {
+    let token = observation.token.clone();
+    let mut references = BTreeMap::new();
+    for node in observation
+        .actionable
+        .iter()
+        .chain(observation.context.iter())
+        .chain(observation.scrollable.iter())
+        .chain(observation.focused.iter())
+        .chain(observation.nodes.iter().flatten())
+    {
+        references
+            .entry(node.path.clone())
+            .or_insert_with(|| reference_for(&token, node));
+    }
+    let assign = |node: &mut ObservationNode| {
+        if let Some(reference) = references.get(&node.path) {
+            node.reference = Some(reference.clone());
+        }
+    };
+    for node in &mut observation.actionable {
+        assign(node);
+    }
+    for node in &mut observation.context {
+        assign(node);
+    }
+    for node in &mut observation.scrollable {
+        assign(node);
+    }
+    if let Some(node) = &mut observation.focused {
+        assign(node);
+    }
+    if let Some(nodes) = &mut observation.nodes {
+        for node in nodes {
+            assign(node);
+        }
+    }
+}
+
+/// Find a node by its opaque reference inside one observation.
+pub fn find_reference<'a>(
+    observation: &'a Observation,
+    reference: &str,
+) -> Option<&'a ObservationNode> {
+    observation
+        .actionable
+        .iter()
+        .chain(observation.scrollable.iter())
+        .chain(observation.focused.iter())
+        .chain(observation.nodes.iter().flatten())
+        .chain(observation.context.iter())
+        .find(|node| node.reference.as_deref() == Some(reference))
+}
+
+pub struct ResolvedElementReference {
+    pub node: ObservationNode,
+    pub expectation: androidforge_ui::NodeExpectation,
+}
+
+/// Validate a stable element reference against its observation and the current
+/// session/device. This does not read the hierarchy; the UI manager performs a
+/// final identity check immediately before dispatch.
+pub async fn resolve_element_reference(
+    ctx: &CliContext,
+    session: &Session,
+    device: &Device,
+    reference: &str,
+    token: &str,
+) -> Result<ResolvedElementReference> {
+    if !reference.starts_with("el-") {
+        return Err(ForgeError::new(
+            ErrorCode::ElementRefUnknown,
+            format!("'{reference}' is not an AndroidForge element reference"),
+        )
+        .with_suggestion("Use the `ref` value returned by `ui observe --json`.")
+        .session(session.id.clone())
+        .device(device.serial.clone()));
+    }
+    let record = load_observation(&ctx.paths, &session.id, token)?;
+    verify_boot_id(ctx, session, &record).await?;
+    let observation = record.observation();
+    if observation.device_serial != device.serial {
+        return Err(ForgeError::new(
+            ErrorCode::ElementDeviceMismatch,
+            format!(
+                "observation {token} belongs to device {}, not {}",
+                observation.device_serial, device.serial
+            ),
+        )
+        .with_suggestion("Re-observe on the current device and choose a new ref.")
+        .session(session.id.clone())
+        .device(device.serial.clone()));
+    }
+    let Some(node) = find_reference(&observation, reference) else {
+        let exists = observation
+            .context
+            .iter()
+            .chain(observation.actionable.iter())
+            .any(|node| node.reference.as_deref() == Some(reference));
+        if exists {
+            return Err(ForgeError::new(
+                ErrorCode::ElementNotActionable,
+                "the referenced element is context text, not an actionable element",
+            )
+            .with_context_string("ref", reference)
+            .with_suggestion("Choose a ref from the observation's `actionable` list.")
+            .session(session.id.clone())
+            .device(device.serial.clone()));
+        }
+        return Err(ForgeError::new(
+            ErrorCode::ElementRefUnknown,
+            format!("element reference '{reference}' is not part of observation {token}"),
+        )
+        .with_context_string("ref", reference)
+        .with_context_string("token", token)
+        .with_suggestion("References are valid only inside the observation that produced them.")
+        .with_suggestion(
+            "Run `androidforge ui observe --session <ID> --json` and choose a new ref.",
+        )
+        .session(session.id.clone())
+        .device(device.serial.clone()));
+    };
+    if !observation
+        .actionable
+        .iter()
+        .chain(observation.scrollable.iter())
+        .any(|candidate| candidate.reference.as_deref() == Some(reference))
+    {
+        return Err(ForgeError::new(
+            ErrorCode::ElementNotActionable,
+            "the referenced element is not in the observation's actionable set",
+        )
+        .with_context_string("ref", reference)
+        .with_suggestion("Choose a ref from the observation's `actionable` list.")
+        .session(session.id.clone())
+        .device(device.serial.clone()));
+    }
+    let expectation = androidforge_ui::NodeExpectation {
+        path: node.path.clone(),
+        class: node.class.clone(),
+        package: node.package.clone(),
+        resource_id: node.resource_id.clone(),
+        text: if node.password {
+            None
+        } else {
+            node.text.clone()
+        },
+        content_desc: node.content_desc.clone(),
+        bounds: androidforge_ui::Rect {
+            left: node.bounds.left,
+            top: node.bounds.top,
+            right: node.bounds.right,
+            bottom: node.bounds.bottom,
+        },
+        clickable: node.clickable,
+        long_clickable: node.long_clickable,
+        enabled: node.enabled,
+        scrollable: node.scrollable,
+        editable: node.editable,
+        password: node.password,
+        actionable_hint: true,
+    };
+    if !node.enabled {
+        return Err(ForgeError::new(
+            ErrorCode::ElementNotActionable,
+            "the referenced element was disabled when it was observed",
+        )
+        .with_context_string("ref", reference)
+        .with_suggestion("Wait for it to become enabled, observe again and choose a new ref.")
+        .session(session.id.clone())
+        .device(device.serial.clone()));
+    }
+    Ok(ResolvedElementReference {
+        node: node.clone(),
+        expectation,
+    })
+}
+
 fn compact_nodes(
     hierarchy: &UiHierarchy,
 ) -> (
@@ -598,7 +828,7 @@ pub async fn collect_observation(
         orientation: display_orientation(hierarchy.rotation),
         rotation: hierarchy.rotation,
     };
-    let observation = Observation {
+    let mut observation = Observation {
         schema_version: OBSERVATION_SCHEMA_VERSION,
         id: token.clone(),
         token: token.clone(),
@@ -633,6 +863,7 @@ pub async fn collect_observation(
         },
         raw_xml_path: raw.to_string_lossy().into_owned(),
     };
+    assign_references(&mut observation);
     let record = ObservationRecord {
         observation: observation.clone(),
         boot_id: boot,
@@ -1024,8 +1255,11 @@ pub async fn observe_command(
         .with_session(session.id.clone())
         .with_device(device.serial.clone()));
     }
-    let observation =
-        collect_observation(ctx, session, device, args.package.as_deref(), args.full).await?;
+    let (observation, retry_report) =
+        common::retry_read_only(ReadOnlyOperation::UiObserve, args.retries, || {
+            collect_observation(ctx, session, device, args.package.as_deref(), args.full)
+        })
+        .await?;
     let since = match &args.since {
         Some(token) => {
             let record = load_observation(&ctx.paths, &session.id, token)?;
@@ -1045,8 +1279,21 @@ pub async fn observe_command(
     {
         object.insert("full".to_string(), serde_json::Value::Bool(true));
     }
+    if args.retries > 0
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert(
+            "retry".to_string(),
+            serde_json::to_value(&retry_report).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    let retry_note = if retry_report.retried() {
+        format!(" after {} retry attempt(s)", retry_report.retries_used)
+    } else {
+        String::new()
+    };
     let human = format!(
-        "Observed {} node(s) from {}{} ({}).\n",
+        "Observed {} node(s) from {}{} ({}).{retry_note}\n",
         observation.hierarchy.node_count,
         observation.foreground.package.as_deref().unwrap_or("-"),
         observation
@@ -1091,13 +1338,22 @@ pub async fn diff_command(
     let before_record = load_observation(&ctx.paths, &session.id, &args.from)?;
     verify_boot_id(ctx, session, &before_record).await?;
     let before = before_record.observation();
+    let mut retry_report = None;
     let after = match &args.to {
         Some(token) => {
             let record = load_observation(&ctx.paths, &session.id, token)?;
             verify_boot_id(ctx, session, &record).await?;
             record.observation()
         }
-        None => collect_observation(ctx, session, device, None, false).await?,
+        None => {
+            let (after, report) =
+                common::retry_read_only(ReadOnlyOperation::UiDiffCapture, args.retries, || {
+                    collect_observation(ctx, session, device, None, false)
+                })
+                .await?;
+            retry_report = Some(report);
+            after
+        }
     };
     let diff = diff_observations(&before, &after, args.full);
     let human = format!(
@@ -1113,7 +1369,29 @@ pub async fn diff_command(
             ""
         }
     );
-    Ok(success("ui.diff", serde_json::to_value(&diff)?, human)
+    let mut result = serde_json::to_value(&diff)?;
+    if args.retries > 0
+        && let Some(object) = result.as_object_mut()
+    {
+        if let Some(report) = retry_report {
+            object.insert(
+                "retry".to_string(),
+                serde_json::to_value(&report).unwrap_or(serde_json::Value::Null),
+            );
+        } else {
+            object.insert(
+                "retry".to_string(),
+                serde_json::json!({
+                    "operation": "ui.diff_stored",
+                    "requested_retries": args.retries,
+                    "attempts": [],
+                    "final_result": "not_applicable",
+                    "message": "stored observation comparison is local and does not read the device"
+                }),
+            );
+        }
+    }
+    Ok(success("ui.diff", result, human)
         .with_optional_session(Some(session.id.clone()))
         .with_device(device.serial.clone()))
 }
@@ -1133,6 +1411,8 @@ mod tests {
 
     fn node(path: &str, text: &str, rect: ObservationBounds) -> ObservationNode {
         ObservationNode {
+            reference: None,
+            role: Some("button".to_string()),
             path: path.to_string(),
             depth: 2,
             text: Some(text.to_string()),
@@ -1385,5 +1665,50 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::ObservationSessionMismatch);
         let error = load_observation(&paths, "ses-a", "obs-missing").unwrap_err();
         assert_eq!(error.code(), ErrorCode::ObservationNotFound);
+    }
+
+    #[test]
+    fn element_references_are_unique_and_scoped_to_the_observation_token() {
+        let mut first = observation(
+            "obs-ref-1",
+            vec![
+                node("root/0", "Save", bounds(0, 0, 100, 50)),
+                node("root/1", "Save", bounds(0, 60, 100, 110)),
+            ],
+        );
+        assign_references(&mut first);
+        let refs = first
+            .actionable
+            .iter()
+            .filter_map(|node| node.reference.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(refs.len(), 2);
+        assert_ne!(refs[0], refs[1]);
+        assert!(refs.iter().all(|value| value.starts_with("el-")));
+
+        let mut second = first.clone();
+        second.id = "obs-ref-2".to_string();
+        second.token = "obs-ref-2".to_string();
+        assign_references(&mut second);
+        assert_ne!(
+            first.actionable[0].reference,
+            second.actionable[0].reference
+        );
+    }
+
+    #[test]
+    fn references_can_be_found_and_mapped_to_an_expectation() {
+        let mut observation = observation(
+            "obs-ref-3",
+            vec![node("root/0", "Save", bounds(0, 0, 100, 50))],
+        );
+        assign_references(&mut observation);
+        let reference = observation.actionable[0]
+            .reference
+            .clone()
+            .expect("reference");
+        let found = find_reference(&observation, &reference).expect("found");
+        assert_eq!(found.path, "root/0");
+        assert_eq!(found.text.as_deref(), Some("Save"));
     }
 }

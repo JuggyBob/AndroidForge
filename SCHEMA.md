@@ -36,6 +36,9 @@ The schema files:
 | `apk-resolution.schema.json` | `apk resolve` selection rules, candidates and rejection reasons. |
 | `apk-diff.schema.json` | Installed/candidate field comparison, overall equivalence and skip safety. |
 | `bundle.schema.json` | Diagnostic bundle manifest, checksummed payloads and exclusions. |
+| `health.schema.json` | Read-only device health report and unknown reasons. |
+| `matrix.schema.json` | Sequential matrix plan/results, per-target health and cleanup. |
+| `wireless.schema.json` | Wireless pair/connect/disconnect results (never pairing codes). |
 
 Every schema is versioned with `schema_version = 1`, `adapter_version = 1`, fixture `version = 1`, and conformance `version = 1`. Unknown adapter fields are rejected deliberately.
 
@@ -47,10 +50,12 @@ The new schemas cover:
 - `context.schema.json` - `project`, `environment`, `session`, `device`, `app`, `screen`, `last_run`,
   `next_actions` and `warnings`. Omitted sections are not present; requested-but-unavailable sections
   have `available: false` and a reason.
-- `observation.schema.json` - observation `token` (and backward-compatible `id`), session/device,
+- `observation.schema.json` - observation `token` (and backward-compatible `id`), session/device, stable
+  `ref`/`role` node handles,
   freshness, display, foreground, focus, interactive `actionable` nodes, non-interactive `context`
   text, scrollables, visible text, per-node `clickable`/`enabled`/`editable`, hierarchy metadata and raw
-  XML path. `nodes` appears only with `--full`. `actionable_total`/`actionable_truncated` and
+  XML path. `nodes` appears only with `--full`. Refs are valid only with the same observation token,
+  session and device; they are never permanent node identities. `actionable_total`/`actionable_truncated` and
   `context_total`/`context_truncated` make the compact caps explicit.
 - `ui-diff.schema.json` - from/to tokens plus compact added, removed, modified, focus, package and
   activity changes, totals and truncation flag. `--full` raises the list cap from 12 to 100. Pure layout

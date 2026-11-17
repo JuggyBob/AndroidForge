@@ -1,6 +1,13 @@
+use std::future::Future;
+use std::time::Instant;
+
 use androidforge_core::error::{ForgeError, Result};
 use androidforge_core::model::Device;
 use androidforge_core::output::CommandSuccess;
+use androidforge_core::retry::{
+    MAX_TOTAL_RETRY_WINDOW, ReadOnlyOperation, RetryAttempt, RetryReport, delay_for, is_retryable,
+    validate_retry_request,
+};
 use androidforge_core::session::Session;
 use androidforge_emulator::DevicePrepareOptions;
 use androidforge_ui::Selector;
@@ -13,6 +20,87 @@ pub fn success(
     human: impl Into<String>,
 ) -> CommandSuccess {
     CommandSuccess::new(command, result, human)
+}
+
+pub async fn retry_read_only<F, Fut, T>(
+    operation: ReadOnlyOperation,
+    retries: u32,
+    mut action: F,
+) -> Result<(T, RetryReport)>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    validate_retry_request(operation, retries)?;
+    let started = Instant::now();
+    let mut attempts = Vec::new();
+    let mut attempt_number = 1u32;
+    loop {
+        let attempt_started = Instant::now();
+        match action().await {
+            Ok(value) => {
+                attempts.push(RetryAttempt {
+                    attempt: attempt_number,
+                    outcome: "success".to_string(),
+                    code: None,
+                    message: None,
+                    retryable: false,
+                    delay_before_next_ms: 0,
+                    elapsed_ms: attempt_started.elapsed().as_millis() as u64,
+                });
+                return Ok((
+                    value,
+                    RetryReport {
+                        operation: operation.as_str().to_string(),
+                        requested_retries: retries,
+                        max_attempts: retries + 1,
+                        retries_used: attempt_number - 1,
+                        attempts,
+                        total_elapsed_ms: started.elapsed().as_millis() as u64,
+                        final_result: "success".to_string(),
+                    },
+                ));
+            }
+            Err(error) => {
+                let retryable = is_retryable(&error);
+                let delay = delay_for(attempt_number - 1);
+                let can_retry = retryable
+                    && attempt_number <= retries
+                    && started.elapsed() + delay <= MAX_TOTAL_RETRY_WINDOW;
+                attempts.push(RetryAttempt {
+                    attempt: attempt_number,
+                    outcome: "error".to_string(),
+                    code: Some(error.body().code.as_str().to_string()),
+                    message: Some(error.message().to_string()),
+                    retryable,
+                    delay_before_next_ms: if can_retry {
+                        delay.as_millis() as u64
+                    } else {
+                        0
+                    },
+                    elapsed_ms: attempt_started.elapsed().as_millis() as u64,
+                });
+                if can_retry {
+                    tokio::time::sleep(delay).await;
+                    attempt_number += 1;
+                    continue;
+                }
+                let report = RetryReport {
+                    operation: operation.as_str().to_string(),
+                    requested_retries: retries,
+                    max_attempts: retries + 1,
+                    retries_used: attempt_number - 1,
+                    attempts,
+                    total_elapsed_ms: started.elapsed().as_millis() as u64,
+                    final_result: "error".to_string(),
+                };
+                return Err(error.with_context(
+                    "retry",
+                    serde_json::to_value(&report).unwrap_or(serde_json::Value::Null),
+                ));
+            }
+        }
+    }
 }
 
 pub fn require_selector(args: &SelectorArgs) -> Result<Selector> {
@@ -99,4 +187,70 @@ pub fn default_owner() -> String {
                 .filter(|value| !value.trim().is_empty())
         })
         .unwrap_or_else(|| "androidforge".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[tokio::test]
+    async fn retries_transient_read_failures_and_reports_attempts() {
+        let attempts = AtomicU32::new(0);
+        let (value, report) = retry_read_only(ReadOnlyOperation::UiObserve, 2, || {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if attempt < 2 {
+                    Err(ForgeError::new(
+                        androidforge_core::error::ErrorCode::DeviceDisconnected,
+                        "device disconnected while reading",
+                    ))
+                } else {
+                    Ok("observed")
+                }
+            }
+        })
+        .await
+        .expect("retry succeeds");
+        assert_eq!(value, "observed");
+        assert_eq!(report.attempts.len(), 3);
+        assert_eq!(report.retries_used, 2);
+        assert_eq!(report.final_result, "success");
+        assert!(report.attempts[0].retryable);
+        assert!(report.attempts[0].delay_before_next_ms > 0);
+    }
+
+    #[tokio::test]
+    async fn non_retryable_errors_are_not_repeated() {
+        let attempts = AtomicU32::new(0);
+        let error = retry_read_only::<_, _, ()>(ReadOnlyOperation::UiObserve, 3, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async {
+                Err(ForgeError::new(
+                    androidforge_core::error::ErrorCode::SelectorNotFound,
+                    "no element matched",
+                ))
+            }
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            error.code(),
+            androidforge_core::error::ErrorCode::SelectorNotFound
+        );
+        assert!(error.body().context.contains_key("retry"));
+    }
+
+    #[tokio::test]
+    async fn excessive_retry_requests_are_rejected() {
+        let error =
+            retry_read_only::<_, _, ()>(ReadOnlyOperation::UiObserve, 99, || async { Ok(()) })
+                .await
+                .unwrap_err();
+        assert_eq!(
+            error.code(),
+            androidforge_core::error::ErrorCode::InvalidArgument
+        );
+    }
 }

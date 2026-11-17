@@ -248,6 +248,30 @@ pub struct SdkSection {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct HealthSection {
+    /// Warn when the battery is below this percentage and not charging.
+    pub battery_warn_percent: u32,
+    /// Warn when /data has less free space than this.
+    pub storage_warn_bytes: u64,
+    /// Warn when Android's thermal status code reaches this level.
+    pub thermal_warn_code: i32,
+    /// Collect health before each matrix target unless explicitly disabled.
+    pub matrix_preflight: bool,
+}
+
+impl Default for HealthSection {
+    fn default() -> Self {
+        Self {
+            battery_warn_percent: 15,
+            storage_warn_bytes: 512 * 1024 * 1024,
+            thermal_warn_code: 3,
+            matrix_preflight: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RedactionSection {
     pub enabled: bool,
     pub patterns: Vec<String>,
@@ -302,6 +326,7 @@ pub struct ForgeConfigFile {
     pub ui: UiSection,
     pub maestro: MaestroSection,
     pub diagnostics: DiagnosticsSection,
+    pub health: HealthSection,
     pub timeouts: TimeoutsSection,
     pub sdk: SdkSection,
     pub redaction: RedactionSection,
@@ -320,6 +345,7 @@ impl Default for ForgeConfigFile {
             ui: UiSection::default(),
             maestro: MaestroSection::default(),
             diagnostics: DiagnosticsSection::default(),
+            health: HealthSection::default(),
             timeouts: TimeoutsSection::default(),
             sdk: SdkSection::default(),
             redaction: RedactionSection::default(),
@@ -589,6 +615,20 @@ impl ForgeConfig {
                 Severity::Error,
                 "build.max_candidates",
                 "max_candidates must be greater than zero".to_string(),
+            ));
+        }
+        if file.health.battery_warn_percent > 100 {
+            issues.push(issue(
+                Severity::Error,
+                "health.battery_warn_percent",
+                "battery_warn_percent must be between 0 and 100".to_string(),
+            ));
+        }
+        if !(0..=6).contains(&file.health.thermal_warn_code) {
+            issues.push(issue(
+                Severity::Error,
+                "health.thermal_warn_code",
+                "thermal_warn_code must be an Android thermal status between 0 and 6".to_string(),
             ));
         }
         if !matches!(file.ui.backend.as_str(), "uiautomator") {

@@ -98,6 +98,16 @@
       },
       "additionalProperties": false
     },
+    "health": {
+      "type": "object",
+      "properties": {
+        "battery_warn_percent": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "storage_warn_bytes": { "type": "integer", "minimum": 0 },
+        "thermal_warn_code": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "matrix_preflight": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "timeouts": {
       "type": "object",
       "properties": {

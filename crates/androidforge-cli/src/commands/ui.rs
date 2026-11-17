@@ -7,8 +7,8 @@ use androidforge_ui::{Selector, UiHierarchy};
 use std::time::Instant;
 
 use crate::cli::{
-    PostconditionArgs, UiCommand, UiDumpArgs, UiInspectArgs, UiKeyEventArgs, UiScrollArgs,
-    UiScrollToArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
+    PostconditionArgs, SelectorArgs, UiCommand, UiDumpArgs, UiInspectArgs, UiKeyEventArgs,
+    UiScrollArgs, UiScrollToArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
 };
 use crate::commands::common::{require_selector, success};
 use crate::commands::observation;
@@ -64,6 +64,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             observation::diff_command(ctx, session, &device, args).await
         }
         UiCommand::Find(args) => {
+            reject_ref_for("ui find", &args.selector)?;
             let selector = require_selector(&args.selector)?;
             execute_in_run!(
                 ctx,
@@ -113,6 +114,165 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             .await
         }
         UiCommand::Tap(args) => {
+            validate_reference_args(&args.selector)?;
+            if args.selector.has_ref() {
+                if args.x.is_some() || args.y.is_some() {
+                    return Err(ForgeError::invalid_argument(
+                        "--ref cannot be combined with --x/--y",
+                    )
+                    .with_suggestion("Use the referenced element's own bounds."));
+                }
+                let reference = args.selector.reference.clone().unwrap_or_default();
+                let token = args.selector.expect_token.clone().unwrap_or_default();
+                let receipt_requested = args.receipt || args.receipt_full;
+                let full = args.receipt_full;
+                return execute_in_run!(
+                    ctx,
+                    "ui.tap",
+                    Some("ui tap referenced element"),
+                    session.as_ref(),
+                    Some(&device),
+                    true,
+                    |_run| async {
+                        let Some(session) = session.as_ref() else {
+                            return Err(ForgeError::new(
+                                androidforge_core::error::ErrorCode::SessionNotFound,
+                                "element references require a session",
+                            )
+                            .with_suggestion(
+                                "Pass --session <ID> or run `androidforge session ensure`.",
+                            ));
+                        };
+                        let resolved = observation::resolve_element_reference(
+                            ctx, session, &device, &reference, &token,
+                        )
+                        .await?;
+                        let node_value = serde_json::to_value(&resolved.node)?;
+                        let human_label = resolved
+                            .node
+                            .text
+                            .as_deref()
+                            .or(resolved.node.content_desc.as_deref())
+                            .or(resolved.node.resource_id.as_deref())
+                            .unwrap_or("referenced element")
+                            .to_string();
+                        let ui = ctx.ui_manager()?;
+                        if receipt_requested {
+                            let mut builder = receipt::ReceiptBuilder::new(
+                                "tap",
+                                Some(serde_json::json!({
+                                    "ref": reference,
+                                    "expect_token": token,
+                                })),
+                                session,
+                                &device,
+                            );
+                            builder.set_reference(receipt::ReceiptElementReference {
+                                reference: reference.clone(),
+                                expected_token: token.clone(),
+                                resolved_node: Some(node_value.clone()),
+                                validation: "validated".to_string(),
+                            });
+                            let before = match observation::collect_observation(
+                                ctx, session, &device, None, false,
+                            )
+                            .await
+                            {
+                                Ok(observation) => observation,
+                                Err(error) => {
+                                    let receipt = builder.finish(
+                                        receipt::DispatchState::NotDispatched,
+                                        true,
+                                        Some(node_value.clone()),
+                                        None,
+                                        None,
+                                        None,
+                                        Some(error.message().to_string()),
+                                        full,
+                                    );
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "before observation failed; the referenced action was not dispatched",
+                                    ));
+                                }
+                            };
+                            builder.set_before(before);
+                            let result = match ui.tap_expected(&serial, &resolved.expectation).await
+                            {
+                                Ok(result) => result,
+                                Err(error) => {
+                                    let receipt = dispatch_error_receipt(
+                                        builder, &error, true, None, full,
+                                    )?;
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "referenced action validation or dispatch failed",
+                                    ));
+                                }
+                            };
+                            let action = serde_json::to_value(&result)?;
+                            let (value, suffix) = complete_receipt(
+                                ctx,
+                                session,
+                                &device,
+                                builder,
+                                true,
+                                true,
+                                Some(node_value),
+                                action,
+                                None,
+                                &args.postcondition,
+                                full,
+                            )
+                            .await?;
+                            return Ok(success(
+                                "ui.tap",
+                                value,
+                                format!(
+                                    "Tapped referenced element {human_label} at ({}, {}){suffix}\n",
+                                    result.tap_x, result.tap_y
+                                ),
+                            )
+                            .with_session(session.id.clone())
+                            .with_device(serial.clone()));
+                        }
+                        let result = ui.tap_expected(&serial, &resolved.expectation).await?;
+                        let mut action = serde_json::to_value(&result)?;
+                        if let Some(object) = action.as_object_mut() {
+                            object.insert(
+                                "element_ref".to_string(),
+                                serde_json::Value::String(reference.clone()),
+                            );
+                            object.insert(
+                                "observation_token".to_string(),
+                                serde_json::Value::String(token.clone()),
+                            );
+                        }
+                        let (value, suffix) = apply_postconditions(
+                            ctx,
+                            Some(session),
+                            &device,
+                            None,
+                            &args.postcondition,
+                            action,
+                        )
+                        .await?;
+                        Ok(success(
+                            "ui.tap",
+                            value,
+                            format!(
+                                "Tapped referenced element {human_label} at ({}, {}){suffix}\n",
+                                result.tap_x, result.tap_y
+                            ),
+                        )
+                        .with_session(session.id.clone())
+                        .with_device(serial.clone()))
+                    },
+                )
+                .await;
+            }
             if args.x.is_some() || args.y.is_some() {
                 let (x, y) = match (args.x, args.y) {
                     (Some(x), Some(y)) => (x, y),
@@ -395,6 +555,160 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             }
         }
         UiCommand::LongPress(args) => {
+            validate_reference_args(&args.selector)?;
+            if args.selector.has_ref() {
+                if args.x.is_some() || args.y.is_some() {
+                    return Err(ForgeError::invalid_argument(
+                        "--ref cannot be combined with --x/--y",
+                    ));
+                }
+                let reference = args.selector.reference.clone().unwrap_or_default();
+                let token = args.selector.expect_token.clone().unwrap_or_default();
+                let receipt_requested = args.receipt || args.receipt_full;
+                let full = args.receipt_full;
+                return execute_in_run!(
+                    ctx,
+                    "ui.long-press",
+                    Some("ui long press referenced element"),
+                    session.as_ref(),
+                    Some(&device),
+                    true,
+                    |_run| async {
+                        let Some(session) = session.as_ref() else {
+                            return Err(ForgeError::new(
+                                androidforge_core::error::ErrorCode::SessionNotFound,
+                                "element references require a session",
+                            )
+                            .with_suggestion(
+                                "Pass --session <ID> or run `androidforge session ensure`.",
+                            ));
+                        };
+                        let resolved = observation::resolve_element_reference(
+                            ctx, session, &device, &reference, &token,
+                        )
+                        .await?;
+                        let node_value = serde_json::to_value(&resolved.node)?;
+                        let ui = ctx.ui_manager()?;
+                        if receipt_requested {
+                            let mut builder = receipt::ReceiptBuilder::new(
+                                "long_press",
+                                Some(serde_json::json!({
+                                    "ref": reference,
+                                    "expect_token": token,
+                                })),
+                                session,
+                                &device,
+                            );
+                            builder.set_reference(receipt::ReceiptElementReference {
+                                reference: reference.clone(),
+                                expected_token: token.clone(),
+                                resolved_node: Some(node_value.clone()),
+                                validation: "validated".to_string(),
+                            });
+                            let before = match observation::collect_observation(
+                                ctx, session, &device, None, false,
+                            )
+                            .await
+                            {
+                                Ok(observation) => observation,
+                                Err(error) => {
+                                    let receipt = builder.finish(
+                                        receipt::DispatchState::NotDispatched,
+                                        true,
+                                        Some(node_value.clone()),
+                                        None,
+                                        None,
+                                        None,
+                                        Some(error.message().to_string()),
+                                        full,
+                                    );
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "before observation failed; the referenced action was not dispatched",
+                                    ));
+                                }
+                            };
+                            builder.set_before(before);
+                            let result = match ui
+                                .long_press_expected(&serial, &resolved.expectation)
+                                .await
+                            {
+                                Ok(result) => result,
+                                Err(error) => {
+                                    let receipt = dispatch_error_receipt(
+                                        builder, &error, true, None, full,
+                                    )?;
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "referenced action validation or dispatch failed",
+                                    ));
+                                }
+                            };
+                            let action = serde_json::to_value(&result)?;
+                            let (value, suffix) = complete_receipt(
+                                ctx,
+                                session,
+                                &device,
+                                builder,
+                                true,
+                                true,
+                                Some(node_value),
+                                action,
+                                None,
+                                &args.postcondition,
+                                full,
+                            )
+                            .await?;
+                            return Ok(success(
+                                "ui.long-press",
+                                value,
+                                format!(
+                                    "Long-pressed referenced element at ({}, {}).{suffix}\n",
+                                    result.tap_x, result.tap_y
+                                ),
+                            )
+                            .with_session(session.id.clone())
+                            .with_device(serial.clone()));
+                        }
+                        let result = ui
+                            .long_press_expected(&serial, &resolved.expectation)
+                            .await?;
+                        let mut action = serde_json::to_value(&result)?;
+                        if let Some(object) = action.as_object_mut() {
+                            object.insert(
+                                "element_ref".to_string(),
+                                serde_json::Value::String(reference.clone()),
+                            );
+                            object.insert(
+                                "observation_token".to_string(),
+                                serde_json::Value::String(token.clone()),
+                            );
+                        }
+                        let (value, suffix) = apply_postconditions(
+                            ctx,
+                            Some(session),
+                            &device,
+                            None,
+                            &args.postcondition,
+                            action,
+                        )
+                        .await?;
+                        Ok(success(
+                            "ui.long-press",
+                            value,
+                            format!(
+                                "Long-pressed referenced element at ({}, {}).{suffix}\n",
+                                result.tap_x, result.tap_y
+                            ),
+                        )
+                        .with_session(session.id.clone())
+                        .with_device(serial.clone()))
+                    },
+                )
+                .await;
+            }
             let selector = require_selector(&args.selector)?;
             let receipt_requested = args.receipt || args.receipt_full;
             let full = args.receipt_full;
@@ -520,6 +834,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
         }
         UiCommand::Text(args) => text(ctx, session.as_ref(), &device, args).await,
         UiCommand::Clear(args) => {
+            reject_ref_for("ui clear", &args.selector)?;
             let selector = if args.selector.has_selector() {
                 Some(require_selector(&args.selector)?)
             } else {
@@ -778,6 +1093,7 @@ async fn text(
     device: &androidforge_core::model::Device,
     args: &UiTextArgs,
 ) -> Result<CommandSuccess> {
+    reject_ref_for("ui text", &args.selector)?;
     let selector = if args.selector.has_selector() {
         Some(require_selector(&args.selector)?)
     } else {
@@ -1023,6 +1339,7 @@ async fn scroll(
     device: &androidforge_core::model::Device,
     args: &UiScrollArgs,
 ) -> Result<CommandSuccess> {
+    reject_ref_for("ui scroll", &args.selector)?;
     let selector = if args.selector.has_selector() {
         Some(require_selector(&args.selector)?)
     } else {
@@ -1157,6 +1474,7 @@ async fn scroll_to(
     device: &androidforge_core::model::Device,
     args: &UiScrollToArgs,
 ) -> Result<CommandSuccess> {
+    reject_ref_for("ui scroll-to", &args.selector)?;
     let selector = require_selector(&args.selector)?;
     let serial = device.serial.clone();
     let timeout = ctx.parse_timeout(
@@ -1259,6 +1577,58 @@ async fn keyevent(
         },
     )
     .await
+}
+
+fn validate_reference_args(selector: &SelectorArgs) -> Result<()> {
+    if selector.reference.is_some() {
+        if selector.expect_token.is_none() {
+            return Err(ForgeError::invalid_argument(
+                "--ref requires --expect-token so the reference cannot be reused outside its observation",
+            )
+            .with_suggestion(
+                "Pass the observation token returned by `ui observe`: --ref el-... --expect-token obs-...",
+            ));
+        }
+        if selector.has_non_ref_selector() {
+            return Err(ForgeError::invalid_argument(
+                "--ref cannot be combined with text, resource-id, class, index or other selector filters",
+            )
+            .with_suggestion(
+                "Use either a semantic selector or a stable ref; stale refs never fall back to text.",
+            ));
+        }
+    } else if selector.expect_token.is_some() {
+        return Err(ForgeError::invalid_argument(
+            "--expect-token is only valid together with --ref",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_ref_for(command: &str, selector: &SelectorArgs) -> Result<()> {
+    validate_reference_args(selector)?;
+    if selector.has_ref() {
+        return Err(ForgeError::invalid_argument(format!(
+            "--ref is not supported for {command}"
+        ))
+        .with_suggestion(
+            "Use `ui tap --ref ...` or `ui long-press --ref ...`; for other actions observe again and use a selector.",
+        ));
+    }
+    Ok(())
+}
+
+fn error_was_not_dispatched(error: &ForgeError) -> bool {
+    matches!(
+        error.code(),
+        androidforge_core::error::ErrorCode::SelectorNotFound
+            | androidforge_core::error::ErrorCode::SelectorAmbiguous
+            | androidforge_core::error::ErrorCode::ElementRefUnknown
+            | androidforge_core::error::ErrorCode::ElementRefStale
+            | androidforge_core::error::ErrorCode::ElementIdentityChanged
+            | androidforge_core::error::ErrorCode::ElementNotActionable
+            | androidforge_core::error::ErrorCode::ElementDeviceMismatch
+    )
 }
 
 fn session_id(session: Option<&Session>) -> Option<String> {
@@ -1749,11 +2119,7 @@ fn dispatch_error_receipt(
     after: Option<observation::Observation>,
     full: bool,
 ) -> Result<receipt::ActionReceipt> {
-    let dispatch_state = if matches!(
-        error.code(),
-        androidforge_core::error::ErrorCode::SelectorNotFound
-            | androidforge_core::error::ErrorCode::SelectorAmbiguous
-    ) {
+    let dispatch_state = if error_was_not_dispatched(error) {
         receipt::DispatchState::NotDispatched
     } else {
         receipt::DispatchState::Unknown

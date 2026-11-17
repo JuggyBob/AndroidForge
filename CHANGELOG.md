@@ -8,6 +8,46 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.7.0] - 2026-11-17
+
+Seventh alpha, extending AndroidForge from reliable single-device orchestration to controlled
+multi-device validation, stronger device interaction and safer transient recovery.
+
+### Added
+
+- `agent matrix` for sequential execution across multiple independent AVDs or serials, with a dry-run
+  plan, per-target sessions and artifacts, duplicate/ownership checks, health preflight, fail-fast,
+  cleanup reporting and aggregate `passed`/`failed`/`partial` status. Parallel mode is explicitly
+  rejected until independently validated.
+- Stable semantic element references: deterministic `ref` values on observed actionable/context nodes,
+  `ui tap --ref ... --expect-token ...`, `ui long-press` reference support, identity re-validation
+  immediately before dispatch and explicit stale/unknown/wrong-device/not-actionable errors. No
+  text/coordinate fallback.
+- Wireless ADB: `devices pair` (stdin-safe pairing code), `devices connect`, `devices disconnect` and
+  endpoint validation. Pairing codes are never stored, logged or returned.
+- `devices health`: read-only battery, thermal, storage, memory, network, screen, uptime, Android/API
+  and ADB state, with explicit unknown reasons, raw evidence and configurable warning thresholds.
+- Bounded read-only retries: `--retries 0..5` on `ui observe`, fresh `ui diff`, logcat `peek/tail`, with
+  transient-error classification, exponential backoff, a 20-second total window and per-attempt
+  reporting. State-changing operations never retry.
+- Desktop Matrix page, per-device health and wireless controls, reference-copy actions in Context,
+  action receipt details in Triage, and stdin-backed pairing-code handling.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.7.0`.
+- `observation` nodes now include `ref`/`role`; old consumers that ignore unknown fields remain compatible.
+- Matrix execution calls the existing `agent test` pipeline as a child process, preserving one
+  backend/JSON contract.
+
+### Safety
+
+- Matrix never steals an occupied device and never releases a pre-existing session; it releases only
+  sessions created by that matrix with the matrix owner. Emulators are not stopped.
+- Element references fail closed on a changed path, identity, visibility or enabled state.
+- Wireless pairing never enables networking or silently falls back to insecure `adb tcpip`.
+- Retries are opt-in, bounded and restricted to a central allow-list of read-only operations.
+
 ## [0.6.0] - 2026-11-17
 
 Sixth alpha, focused on returning more trustworthy evidence per agent command and remembering failures
@@ -355,7 +395,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.0
 [0.6.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.6.0
 [0.5.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.5.0
 [0.4.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.4.0

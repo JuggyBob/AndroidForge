@@ -939,3 +939,112 @@ fn adapter_accepts_build_variant_configuration_and_rejects_escaping_patterns() {
             .any(|issue| issue["message"].as_str().unwrap().contains("project root"))
     );
 }
+
+#[test]
+fn v07_commands_expose_references_matrix_health_and_wireless_options() {
+    binary()
+        .args(["ui", "tap", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--ref"))
+        .stdout(predicate::str::contains("--expect-token"));
+    binary()
+        .args(["ui", "observe", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--retries"));
+    binary()
+        .args(["diagnostics", "logcat", "peek", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--retries"));
+    binary()
+        .args(["agent", "matrix", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--fail-fast"))
+        .stdout(predicate::str::contains("--parallel"));
+    binary()
+        .args(["devices", "pair", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--code-stdin"));
+    binary()
+        .args(["devices", "health", "--help"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn v07_safety_options_are_explicit_without_a_device() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("V07 Safety");
+    project_with_defaults(&root);
+    let parallel = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "agent",
+            "matrix",
+            "--flow",
+            "conformance",
+            "--parallel",
+            "2",
+            "--dry-run",
+            "--json",
+        ])
+        .output()
+        .expect("matrix parallel");
+    assert_eq!(parallel.status.code(), Some(3));
+    let json: Value = serde_json::from_slice(&parallel.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "E_UNSUPPORTED_OPERATION");
+
+    let no_targets = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "agent",
+            "matrix",
+            "--flow",
+            "conformance",
+            "--dry-run",
+            "--json",
+        ])
+        .output()
+        .expect("matrix targets");
+    assert_eq!(no_targets.status.code(), Some(2));
+    let json: Value = serde_json::from_slice(&no_targets.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "E_MATRIX_TARGET_INVALID");
+
+    let bad_endpoint = binary()
+        .args([
+            "devices",
+            "pair",
+            "0.0.0.0:5555",
+            "--code",
+            "123456",
+            "--json",
+        ])
+        .output()
+        .expect("wireless endpoint");
+    assert_eq!(bad_endpoint.status.code(), Some(2));
+    let json: Value = serde_json::from_slice(&bad_endpoint.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "E_WIRELESS_ENDPOINT_INVALID");
+}
+
+#[test]
+fn retry_request_is_rejected_on_a_state_changing_command() {
+    let output = binary()
+        .args(["ui", "tap", "--retries", "2", "--json"])
+        .output()
+        .expect("retry rejection");
+    assert_eq!(output.status.code(), Some(2));
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "E_INVALID_COMMAND");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unexpected argument")
+    );
+}

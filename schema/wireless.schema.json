@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/wireless.schema.json",
+  "title": "AndroidForge wireless ADB result",
+  "type": "object",
+  "required": ["endpoint", "action", "success", "duration_ms"],
+  "properties": {
+    "endpoint": { "type": "string", "pattern": "^[^\\s]+:[0-9]{1,5}$" },
+    "action": { "enum": ["pair", "connect", "disconnect"] },
+    "success": { "type": "boolean" },
+    "message": { "type": ["string", "null"] },
+    "serial": { "type": ["string", "null"] },
+    "already_connected": { "type": "boolean" },
+    "duration_ms": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

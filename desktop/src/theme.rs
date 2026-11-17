@@ -292,6 +292,7 @@ pub enum NavIcon {
     Setup,
     Overview,
     Context,
+    Matrix,
     Devices,
     Sessions,
     Ownership,
@@ -367,6 +368,20 @@ pub fn paint_nav_icon(painter: &egui::Painter, rect: egui::Rect, icon: NavIcon, 
                     ],
                     faint,
                 );
+            }
+        }
+        NavIcon::Matrix => {
+            for (x, y) in [
+                (0.0, 0.0),
+                (r.width() / 2.0 + 1.0, 0.0),
+                (0.0, r.height() / 2.0 + 1.0),
+                (r.width() / 2.0 + 1.0, r.height() / 2.0 + 1.0),
+            ] {
+                let rect = egui::Rect::from_min_size(
+                    r.min + egui::vec2(x, y),
+                    egui::vec2(r.width() / 2.0 - 1.0, r.height() / 2.0 - 1.0),
+                );
+                painter.rect_stroke(rect, 1.5, faint, StrokeKind::Inside);
             }
         }
         NavIcon::Ownership => {

@@ -4,6 +4,7 @@ pub mod devices;
 pub mod inspector;
 pub mod logcat;
 pub mod maintenance;
+pub mod matrix;
 pub mod operations;
 pub mod overview;
 pub mod ownership;
@@ -23,6 +24,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
         Page::Setup => setup::show(app, ui),
         Page::Overview => overview::show(app, ui),
         Page::Context => context::show(app, ui),
+        Page::Matrix => matrix::show(app, ui),
         Page::Devices => devices::show(app, ui),
         Page::Sessions => sessions::show(app, ui),
         Page::Ownership => ownership::show(app, ui),

@@ -29,7 +29,7 @@ cargo build --workspace --release
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
-## 2.1 Agent loop commands (v0.6.0)
+## 2.1 Agent loop commands (v0.7.0)
 
 These commands reduce repeated discovery and inspection. They keep the same JSON envelope, exit codes
 and evidence rules as the rest of the CLI.
@@ -137,12 +137,75 @@ default_variant = "debug"
 [build.variants]
 debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
+
+[health]
+battery_warn_percent = 15
+storage_warn_bytes = 536870912
+thermal_warn_code = 3
+matrix_preflight = true
 ```
 
 Resolution never runs Gradle. It selects the newest valid APK and reports the matched rule, mtime,
 SHA-256 and certificate. Equal timestamps with different content are an ambiguity error. An explicit
 `--apk` wins over `--variant`. `--only-if-changed` skips only when package, version code, base APK hash
 and split shape prove equivalence; unknown identity installs rather than silently skipping.
+
+### Stable element references
+
+```powershell
+androidforge ui observe --session <ID> --json
+androidforge ui tap --session <ID> --ref el-... --expect-token obs-... --json
+androidforge ui long-press --session <ID> --ref el-... --expect-token obs-... --receipt --json
+```
+
+A `ref` is an opaque handle scoped to one observation token, session and device. AndroidForge re-reads
+the hierarchy and validates the node identity immediately before dispatch. Expired tokens, removed or
+changed nodes, wrong devices and non-actionable nodes are explicit errors; there is no text or
+coordinate fallback. Re-observe after navigation.
+
+### Sequential device matrix
+
+```powershell
+androidforge agent matrix --project . --avd AVD_1 --avd AVD_2 --flow conformance --json
+androidforge agent matrix --project . --serial emulator-5554 --serial emulator-5556 --flow conformance --json
+androidforge agent matrix --project . --avd AVD_1 --avd AVD_2 --flow conformance --dry-run --json
+```
+
+Targets are validated up front and duplicates are rejected. Execution is sequential; each target gets a
+separate owned session and runs the normal `agent test` pipeline. Aggregate status is `passed`, `failed`
+or `partial`; per-target API/model, health, session, run and cleanup are recorded. `--fail-fast` skips
+remaining targets. Only sessions created by the matrix with the matrix owner are released; emulators and
+pre-existing sessions are untouched. `--parallel` >1 is deliberately unsupported until validated.
+
+### Wireless ADB and health
+
+```powershell
+# Prefer stdin so the pairing code is not in shell history.
+123456 | androidforge devices pair 192.168.1.20:37123 --code-stdin --json
+androidforge devices connect 192.168.1.20:37521 --json
+androidforge devices disconnect 192.168.1.20:37521 --json
+androidforge devices health --session <ID> --json
+```
+
+Pairing and connecting use different endpoints/ports. Pairing codes are six digits, are never stored,
+logged or returned, and are not included in bundles. AndroidForge never enables wireless debugging or
+legacy `adb tcpip` by itself. Health is read-only and reports battery, thermal, storage, memory, network,
+screen, uptime, Android/API and ADB state; unavailable values include a reason. Thresholds are configured
+under `[health]` and `--no-evidence` omits raw command excerpts.
+
+### Read-only retries
+
+```powershell
+androidforge ui observe --session <ID> --retries 2 --json
+androidforge ui diff --session <ID> --from obs-... --retries 2 --json
+androidforge diagnostics logcat peek --session <ID> --retries 3 --json
+androidforge diagnostics logcat tail --session <ID> --retries 2 --json
+```
+
+Retries are opt-in, bounded to 0-5 and limited to read-only operations. Transient device/UIAutomator/
+timeout errors retry with bounded exponential backoff; selector/configuration/permission/install errors do
+not. The total retry window is 20 seconds, and every attempt is reported. Actions that change device or
+application state are never retried.
 
 ### Failure explanations
 
@@ -212,10 +275,15 @@ Overview error banner and in Settings.
 
 - **Overview** — environment status, devices/sessions/runs counters, recent runs and CLI resolution.
 - **Context** — one read-only CLI `context` snapshot: project, active session/owner, device, installed
-  app, current screen, last run, warnings and copyable next commands. Refresh is explicit and the
+  app, current screen, last run, warnings and copyable next commands. Observed nodes expose stable
+  `ref` values with copyable `ui tap --ref ... --expect-token ...` commands. Refresh is explicit and the
   snapshot age is shown.
+- **Matrix** — run a sequential conformance matrix against one or more AVDs entered on separate lines,
+  with owner, install, fail-fast and result/health/cleanup display. Parallel mode is not offered.
 - **Devices** — selectable device table with serial, model, Android version, state, battery and owner;
-  details include boot state, AVD, port, architecture and resolution.
+  details include boot state, AVD, port, architecture, resolution, read-only health and wireless
+  pair/connect/disconnect controls. Pairing codes are password fields sent through stdin and cleared
+  after use.
 - **Sessions** - selectable session table with owner, heartbeat, state, advisory lease and project
   binding; details show prepared settings and expose `Release`, `Stop`, `Restart`, `Use as target` and
   `Install APK`. Released/abandoned tombstones are read-only.
@@ -225,7 +293,8 @@ Overview error banner and in Settings.
 - **Runs** - report-backed runs, project hooks and `Run project flow`. Selecting `Open` or a row shows
   build identity, steps, failure details and evidence.
 - **Triage** - failure metadata, evidence, flaky analysis, deterministic explanation with recurrence
-  memory and stored occurrences, plus a diagnostic-bundle inclusion preview and ZIP creation. Category,
+  memory and stored occurrences, action receipt details (effect, tokens, semantic changes, postcondition,
+  reference validation), plus a diagnostic-bundle inclusion preview and ZIP creation. Category,
   confidence, summary, fingerprint, curated evidence and copyable next-action commands are shown. The
   commands are never executed by the desktop.
 - **Setup** - the environment section builds the same read-only `doctor fix --plan` result as the CLI,
@@ -311,6 +380,12 @@ default_variant = "debug"
 [build.variants]
 debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
+
+[health]
+battery_warn_percent = 15
+storage_warn_bytes = 536870912
+thermal_warn_code = 3
+matrix_preflight = true
 ```
 
 The adapter is optional for `doctor`, `devices`, `avd` and raw ADB, but required for package fallbacks, fixtures, hooks and conformance. See [PROJECT_ADAPTER.md](PROJECT_ADAPTER.md) for every section.
@@ -414,6 +489,12 @@ default_variant = "debug"
 [build.variants]
 debug = ["app/build/outputs/apk/debug/*.apk"]
 "freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
+
+[health]
+battery_warn_percent = 15
+storage_warn_bytes = 536870912
+thermal_warn_code = 3
+matrix_preflight = true
 ```
 
 The newest valid APK wins. Malformed APKs are rejected with reasons; equal timestamps and different
@@ -754,7 +835,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.6.0` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.7.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents

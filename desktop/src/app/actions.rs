@@ -666,6 +666,119 @@ impl App {
         });
     }
 
+    pub fn refresh_health(&mut self, serial: &str, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.health_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.health_loading = true;
+        self.health_error = None;
+        self.health_serial = Some(serial.to_string());
+        let invocation = self
+            .invocation(["devices", "health", "--serial", serial])
+            .timeout(Duration::from_secs(90));
+        self.spawn_event(ctx, move || {
+            AppEvent::Health(run_result::<serde_json::Value>(&runner, invocation))
+        });
+    }
+
+    pub fn wireless_pair(&mut self, endpoint: String, code: String, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.wireless_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.wireless_loading = true;
+        self.wireless_error = None;
+        let invocation = self
+            .invocation(["devices", "pair", &endpoint, "--code-stdin"])
+            .stdin(format!("{code}\n").into_bytes())
+            .timeout(Duration::from_secs(90));
+        self.spawn_event(ctx, move || {
+            AppEvent::Wireless(run_result::<serde_json::Value>(&runner, invocation))
+        });
+    }
+
+    pub fn wireless_connect(&mut self, endpoint: String, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.wireless_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.wireless_loading = true;
+        self.wireless_error = None;
+        let invocation = self
+            .invocation(["devices", "connect", &endpoint])
+            .timeout(Duration::from_secs(60));
+        self.spawn_event(ctx, move || {
+            AppEvent::Wireless(run_result::<serde_json::Value>(&runner, invocation))
+        });
+    }
+
+    pub fn wireless_disconnect(&mut self, endpoint: String, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.wireless_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.wireless_loading = true;
+        self.wireless_error = None;
+        let invocation = self
+            .invocation(["devices", "disconnect", &endpoint])
+            .timeout(Duration::from_secs(30));
+        self.spawn_event(ctx, move || {
+            AppEvent::Wireless(run_result::<serde_json::Value>(&runner, invocation))
+        });
+    }
+
+    pub fn start_matrix(&mut self, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.matrix.error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        let avds = self
+            .matrix
+            .avds
+            .split([',', '\n', ';'])
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if avds.is_empty() {
+            self.matrix.error =
+                Some("Enter at least one AVD, one per line or comma-separated.".to_string());
+            return;
+        }
+        let mut args = vec!["agent".to_string(), "matrix".to_string()];
+        for avd in &avds {
+            args.extend(["--avd".to_string(), avd.clone()]);
+        }
+        let flow = if self.matrix.flow.trim().is_empty() {
+            "conformance".to_string()
+        } else {
+            self.matrix.flow.trim().to_string()
+        };
+        args.extend(["--flow".to_string(), flow]);
+        let owner = if self.matrix.owner.trim().is_empty() {
+            "desktop-matrix".to_string()
+        } else {
+            self.matrix.owner.trim().to_string()
+        };
+        args.extend(["--owner".to_string(), owner]);
+        if self.matrix.install {
+            args.push("--install".to_string());
+        }
+        if self.matrix.fail_fast {
+            args.push("--fail-fast".to_string());
+        }
+        self.matrix.loading = true;
+        self.matrix.error = None;
+        self.matrix.result = None;
+        let invocation = self
+            .project_invocation(args)
+            .timeout(Duration::from_secs(60 * 60));
+        self.spawn_event(ctx, move || {
+            AppEvent::Matrix(run_result::<serde_json::Value>(&runner, invocation))
+        });
+    }
+
     pub fn refresh_context(&mut self, ctx: &egui::Context) {
         let Some(runner) = self.runner.clone() else {
             self.context.error = Some("CLI is not connected.".to_string());

@@ -274,6 +274,26 @@ impl UiManager {
         self.tap_selection(serial, selection).await
     }
 
+    /// Tap a node from a previous observation after proving that the node still
+    /// has the recorded identity. No selector or coordinate fallback is used.
+    pub async fn tap_expected(
+        &self,
+        serial: &str,
+        expected: &crate::reference::NodeExpectation,
+    ) -> Result<TapResult> {
+        let hierarchy = self.dump(serial).await?;
+        let node_id = expected.find(&hierarchy)?.id;
+        self.tap_selection(
+            serial,
+            Selection {
+                hierarchy,
+                indices: vec![node_id],
+                selected: node_id,
+            },
+        )
+        .await
+    }
+
     pub async fn tap_xy(&self, serial: &str, x: i32, y: i32) -> Result<Option<(u32, u32)>> {
         let display = self.display_size(serial, None).await;
         if let Some((width, height)) = display
@@ -295,12 +315,48 @@ impl UiManager {
 
     pub async fn long_press(&self, serial: &str, selector: &Selector) -> Result<TapResult> {
         let selection = self.select(serial, selector).await?;
+        self.long_press_selection(serial, selection).await
+    }
+
+    /// Long-press a node from a previous observation after identity validation.
+    pub async fn long_press_expected(
+        &self,
+        serial: &str,
+        expected: &crate::reference::NodeExpectation,
+    ) -> Result<TapResult> {
+        let hierarchy = self.dump(serial).await?;
+        let node_id = expected.find(&hierarchy)?.id;
+        self.long_press_selection(
+            serial,
+            Selection {
+                hierarchy,
+                indices: vec![node_id],
+                selected: node_id,
+            },
+        )
+        .await
+    }
+
+    async fn long_press_selection(&self, serial: &str, selection: Selection) -> Result<TapResult> {
         let hierarchy = &selection.hierarchy;
         let node = selection.selected_node();
         let (target, ancestor) = self.tap_target(hierarchy, node)?;
         let (x, y) = target.bounds.center();
         let display = self.display_size(serial, hierarchy.rotation).await;
         self.validate_point(serial, x, y, display)?;
+        if !target.enabled {
+            return Err(ForgeError::new(
+                ErrorCode::UiAssertionFailed,
+                "the matched UI element is disabled",
+            )
+            .with_context(
+                "element",
+                serde_json::to_value(UiMatch::from_node(hierarchy, 0, target))
+                    .unwrap_or(Value::Null),
+            )
+            .with_suggestion("Wait until the control is enabled or inspect the screen state.")
+            .device(serial.to_string()));
+        }
         self.adb
             .input_swipe(serial, x as u32, y as u32, x as u32, y as u32, 900)
             .await?;

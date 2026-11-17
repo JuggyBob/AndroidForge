@@ -24,6 +24,7 @@ pub enum Page {
     Setup,
     Overview,
     Context,
+    Matrix,
     Devices,
     Sessions,
     Ownership,
@@ -36,10 +37,11 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 12] = [
+    pub const ALL: [Page; 13] = [
         Page::Setup,
         Page::Overview,
         Page::Context,
+        Page::Matrix,
         Page::Devices,
         Page::Sessions,
         Page::Ownership,
@@ -56,6 +58,7 @@ impl Page {
             Page::Setup => "Setup",
             Page::Overview => "Overview",
             Page::Context => "Context",
+            Page::Matrix => "Matrix",
             Page::Devices => "Devices",
             Page::Sessions => "Sessions",
             Page::Ownership => "Ownership",
@@ -523,6 +526,18 @@ pub struct ContextState {
 }
 
 #[derive(Default)]
+pub struct MatrixState {
+    pub avds: String,
+    pub flow: String,
+    pub owner: String,
+    pub install: bool,
+    pub fail_fast: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub result: Option<serde_json::Value>,
+}
+
+#[derive(Default)]
 pub struct CompareState {
     pub current: Option<String>,
     pub baseline: Option<String>,
@@ -809,6 +824,9 @@ pub enum AppEvent {
     Comparison(std::result::Result<RunComparison, String>),
     Flaky(std::result::Result<FlakyReport, String>),
     Context(std::result::Result<serde_json::Value, String>),
+    Health(std::result::Result<serde_json::Value, String>),
+    Wireless(std::result::Result<serde_json::Value, String>),
+    Matrix(std::result::Result<serde_json::Value, String>),
     RecurrenceHistory(std::result::Result<serde_json::Value, String>),
     BundlePreview {
         run_id: String,

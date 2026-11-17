@@ -10,6 +10,7 @@ pub mod devices;
 pub mod diagnostics;
 pub mod doctor;
 pub mod maintenance;
+pub mod matrix;
 pub mod observation;
 pub mod receipt;
 pub mod report;
@@ -183,6 +184,7 @@ pub fn canonical_name(command: &Command) -> String {
         Command::Context(_) => "context".to_string(),
         Command::Agent { command } => match command {
             crate::cli::AgentCommand::Test(_) => "agent.test".to_string(),
+            crate::cli::AgentCommand::Matrix(_) => "agent.matrix".to_string(),
         },
         Command::Capabilities => "capabilities".to_string(),
         Command::Schema { .. } => "schema".to_string(),
@@ -261,6 +263,10 @@ fn devices_name(command: &DevicesCommand) -> &'static str {
         DevicesCommand::Wait(_) => "wait",
         DevicesCommand::Prepare(_) => "prepare",
         DevicesCommand::Restore => "restore",
+        DevicesCommand::Pair(_) => "pair",
+        DevicesCommand::Connect(_) => "connect",
+        DevicesCommand::Disconnect(_) => "disconnect",
+        DevicesCommand::Health(_) => "health",
     }
 }
 

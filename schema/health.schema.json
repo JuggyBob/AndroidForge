@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/health.schema.json",
+  "title": "AndroidForge device health",
+  "type": "object",
+  "required": ["schema_version", "serial", "adb_state", "battery", "thermal", "storage", "memory", "network", "screen"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "serial": { "type": "string" },
+    "model": { "type": ["string", "null"] },
+    "manufacturer": { "type": ["string", "null"] },
+    "android_version": { "type": ["string", "null"] },
+    "api_level": { "type": ["integer", "null"] },
+    "adb_state": { "type": "string" },
+    "battery": {
+      "type": "object",
+      "properties": {
+        "level_percent": { "type": ["integer", "null"] },
+        "charging": { "type": ["boolean", "null"] },
+        "status": { "type": ["string", "null"] },
+        "temperature_c": { "type": ["number", "null"] },
+        "health": { "type": ["string", "null"] },
+        "unknown_reasons": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "thermal": {
+      "type": "object",
+      "properties": {
+        "status": { "type": ["string", "null"] },
+        "status_code": { "type": ["integer", "null"] },
+        "unknown_reasons": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "total_bytes": { "type": ["integer", "null"] },
+        "available_bytes": { "type": ["integer", "null"] },
+        "used_bytes": { "type": ["integer", "null"] },
+        "used_percent": { "type": ["number", "null"] },
+        "unknown_reasons": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "total_bytes": { "type": ["integer", "null"] },
+        "available_bytes": { "type": ["integer", "null"] },
+        "unknown_reasons": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "airplane_mode": { "type": ["boolean", "null"] },
+        "wifi_enabled": { "type": ["boolean", "null"] },
+        "active_interface": { "type": ["string", "null"] },
+        "summary": { "type": ["string", "null"] },
+        "unknown_reasons": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "screen": {
+      "type": "object",
+      "properties": {
+        "interactive": { "type": ["boolean", "null"] },
+        "locked": { "type": ["boolean", "null"] },
+        "unknown_reasons": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "uptime_seconds": { "type": ["integer", "null"] },
+    "thresholds": { "type": "object" },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "evidence": { "type": "array", "items": { "type": "object" } }
+  }
+}

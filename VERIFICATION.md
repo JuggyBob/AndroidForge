@@ -1,8 +1,102 @@
 # Verification record
 
-This document records what was actually run for the `0.6.0` Alpha delivery, followed by the `0.5.0`,
-`0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
-validation and packaging validation from areas that were not exercised.
+This document records what was actually run for the `0.7.0` Alpha delivery, followed by the `0.6.0`,
+`0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop
+workflow validation and packaging validation from areas that were not exercised.
+
+## v0.7.0 verification (2026-11-17)
+
+### Scope
+
+Matrix & Device Control: sequential multi-device execution, stable semantic element references,
+wireless ADB pairing/connection, structured device health, bounded read-only retries and desktop
+integration. Starting state is the published v0.6.0 commit plus its verification-only docs commit, backed
+up at `A:\Projects\Archive\Backups\AndroidForge\20261117-084139`.
+
+### Automated checks
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --workspace` | 242 passed, 0 failed across 25 test executables. |
+| `cargo build --workspace --release` | Passed. |
+| New unit/integration tests | 5 element-reference identity/stale/actionability tests, 5 health parsers, 3 retry policy, 3 retry loop, 2 wireless endpoint/success/redaction, 2 observation ref determinism, CLI help for refs/matrix/health/wireless. |
+| Compatibility tests | All v0.6.0 tests still pass; action receipts, recurrence, APK diff, bundles, Context/Ownership and plain action schemas remain intact. |
+
+### Real Android validation
+
+Environment: Android 16 / API 36 `emulator-5554` and Android 14 / API 34 `emulator-5556`.
+
+- `agent matrix --avd androidforge_test --avd aster_test --apk <CalcSuite> --install --flow conformance`
+  completed sequentially in 121,576 ms with `aggregate_status=passed`, 2 passed, 0 failed, 0 skipped.
+  Targets used separate sessions (`ses-777b99611183`, `ses-869082f5a76a`), separate serials and APIs 36
+  and 34. Health collected before each run; both sessions were released by the matrix and emulators were
+  not stopped.
+- Rolling `matrix.json` and per-target `targets/*.json` reports were written under
+  `examples/CalcSuite/.artifacts/matrix/<matrix-id>/`.
+- Partial failure: with one target owned by another session, the matrix continued, returned exit 10,
+  `aggregate_status=partial`, one passed and one failed with `E_DEVICE_BUSY`. The occupied session was
+  not released.
+- Fail-fast: with the occupied target first, the matrix returned exit 6, one failed (`E_DEVICE_BUSY`)
+  and the remaining target `skipped` with `E_MATRIX_FAIL_FAST`.
+- Duplicate targets returned `E_MATRIX_DUPLICATE_TARGET`; `--parallel 2` returned
+  `E_UNSUPPORTED_OPERATION`; an unknown AVD failed plan validation with `E_MATRIX_TARGET_INVALID`.
+- `ui tap --ref <el-...> --expect-token <obs-...>` tapped the Settings content-description successfully
+  and reported the original ref/token. Reusing the ref after navigation returned `E_ELEMENT_REF_STALE`
+  and did not dispatch (the app remained on Settings). Using the ref with a different token returned
+  `E_ELEMENT_REF_UNKNOWN`; omitting `--expect-token` returned `E_INVALID_ARGUMENT`.
+- A ref receipt reported `reference.validation=validated`, the original expected token, the resolved
+  node and `dispatch_state=dispatched`.
+- Rebooting `emulator-5556` and reusing an old ref returned `E_OBSERVATION_EXPIRED` before dispatch.
+- `devices health` reported battery 100%/charging/25.0 C, thermal none/0, 4,143 MiB free data, memory,
+  Wi-Fi, wlan0, interactive screen, unlocked state, API/Android and uptime on a real emulator.
+- Device disconnect/recovery: `adb -s emulator-5556 emu kill` made `devices health --serial
+  emulator-5556` return `E_DEVICE_NOT_FOUND`; `session ensure --avd aster_test` relaunched it and health
+  then succeeded (`adb=device`, API 34).
+- `ui observe --retries 2` and `diagnostics logcat peek --retries 2` returned one successful attempt and
+  a retry report with `max_attempts=3`; `--retries 99` was rejected with `E_INVALID_ARGUMENT`.
+- Wireless: endpoint/code validation and failure paths were exercised against `127.0.0.1:1`; pairing
+  returned `E_WIRELESS_PAIRING_FAILED`, connect returned `E_WIRELESS_CONNECT_FAILED`, and the pairing
+  code did not appear in the JSON. No authorized physical wireless-debugging device was available, so
+  successful physical pairing/connection is **not** claimed.
+
+### Desktop validation
+
+- Desktop built and launched with real data. The new Matrix page accepted two AVDs and ran a real
+  two-AVD matrix through the CLI; it displayed `Passed`, 2 passed/0 failed/0 skipped, separate session
+  ids, attached/launched acquisition modes, API 36/34 and health summaries.
+- Devices page exposed read-only health (`ADB state`, battery, temperature, thermal, storage, memory,
+  network, screen, uptime) and wireless pair/connect/disconnect controls. `Read health` was invoked
+  through Windows UI Automation and rendered real emulator data.
+- Context node rows expose `ref` values and copyable `ui tap --ref ... --expect-token ...` commands.
+- Triage displays action receipt details when a run step contains a receipt.
+- Pairing codes use a password field, are sent to the CLI through stdin and are cleared from desktop
+  state after invoking Pair.
+
+### Packaging and publication (pre-publication)
+
+- `.\\packaging\\package.ps1 -SkipBuild` produced:
+  - `androidforge-cli-windows-x86_64.zip` (4,946,473 bytes), SHA-256
+    `124c99725f3e7130b7248f50af478d0ec300bb3d7e74ee137343cc6f8df8c41f`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,673,571 bytes), SHA-256
+    `1463959d3406de52b1e0d3781e5f2b3b8f09916e4f46552beb97b1151aea39fb`.
+  - `androidforge-windows-x86_64-setup.exe` (9,601,844 bytes), SHA-256
+    `71f8d41db8a5711ef6769776aa91200c152aef2250117c4dd9b5953c0a1afa23`.
+- The portable ZIP was extracted into a clean directory; CLI and desktop reported `0.7.0`; Matrix/health/ref
+  help loaded; the desktop launched directly on Matrix with title `AndroidForge`.
+- The installer installed CLI/desktop `0.7.0` and uninstalled cleanly with the install directory removed.
+- All three local asset SHA-256 values matched `SHA256SUMS.txt`. CI-published hashes are recorded after
+  publication.
+
+### Not exercised
+
+- Successful wireless pairing/connect against a physical Android device (no authorized test device).
+- Parallel matrix execution (deliberately unavailable).
+- Physical USB devices, vendor ROMs, Maestro, instrumentation packages, snapshot restore and root-only
+  paths.
+- Split APK installs, which still refuse `--only-if-changed` equivalence.
+- Desktop layouts other than the tested Windows scale.
 
 ## v0.6.0 verification (2026-11-17)
 
@@ -441,4 +535,3 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
-

@@ -1,12 +1,12 @@
 {
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Local-first Android testing and device orchestration for AI coding agents",
   "homepage": "https://github.com/JuggyBob/AndroidForge",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/JuggyBob/AndroidForge/releases/download/v0.6.0/androidforge-desktop-windows-x86_64.zip",
-      "hash": "7c73ae7b1d3021bd6bf2b299ba8f6613bbda4d041c6f270b42cd4257f0c3371e"
+      "url": "https://github.com/JuggyBob/AndroidForge/releases/download/v0.7.0/androidforge-desktop-windows-x86_64.zip",
+      "hash": "1463959d3406de52b1e0d3781e5f2b3b8f09916e4f46552beb97b1151aea39fb"
     }
   },
   "bin": [
@@ -31,4 +31,3 @@
     }
   }
 }
-

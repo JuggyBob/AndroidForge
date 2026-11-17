@@ -71,6 +71,18 @@ Pipeline-style commands may return a successful HTTP-style envelope with `status
 | `E_OBSERVATION_NOT_FOUND` | 4 | yes | The observation token does not exist for this session or was pruned by retention. |
 | `E_OBSERVATION_EXPIRED` | 4 | yes | The observation is older than 24 hours or the device rebooted. Capture a fresh observation. |
 | `E_OBSERVATION_SESSION_MISMATCH` | 4 | yes | The token belongs to another session. Use a token from the target session. |
+| `E_ELEMENT_REF_UNKNOWN` | 4 | yes | The element ref is not part of the specified observation token. Re-observe. |
+| `E_ELEMENT_REF_STALE` | 4 | yes | The referenced node path no longer exists or the observation expired. Never falls back to text/coordinates. |
+| `E_ELEMENT_IDENTITY_CHANGED` | 4 | yes | The node at the path changed class/text/bounds/state. Re-observe and choose a new ref. |
+| `E_ELEMENT_NOT_ACTIONABLE` | 7 | yes | The referenced node is disabled, invisible or context-only. |
+| `E_ELEMENT_DEVICE_MISMATCH` | 4 | yes | The observation token belongs to a different device. |
+| `E_WIRELESS_ENDPOINT_INVALID` | 2 | yes | Wireless endpoint is not a specific `HOST:PORT` address. |
+| `E_WIRELESS_PAIRING_FAILED` | 4 | yes | ADB rejected or could not complete pairing. Pairing codes are never logged. |
+| `E_WIRELESS_CONNECT_FAILED` | 4 | yes | ADB could not connect to or disconnect the wireless endpoint. |
+| `E_DEVICE_HEALTH_UNAVAILABLE` | 4 | yes | Health could not be collected for the target device. |
+| `E_RETRY_NOT_ALLOWED` | 2 | yes | Retries were requested for a non-read-only operation. |
+| `E_MATRIX_TARGET_INVALID` | 2 | yes | A matrix AVD/serial is unknown or not connected. |
+| `E_MATRIX_DUPLICATE_TARGET` | 2 | yes | The same matrix target was requested more than once. |
 | `E_LEASE_EXPIRED` | 4 | yes | A session lease is expired and requires reconciliation or renewal. Expiry never stops a device by itself. |
 | `E_ARTIFACT_WRITE_FAILED` | 9 | yes | Evidence could not be written. Check disk/path permissions. |
 | `E_CONFIG_INVALID` | 8 | no | Global or merged configuration is invalid. |
@@ -113,4 +125,8 @@ Pipeline-style commands may return a successful HTTP-style envelope with `status
 }
 ```
 
-`E_UNSUPPORTED_OPERATION` is a normal contract, not a crash. For example, AVD cloning reports why it is absent and which supported workflow to use instead.
+`E_UNSUPPORTED_OPERATION` is a normal contract, not a crash. For example, AVD cloning reports why it is absent and which supported workflow to use instead. Parallel matrix execution (`--parallel` > 1) also returns this code until independent-device isolation is validated.
+
+Element-reference errors are fail-closed. `E_ELEMENT_REF_STALE`, `E_ELEMENT_IDENTITY_CHANGED` and `E_ELEMENT_NOT_ACTIONABLE` mean no action was sent to ADB; re-observe and choose a new `ref`. `--expect-token` is mandatory.
+
+Read-only retry results include a `retry` object with `attempts`, per-attempt error codes, retryability, delay and `total_elapsed_ms`. On final failure the same object is in `error.context.retry`. A `retries` option on a state-changing command is rejected with `E_RETRY_NOT_ALLOWED`; it is never silently ignored.

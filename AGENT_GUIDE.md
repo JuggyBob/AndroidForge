@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.6.0 agent loop
+## 0. The v0.7.0 agent loop
 
 The shortest reliable loop is:
 
@@ -15,6 +15,9 @@ androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Prefere
 androidforge report explain latest --json
 androidforge report recurrences --project . --json
 androidforge report bundle latest --output .\\evidence.zip --json
+androidforge ui observe --session ses-... --json
+androidforge ui tap --session ses-... --ref el-... --expect-token obs-... --json
+androidforge agent matrix --avd Pixel_8_API_35 --avd Pixel_8_API_36 --flow conformance --json
 androidforge context --session ses-... --json
 androidforge session release --session ses-... --owner MyAgent --json
 ```
@@ -28,17 +31,19 @@ run fail, whether that failure is new/recurring/regressed, and where the portabl
 Read-only commands (safe to run for discovery; `context` may still capture and persist a screen
 observation unless `--dry-run` is used):
 
-- `doctor`, `capabilities`, `devices list|inspect`, `session list|inspect|status`, `context`,
+- `doctor`, `capabilities`, `devices list|inspect|health`, `session list|inspect|status`, `context`,
   `ui observe`, `ui diff`, `ui inspect`, `ui dump`, `report list|show|path|explain|history|recurrences`,
   `report bundle --dry-run`, `doctor fix --plan|--check`, `apk inspect|verify|resolve|diff`,
-  `diagnostics logcat peek`. `apk diff` pulls the installed base APK but does not change the device.
+  `diagnostics logcat peek`, `agent matrix --dry-run`. `apk diff` pulls the installed base APK but does
+  not change the device.
 - `session ensure --dry-run` and `agent test --dry-run` make no device or session changes.
 
 Device-modifying commands:
 
 - `session start|ensure|attach|restart`, `app install` (plain install preserves app data), `ui
-  tap|long-press|text|clear|scroll|swipe|back|home|keyevent`, `fixture run`, `conformance run`,
-  `agent test` without `--dry-run`.
+  tap|long-press|text|clear|scroll|swipe|back|home|keyevent` (including `--ref` actions), `fixture run`,
+  `conformance run`, `agent test` without `--dry-run`, `agent matrix` without `--dry-run`,
+  `devices pair|connect|disconnect`.
 
 Potentially destructive commands (require `--yes` or an explicit confirmation flag):
 
@@ -281,6 +286,68 @@ mtime, SHA-256 and certificate are returned. An explicit `--apk` always takes pr
 installs cannot be proven equivalent from the base APK alone. `--only-if-changed` skips installation
 only when package, version code, base APK SHA-256 and split shape prove equivalence; unknown identity
 installs rather than silently skipping. It never uninstalls, clears data or downgrades automatically.
+
+### 0.9 Stable element references
+
+```powershell
+androidforge ui observe --session ses-... --json
+androidforge ui tap --session ses-... --ref el-... --expect-token obs-... --json
+androidforge ui long-press --session ses-... --ref el-... --expect-token obs-... --receipt --json
+```
+
+Every observed actionable/context/scrollable node has a deterministic opaque `ref`. A ref is valid only
+with its observation token and the same session/device. Immediately before dispatch, the CLI re-reads the
+hierarchy and verifies path, class, package, resource id, text, content description, bounds, enabled and
+actionable state. It refuses with explicit errors when the token expired, the node disappeared or
+changed, the session/device is wrong, or the node is no longer actionable. **There is no fallback to
+text, resource id or coordinates.** Re-observe and choose a new ref. `--expect-token` is required.
+
+### 0.10 Sequential device matrix
+
+```powershell
+androidforge agent matrix --project . --avd Pixel_8_API_35 --avd Pixel_8_API_36 --flow conformance --json
+androidforge agent matrix --project . --serial emulator-5554 --serial emulator-5556 --flow conformance --json
+androidforge agent matrix --project . --avd Pixel_8_API_35 --avd Pixel_8_API_36 --dry-run --json
+```
+
+The matrix validates every AVD/serial, rejects duplicates, resolves the build once, and runs targets
+sequentially. Each target gets its own owned session and calls the existing `agent test` pipeline.
+`--fail-fast` stops after the first failure; otherwise remaining independent targets still run. The
+result aggregates `passed`, `failed`, `partial` or `failed`, includes per-target sessions, API/model,
+health, run ids, failures, artifacts and cleanup state. Only sessions created by this matrix with the
+matrix owner are released; pre-existing sessions and emulators are not stopped. `--parallel` >1 currently
+returns `E_UNSUPPORTED_OPERATION` because parallel isolation is not validated.
+
+### 0.11 Wireless ADB and device health
+
+```powershell
+echo 123456 | androidforge devices pair 192.168.1.20:37123 --code-stdin --json
+androidforge devices connect 192.168.1.20:37521 --json
+androidforge devices disconnect 192.168.1.20:37521 --json
+androidforge devices health --session ses-... --json
+```
+
+Pairing is separate from connecting; the ports differ. Pairing codes are never stored, logged, reported
+or bundled. Prefer `--code-stdin`; `--code` may be visible to other local processes. AndroidForge does not
+enable wireless debugging or `adb tcpip` automatically.
+
+`devices health` is read-only. It reports battery, charging, temperature, thermal status, storage,
+memory, network, screen, uptime, Android/API and ADB state. Unsupported values include a reason. Raw
+command evidence is included unless `--no-evidence` is passed. Warning thresholds live under `[health]`.
+
+### 0.12 Bounded read-only retries
+
+```powershell
+androidforge ui observe --session ses-... --retries 2 --json
+androidforge ui diff --session ses-... --from obs-... --retries 2 --json
+androidforge diagnostics logcat peek --session ses-... --retries 3 --json
+```
+
+Only read-only operations accept `--retries` (maximum 5). Retryable errors are device disconnect/offline,
+timeouts and UIAutomator helper failures; selector, configuration, permission and install errors are not
+retried. Backoff is 250ms, 500ms, 1s, 2s, bounded by a 20-second total window. The result reports every
+attempt, code, retryability, delay and total time. Taps, text, scrolls, installs, uninstalls, data
+operations, fixtures and device changes never retry.
 
 ## 1. The operating model
 
