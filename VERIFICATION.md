@@ -57,7 +57,22 @@ Measured on the same Settings screen:
   desktop 0.9.0 and CLI 0.9.0.
 - The local installer installed CLI/desktop `0.9.0`, reported the agent-brief schema and uninstalled
   cleanly with the install directory removed.
-- Downloaded-asset and release metadata verification is recorded after publication.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.0>; title
+  `AndroidForge v0.9.0 - Agent Mode`; not a prerelease; marked latest.
+- Tag: `v0.9.0`, tag object `27889b022d15d1ae1657995acac8148c70010a2b`, commit
+  `9c3d0a98e00ba8d1f1704db7249a9b4e58fd7e06`; Release workflow `44095441266` and main CI
+  `44095436147` passed.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (5,167,397 bytes),
+    `d526f448daa70a9a2e47cebd11b8b195b63dfdec2b2fdd2a120efcca51c563fb`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,929,563 bytes),
+    `d5b2ea38db4b592ec5403d35afd5c3aee620c0f2eeb5512c3daf71e876c267c2`.
+  - `androidforge-windows-x86_64-setup.exe` (9,774,520 bytes),
+    `2c3707c7bf5ed4e4021e5f82397419b1548875acf7d778f2f8bc1cbc18bb670b`.
+- Downloaded portable ZIP reported CLI/desktop `0.9.0`; compact profile output, `agent brief` and the
+  agent-brief schema were available. The downloaded installer installed CLI/desktop `0.9.0` and
+  uninstalled cleanly with the install directory removed.
+- v0.6.0, v0.7.0, v0.7.1 and v0.8.0 releases, tags and assets remain intact.
 
 ## v0.8.0 verification (2026-11-17)
 
@@ -703,6 +718,7 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
 
 
 
