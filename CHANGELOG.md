@@ -8,6 +8,34 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.9.2] - 2026-11-17
+
+Patch for the six product findings from the independent v0.9.1 certification run.
+
+### Fixed
+
+- `ui tap --ref` now resolves `actionable_via: "ancestor"` context nodes correctly when the
+  observation was captured with `--full`. The full-hierarchy copy carries the same readiness
+  metadata, and ref lookup prefers the compact context node.
+- Commands that load a session now refuse a session bound to a different project with
+  `E_SESSION_PROJECT_MISMATCH`. `context` ignores the foreign session and returns an explicit
+  warning instead of silently combining projects.
+- `hook run` now returns `verified` and `verification_state`. A hook with no `verify` block is
+  reported as `unverified` with a note that shell exit 0 is not route proof. The shipped IronPulse
+  hooks verify `CURRENT STREAK` and `Appearance`.
+- `diagnostics logcat start` follows from the current logcat tail (`-T 1`) and treats a bounded
+  capture that reaches its byte cap as `completed` (`completed_reason: "max_bytes"`) instead of
+  failing with "logcat capture process exited immediately". `stop` finalizes the completed capture.
+- Action receipts with a satisfied postcondition and an empty semantic diff now add explicit
+  evidence that the expected state may already have been visible before the action.
+  CalcSuite's live preview makes `=` correctly `no_visible_change`.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.9.2`.
+- Error taxonomy includes `E_SESSION_PROJECT_MISMATCH` (configuration).
+- `hook run` result payload includes `verified` and `verification_state`; existing fields remain.
+
 ## [0.9.1] - 2026-11-17
 
 Stability patch for the issues found by the CalcSuite, DiscountHunter and IronPulse v0.9.0
@@ -518,7 +546,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.2
 [0.9.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.1
 [0.9.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.0
 [0.8.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.8.0

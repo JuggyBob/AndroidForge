@@ -33,6 +33,21 @@ pub struct CliContext {
     pub run_arg: Option<String>,
 }
 
+/// Compare project roots the way Windows paths are used in commands. Sessions
+/// are project-bound; cross-project reuse is refused by `load_session`.
+pub(crate) fn same_project_root(left: &str, right: &str) -> bool {
+    let normalize = |value: &str| {
+        let normalized = value.replace('\\', "/");
+        let trimmed = normalized.trim_end_matches('/');
+        if cfg!(windows) {
+            trimmed.to_ascii_lowercase()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    normalize(left) == normalize(right)
+}
+
 impl CliContext {
     pub fn new(cli: &Cli) -> Result<Self> {
         let mut paths = ForgePaths::discover(None, cli.project.clone())?;
@@ -137,6 +152,23 @@ impl CliContext {
             )
             .with_suggestion("Start a new session with `androidforge session start --avd <AVD>`.")
             .with_suggestion("Run `androidforge session list` to inspect session state.")
+            .session(id));
+        }
+        let requested_project = self.paths.project_root.to_string_lossy().into_owned();
+        if let Some(session_project) = &session.project_root
+            && !same_project_root(session_project, &requested_project)
+        {
+            return Err(ForgeError::new(
+                ErrorCode::SessionProjectMismatch,
+                format!(
+                    "session {id} is bound to project {session_project}, not {requested_project}"
+                ),
+            )
+            .with_context_string("session_project", session_project.clone())
+            .with_context_string("requested_project", requested_project)
+            .with_suggestion(
+                "Use a session acquired for this project, or pass --project with the project that owns the session.",
+            )
             .session(id));
         }
         if touch {
@@ -297,5 +329,28 @@ impl CliContext {
                         "Pass --package or set [project].package in .androidforge/project.toml.",
                     )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_project_root;
+
+    #[test]
+    fn project_roots_compare_slashes_and_windows_case() {
+        assert!(same_project_root(
+            "A:\\Projects\\Active\\Example\\Internal",
+            "A:/Projects/Active/Example/Internal/"
+        ));
+        if cfg!(windows) {
+            assert!(same_project_root(
+                "A:\\Projects\\Active\\Example\\Internal",
+                "a:\\projects\\active\\example\\internal"
+            ));
+        }
+        assert!(!same_project_root(
+            "A:/Projects/Active/Example/Internal",
+            "A:/Projects/Active/Other/Internal"
+        ));
     }
 }

@@ -268,6 +268,7 @@ fn category_for_code(code: ErrorCode) -> Option<DiagnosisCategory> {
         | ErrorCode::AdapterInvalid
         | ErrorCode::FixtureInvalid
         | ErrorCode::JunitInvalid
+        | ErrorCode::SessionProjectMismatch
         | ErrorCode::InvalidArgument
         | ErrorCode::InvalidCommand => Some(C::Configuration),
         ErrorCode::Interrupted => Some(C::Interrupted),

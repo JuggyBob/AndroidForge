@@ -97,6 +97,7 @@ error_codes! {
     SnapshotNotFound => ("E_SNAPSHOT_NOT_FOUND", 4, true),
     SessionExpired => ("E_SESSION_EXPIRED", 4, true),
     SessionOwnershipMismatch => ("E_SESSION_OWNERSHIP_MISMATCH", 4, true),
+    SessionProjectMismatch => ("E_SESSION_PROJECT_MISMATCH", 4, true),
     SessionNotFound => ("E_SESSION_NOT_FOUND", 4, true),
     ArtifactWriteFailed => ("E_ARTIFACT_WRITE_FAILED", 9, true),
     ConfigInvalid => ("E_CONFIG_INVALID", 8, false),

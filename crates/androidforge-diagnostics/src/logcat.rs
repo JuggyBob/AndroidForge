@@ -63,6 +63,9 @@ pub struct LogcatCapture {
     pub max_seconds: u64,
     pub max_bytes: u64,
     pub status: String,
+    /// `max_bytes` or `timeout` when the bounded capture already completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -589,8 +592,11 @@ impl LogcatStream {
         }
         let max_seconds = max_seconds.max(1);
         let max_bytes = max_bytes.max(64 * 1024);
+        // `-T 1` follows from the current buffer tail instead of replaying the
+        // entire historical buffer. Without it a busy emulator can hit the
+        // byte cap before `start` even returns.
         let remote_command =
-            format!("timeout {max_seconds} logcat -v threadtime | head -c {max_bytes}");
+            format!("timeout {max_seconds} logcat -v threadtime -T 1 | head -c {max_bytes}");
         let spec = DetachedSpec::new(self.adb.adb.to_string_lossy().into_owned())
             .args([
                 "-s".to_string(),
@@ -598,22 +604,33 @@ impl LogcatStream {
                 "shell".to_string(),
                 remote_command,
             ])
-            .stdout_path(raw_path)
+            .stdout_path(raw_path.clone())
             .stderr_path(stderr_path.clone())
             .hide_window(true)
             .trace(trace);
         let child = spawn_detached(&spec)?;
         tokio::time::sleep(Duration::from_millis(400)).await;
-        if !process_exists(child.pid) {
-            let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        let process_alive = process_exists(child.pid);
+        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        let raw_bytes = std::fs::metadata(&raw_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let (status, completed_reason) = if process_alive {
+            ("capturing".to_string(), None)
+        } else if capture_completed_at_byte_cap(&stderr, raw_bytes, max_bytes) {
+            // The bounded pipeline completed successfully at the byte cap.
+            ("completed".to_string(), Some("max_bytes".to_string()))
+        } else {
             return Err(ForgeError::new(
                 ErrorCode::CommandFailed,
-                "logcat capture process exited immediately",
+                "logcat capture process exited before producing a usable capture",
             )
             .with_context_string("stderr", truncate(stderr.trim(), 3000))
-            .with_suggestion("Continuous capture uses Android's toybox timeout command; verify it is available with `androidforge adb shell which timeout`.")
+            .with_context("raw_bytes", raw_bytes)
+            .with_context("max_bytes", max_bytes)
+            .with_suggestion("Verify `androidforge adb shell which timeout` and `which head`; then retry `diagnostics logcat start`.")
             .device(serial.to_string()));
-        }
+        };
         let state = LogcatCapture {
             schema_version: 1,
             session_id: session_id.to_string(),
@@ -627,7 +644,8 @@ impl LogcatStream {
             started_at: now_rfc3339(),
             max_seconds,
             max_bytes: max_bytes as u64,
-            status: "capturing".to_string(),
+            status,
+            completed_reason,
         };
         if let Some(parent) = self.state_path(session_id).parent() {
             ensure_dir(parent)?;
@@ -648,6 +666,14 @@ impl LogcatStream {
         let process_alive = process_exists(state.local_pid);
         let local_path = PathBuf::from(&state.run_dir).join(&state.raw_relative_path);
         let local_size_bytes = std::fs::metadata(&local_path).ok().map(|meta| meta.len());
+        let mut state = state;
+        if !process_alive
+            && state.status == "capturing"
+            && local_size_bytes.is_some_and(|size| size >= state.max_bytes)
+        {
+            state.status = "completed".to_string();
+            state.completed_reason = Some("max_bytes".to_string());
+        }
         let age_ms = DateTime::parse_from_rfc3339(&state.started_at)
             .map(|started| {
                 Utc::now()
@@ -684,9 +710,11 @@ impl LogcatStream {
             .session(session_id.to_string()));
         }
         let started = Instant::now();
-        kill_tree(state.local_pid);
-        while process_exists(state.local_pid) && started.elapsed() < Duration::from_secs(8) {
-            tokio::time::sleep(Duration::from_millis(150)).await;
+        if state.status == "capturing" {
+            kill_tree(state.local_pid);
+            while process_exists(state.local_pid) && started.elapsed() < Duration::from_secs(8) {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
         }
         let raw_path = PathBuf::from(&state.run_dir).join(&state.raw_relative_path);
         let raw = std::fs::read(&raw_path).map_err(|error| {
@@ -806,6 +834,10 @@ fn sanitize_key(value: &str) -> String {
         .collect()
 }
 
+fn capture_completed_at_byte_cap(stderr: &str, raw_bytes: u64, max_bytes: usize) -> bool {
+    stderr.trim().is_empty() && raw_bytes >= max_bytes as u64
+}
+
 fn truncate(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         value.to_string()
@@ -825,6 +857,18 @@ mod tests {
         assert!(filtered.contains("hello com.example"));
         assert!(filtered.contains("E/Tag: other"));
         assert!(!filtered.contains("unrelated"));
+    }
+
+    #[test]
+    fn a_capture_that_hit_the_byte_cap_is_complete_not_failed() {
+        assert!(capture_completed_at_byte_cap("", 5242880, 5242880));
+        assert!(capture_completed_at_byte_cap("", 5282951, 5242880));
+        assert!(!capture_completed_at_byte_cap("", 100, 5242880));
+        assert!(!capture_completed_at_byte_cap(
+            "adb: device offline",
+            5282951,
+            5242880
+        ));
     }
 
     #[test]

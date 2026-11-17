@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.9.1`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.9.2`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -80,6 +80,15 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
+
+## What is new in v0.9.2
+
+- **Full-observation refs:** a context node marked `actionable_via: "ancestor"` now keeps that marker on its full-hierarchy copy, so `ui tap --ref` works with and without `--full`. Ref lookup prefers the compact context copy.
+- **Session project binding:** action commands refuse a session bound to another project with `E_SESSION_PROJECT_MISMATCH`; `context` ignores the foreign session and returns a warning instead of silently serving the wrong project.
+- **Honest hook results:** `hook run` now reports `verified` and `verification_state`. A hook without a `verify` block is `unverified` with an explicit note; the shipped IronPulse hooks now verify `CURRENT STREAK` and `Appearance`.
+- **Bounded logcat capture:** `diagnostics logcat start` follows from the current buffer tail (`-T 1`) and treats a capture that reaches its byte cap as completed rather than failed. `status` reports `completed` and `completed_reason: "max_bytes"`.
+- **Receipt clarity:** a satisfied postcondition with an empty semantic diff now carries evidence that the expected state may already have been visible before the action. CalcSuite's live preview means `=` is correctly `no_visible_change`.
+- **Certification:** independent v0.9.1 run: 192 PASS, 6 FAIL, 3 BLOCKED, 9 N/A, 26 NOT RUN. The five actionable product/adapter defects above were fixed and rechecked; the sixth was a test expectation, not a product defect.
 
 ## What is new in v0.9.1
 
@@ -189,7 +198,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.9.1` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.9.2` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -237,7 +246,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.9.1)
+### Agent loop quick start (v0.9.2)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -399,12 +408,11 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.9.1`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD matrix. v0.9.1 hardens the v0.9.0 Agent Mode: durable observations,
-identity-stable refs, context refs through clickable ancestors, `--clickable` ancestor matching,
-clearer failure taxonomy, project-scoped `latest`/`latest-failure`, verified bundle manifests,
-performance run identity and hook UI postconditions. See [VERIFICATION.md](VERIFICATION.md) and
-[case-studies/](case-studies/).
+**Alpha `v0.9.2`.** The CLI has been exercised against real apps on Android 16 and Android 14
+emulators, including a two-AVD matrix. v0.9.2 closes the defects from an independent certification
+run against v0.9.1: full-observation context refs, cross-project session binding, honest hook
+verification results, bounded logcat capture and clearer receipt evidence. See
+[VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -443,6 +451,10 @@ Validated:
   across repeated observations, context refs through clickable ancestors, `--clickable` ancestor
   matching, truncated-label diagnostics, project-scoped `latest`/`latest-failure`, verified bundle
   manifests, performance run identity and hook UI postconditions.
+- v0.9.2 real-emulator validation: full-observation context refs, cross-project session refusal and
+  context warning, hook `verified`/`verification_state` with IronPulse UI postconditions, bounded
+  logcat capture that reports byte-cap completion, and receipt evidence for a satisfied postcondition
+  with no semantic change.
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 

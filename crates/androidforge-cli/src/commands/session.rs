@@ -598,7 +598,7 @@ pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result
         }
         let legacy = session.project_root.is_none();
         if let Some(root) = &session.project_root
-            && root != &project_root
+            && !crate::context::same_project_root(root, &project_root)
         {
             continue;
         }

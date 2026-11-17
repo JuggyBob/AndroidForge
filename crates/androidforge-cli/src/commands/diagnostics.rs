@@ -768,10 +768,21 @@ async fn logcat_start(ctx: &CliContext, args: &LogcatStartArgs) -> Result<Comman
                     &ctx.paths.project_root,
                 )?;
             }
+            let human = if state.status == "completed" {
+                format!(
+                    "Logcat capture completed at its {} byte cap for {}. Run `androidforge diagnostics logcat stop --session {}` to finalize the artifacts.\n",
+                    state.max_bytes, state.serial, session.id
+                )
+            } else {
+                format!(
+                    "Logcat capture started for {}. Stop it with `androidforge diagnostics logcat stop --session {}`.\n",
+                    state.serial, session.id
+                )
+            };
             Ok(success(
                 "diagnostics.logcat.start",
                 serde_json::to_value(&state)?,
-                format!("Logcat capture started for {}. Stop it with `androidforge diagnostics logcat stop --session {}`.\n", state.serial, session.id),
+                human,
             )
             .with_session(session.id)
             .with_device(device.serial)

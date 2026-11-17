@@ -1,9 +1,67 @@
 # Verification record
 
-This document records what was actually run for the `0.9.1` patch, the `0.9.0` Alpha delivery, the
-`0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records.
-It separates automated checks, real Android validation, desktop workflow validation and packaging
-validation from areas that were not exercised.
+This document records what was actually run for the `0.9.2` patch, the `0.9.1` patch, the `0.9.0`
+Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0`
+and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
+validation and packaging validation from areas that were not exercised.
+
+## v0.9.2 verification (2026-11-17)
+
+### Scope
+
+Patch for the six product findings from the independent v0.9.1 certification run. Five were
+actionable product or adapter defects; ACT-09 was a test expectation that contradicted CalcSuite's
+live preview. The 26 `NOT RUN` certification checks remain coverage gaps and were not reclassified.
+
+### Automated checks
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` and the release build passed.
+- `cargo test --workspace` reported 300 passed, 0 failed across 16 test executables.
+- New regression tests cover:
+  - full-observation context refs keeping `actionable_via` metadata;
+  - project-root normalization and the new `E_SESSION_PROJECT_MISMATCH` error;
+  - byte-cap logcat captures being classified as complete;
+  - hook verification state fields through the existing hook path;
+  - the existing v0.9.1 regression suite.
+
+### Real Android validation (API 36 and API 34 emulators)
+
+- **OBS-26 full-observation ref:** a 108-node `ui observe --full` exposed context
+  `el-b01e7ca30b3e` with `actionable_via:"ancestor"`; `ui tap --ref` succeeded with
+  `used_clickable_ancestor:true` and ancestor path `0.1.2.3.4.5.6.7.25.85`. The full-hierarchy copy
+  carried the same marker.
+- **SESS-09 cross-project session:** `context --project IronPulse --session <CalcSuite session>`
+  returned the IronPulse project, `session.available:false` and a warning naming the bound project.
+  `ui observe` with the same mismatch returned `E_SESSION_PROJECT_MISMATCH`.
+- **HOOK-03/05 honest results:** a hook with a declared positive UI postcondition returned
+  `verified:true`, `verification_state:"verified"`, attempts 1. A hook with no `verify` block
+  returned `verified:false`, `verification_state:"unverified"` and an explicit note. A negative
+  `ui_text` postcondition returned `E_HOOK_VERIFICATION_FAILED`. IronPulse `focus-streak`
+  (`CURRENT STREAK`) and `open-profile` (`Appearance`) both verified after onboarding.
+- **DIAG-09 bounded logcat:** `diagnostics logcat start` used `-T 1`, returned `capturing`, `status`
+  reported the live size, and `stop` finalized the artifacts. With a 65,536-byte cap and 2,000 log
+  lines, `status` reported `completed`, `completed_reason:"max_bytes"`, 66,199 bytes, and `stop`
+  finalized the same raw data with the byte-cap note.
+- **ACT-09 receipt evidence:** before and after observations for CalcSuite `7 + 8 =` both contained
+  editable `7+8` and visible `15`; zero added/removed/modified nodes is correct. The receipt now
+  adds explicit `effect_evidence` when a satisfied postcondition has no semantic change; the
+  effect remains `no_visible_change`.
+
+### Packaging and release
+
+- Local package:
+  - CLI ZIP 5,210,105 bytes /
+    `065380ec61f3748a72faafb1432ed5f0ce1d3ec2c5b3997a909c42d8c1166e26`;
+  - desktop ZIP 11,974,262 bytes /
+    `65eae0121df909b4504eb9571ac34c9b024903c6babdb726ed49e8fb47907310`;
+  - installer 9,803,995 bytes /
+    `874ff504b9ef1aeab39ef7b9c95b60b43a7797330d6a2847e846ca21968cbda5`.
+- A clean extraction reported CLI/desktop `0.9.2`, exposed the updated hook and diagnosis schemas and
+  repeated the full-observation ref tap plus the cross-project context warning successfully.
+- The local installer installed CLI/desktop `0.9.2` and uninstalled cleanly with the install
+  directory removed.
+- Downloaded-asset and release metadata verification is recorded after publication.
 
 ## v0.9.1 verification (2026-11-17)
 

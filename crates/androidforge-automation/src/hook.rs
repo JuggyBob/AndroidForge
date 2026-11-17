@@ -28,6 +28,14 @@ pub struct HookResult {
     pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<HookVerificationResult>,
+    /// True only when a declared postcondition passed. Without a `verify`
+    /// block, `success` means the trigger command exited 0, not that the app
+    /// reached the expected screen.
+    #[serde(default)]
+    pub verified: bool,
+    /// `verified`, `unverified`, `failed` or `not_run`.
+    #[serde(default)]
+    pub verification_state: String,
     pub started_at: String,
     pub ended_at: String,
 }
@@ -91,6 +99,8 @@ pub async fn run_hook(
             artifacts: Vec::new(),
             notes: vec!["dry run; hook was not executed".to_string()],
             verification: None,
+            verified: false,
+            verification_state: "not_run".to_string(),
             started_at,
             ended_at: now_rfc3339(),
         });
@@ -364,11 +374,24 @@ pub async fn run_hook(
     } else {
         None
     };
+    let (verified, verification_state) = match &verification {
+        Some(result) if result.passed => (true, "verified".to_string()),
+        Some(_) => (false, "failed".to_string()),
+        None => {
+            notes.push(
+                "No verify postcondition is declared; success only proves the hook command exited 0, not that the app reached the expected screen."
+                    .to_string(),
+            );
+            (false, "unverified".to_string())
+        }
+    };
     let details = serde_json::json!({
         "hook": name,
         "kind": format!("{:?}", hook.kind),
         "exit_code": exit_code,
-        "verification": verification,
+        "verification": verification.clone(),
+        "verified": verified,
+        "verification_state": verification_state.clone(),
     });
     run.finish_step_success(step, details, artifacts.clone())?;
     Ok(HookResult {
@@ -382,6 +405,8 @@ pub async fn run_hook(
         artifacts,
         notes,
         verification,
+        verified,
+        verification_state,
         started_at,
         ended_at: now_rfc3339(),
     })

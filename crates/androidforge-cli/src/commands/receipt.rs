@@ -278,6 +278,15 @@ impl ReceiptBuilder {
                 _ => {}
             }
         }
+        if effect == Effect::NoVisibleChange
+            && let Some(postcondition) = &postcondition
+            && postcondition.result == PostconditionResult::Satisfied
+        {
+            evidence.push(
+                "postcondition satisfied; the semantic state was unchanged, so the expected value may already have been visible before the action"
+                    .to_string(),
+            );
+        }
         if changes.as_ref().is_some_and(|changes| changes.truncated)
             && !warnings.iter().any(|warning| warning.contains("truncated"))
         {

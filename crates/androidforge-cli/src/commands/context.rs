@@ -102,7 +102,25 @@ pub async fn context(cli: &Cli, args: &ContextArgs) -> Result<CommandSuccess> {
             Err(error) => Err(error.body().message.clone()),
         },
     };
-    let session = session_result.as_ref().ok().cloned();
+    let mut session = session_result.as_ref().ok().cloned();
+    let mut session_ignored = None;
+    if let Some(candidate) = &session
+        && let Some(project_root) = &candidate.project_root
+        && !crate::context::same_project_root(
+            project_root,
+            &ctx.paths.project_root.to_string_lossy(),
+        )
+    {
+        let reason = format!(
+            "Session {} is bound to project {}, not {}; it was ignored.",
+            candidate.id,
+            project_root,
+            ctx.paths.project_root.display()
+        );
+        warnings.push(reason.clone());
+        session_ignored = Some(reason);
+        session = None;
+    }
     let session_value = if include("session") {
         match &session {
             Some(session) => json!({
@@ -116,6 +134,7 @@ pub async fn context(cli: &Cli, args: &ContextArgs) -> Result<CommandSuccess> {
                 "port": session.port,
                 "headless": session.headless,
                 "profile": session.profile,
+                "project_root": session.project_root,
                 "created_at": session.created_at,
                 "last_activity": session.heartbeat_at,
                 "build": session.build,
@@ -124,7 +143,10 @@ pub async fn context(cli: &Cli, args: &ContextArgs) -> Result<CommandSuccess> {
             }),
             None => json!({
                 "available": false,
-                "reason": session_result.err().unwrap_or_else(|| "no session is active".to_string()),
+                "reason": session_ignored
+                    .clone()
+                    .or_else(|| session_result.err())
+                    .unwrap_or_else(|| "no session is active".to_string()),
             }),
         }
     } else {

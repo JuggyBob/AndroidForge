@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.9.1 agent loop
+## 0. The v0.9.2 agent loop
 
 The shortest reliable loop is:
 
@@ -667,7 +667,9 @@ Hooks are named, explicit debug triggers. AndroidForge does not interpret the ho
 receiver on a debuggable build, use `run_as = true` so the explicit broadcast runs as the app UID; a
 plain shell broadcast can report `Broadcast completed: result=0` without delivery. If the postcondition
 does not change or match, the hook fails with `E_HOOK_VERIFICATION_FAILED`. If an app cannot expose a
-deterministic trigger, prefer an honest message over guessing a JobScheduler ID.
+deterministic trigger, prefer an honest message over guessing a JobScheduler ID. `hook run` reports
+`verified` and `verification_state`; a hook with no `verify` block is explicitly `unverified`, because
+shell exit 0 is not route proof.
 
 `jobs list` accepts both numeric and named/WorkManager namespaces on Android 16; parsed output remains
 best-effort and raw dumps stay the source of truth.

@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-adb"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-core",
  "androidforge-process",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-app"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-automation"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-cli"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-core"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-process",
  "chrono",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-desktop"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "chrono",
  "eframe",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-diagnostics"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-emulator"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-process"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "tempfile",
  "thiserror 2.0.21",
@@ -348,11 +348,11 @@ dependencies = [
 
 [[package]]
 name = "androidforge-test-support"
-version = "0.9.1"
+version = "0.9.2"
 
 [[package]]
 name = "androidforge-ui"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",

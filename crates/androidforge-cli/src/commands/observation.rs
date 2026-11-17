@@ -560,6 +560,18 @@ fn reference_for(node: &ObservationNode, length: usize) -> String {
 fn assign_references(observation: &mut Observation) {
     let mut references = BTreeMap::new();
     let mut used = BTreeSet::new();
+    // Full-hierarchy node copies do not carry compact context metadata. Keep
+    // the same `actionable_via` marker on every copy of a path so a ref works
+    // identically with and without `--full`.
+    let actionable_via = observation
+        .context
+        .iter()
+        .filter_map(|node| {
+            node.actionable_via
+                .as_ref()
+                .map(|via| (node.path.clone(), via.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
     for node in observation
         .actionable
         .iter()
@@ -600,10 +612,16 @@ fn assign_references(observation: &mut Observation) {
     }
     if let Some(node) = &mut observation.focused {
         assign(node);
+        if let Some(via) = actionable_via.get(&node.path) {
+            node.actionable_via = Some(via.clone());
+        }
     }
     if let Some(nodes) = &mut observation.nodes {
         for node in nodes {
             assign(node);
+            if let Some(via) = actionable_via.get(&node.path) {
+                node.actionable_via = Some(via.clone());
+            }
         }
     }
 }
@@ -617,9 +635,9 @@ pub fn find_reference<'a>(
         .actionable
         .iter()
         .chain(observation.scrollable.iter())
+        .chain(observation.context.iter())
         .chain(observation.focused.iter())
         .chain(observation.nodes.iter().flatten())
-        .chain(observation.context.iter())
         .find(|node| node.reference.as_deref() == Some(reference))
 }
 
@@ -1999,6 +2017,33 @@ mod tests {
             observation_path(&paths, "ses-a", "obs-20260101000000-abcdefabcdef")
                 .to_string_lossy()
                 .contains("obs-20260101000000-abcdefabcdef")
+        );
+    }
+
+    #[test]
+    fn full_observation_ref_keeps_context_ancestor_metadata() {
+        let mut observation = observation("obs-full-context", Vec::new());
+        let mut context = node("0.0", "7", bounds(10, 10, 90, 90));
+        context.clickable = false;
+        context.actionable_via = Some("ancestor".to_string());
+        let mut full = context.clone();
+        full.actionable_via = None;
+        observation.context.push(context);
+        observation.context_total = 1;
+        observation.nodes = Some(vec![full]);
+        assign_references(&mut observation);
+        let reference = observation.context[0]
+            .reference
+            .clone()
+            .expect("context reference");
+        let found = find_reference(&observation, &reference).expect("found");
+        assert_eq!(found.actionable_via.as_deref(), Some("ancestor"));
+        assert_eq!(
+            observation.nodes.as_ref().unwrap()[0]
+                .actionable_via
+                .as_deref(),
+            Some("ancestor"),
+            "full hierarchy copies must carry the same readiness metadata"
         );
     }
 

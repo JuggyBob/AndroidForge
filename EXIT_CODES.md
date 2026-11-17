@@ -67,6 +67,7 @@ Pipeline-style commands may return a successful HTTP-style envelope with `status
 | `E_SNAPSHOT_NOT_FOUND` | 4 | yes | The emulator snapshot does not exist. |
 | `E_SESSION_EXPIRED` | 4 | yes | Session metadata is unreadable, stale, or the device is gone. |
 | `E_SESSION_OWNERSHIP_MISMATCH` | 4 | yes | The session is not owned by the caller/owner, including destructive `session stop|release|restart`. |
+| `E_SESSION_PROJECT_MISMATCH` | 4 | yes | The session is bound to a different project. Use a session acquired for this project. |
 | `E_SESSION_NOT_FOUND` | 4 | yes | The session id does not exist. |
 | `E_OBSERVATION_NOT_FOUND` | 4 | yes | The observation token does not exist for this session or was pruned by retention. |
 | `E_OBSERVATION_EXPIRED` | 4 | yes | The observation is older than 24 hours or the device rebooted. Capture a fresh observation. |

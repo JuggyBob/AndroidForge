@@ -222,6 +222,10 @@ ui_text = "CURRENT STREAK"
 The UI expectation is polled until it passes or times out. A failed postcondition returns
 `E_HOOK_VERIFICATION_FAILED` and prevents the conformance from treating the hook as proof.
 
+`hook run` reports `verified` and `verification_state`. A hook without any `verify` block is
+`unverified` and carries a note that shell exit 0 does not prove the app route. This is deliberate:
+absence of a postcondition must not look like a verified app action.
+
 ## Conformance
 
 A conformance is a thin manifest, not a scripting language:
