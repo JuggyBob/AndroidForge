@@ -168,7 +168,25 @@ covered by the code path and unit test rather than a live forced-empty capture.
 - The local installer installed CLI/desktop `0.9.3` into a temporary directory and uninstalled
   cleanly; the install directory was removed.
 - The Scoop manifest points at `v0.9.3` and carries the desktop ZIP hash above.
-- Publication details are recorded after the release workflow completes.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.3>; title
+  `AndroidForge v0.9.3 - Contract and Coverage`; not a prerelease; marked latest.
+- Tag: annotated `v0.9.3`, tag object `a93b83b345d44af26f08ebfa11bf4901a961d556`, commit
+  `5b13dc7584e373f75506727d3a4474091a2ae640`; Release workflow `44169431634` and main CI
+  `44169426831` passed.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (5,206,668 bytes),
+    `711181b9eeb057969d246340f33a9f96ea28cfc9e66ee66b0d1a09cf30bf380c`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,974,001 bytes),
+    `2a171c4107df4656d39d0bbdec3b4af139d6d644c8c833b28e4083b069127e51`.
+  - `androidforge-windows-x86_64-setup.exe` (9,804,933 bytes),
+    `9c2a1dbd36f122965fe9a6f0bb9c0f28104c5b279ff4ecffdc3b2d72881fdc1d`.
+- The downloaded portable ZIP reported CLI/desktop `0.9.3`; `doctor --json` reported
+  `0.9.3 (report schema 1)`. The downloaded installer installed CLI/desktop `0.9.3` and uninstalled
+  cleanly with the install directory removed.
+- The downloaded desktop package was also run through `desktop/tests/smoke.ps1`: 13/13 pages passed,
+  UI Automation was available on every page and Refresh was invoked on overview.
+- v0.6.0-v0.9.2 releases, tags and assets remain intact; v0.9.2 still resolves to commit
+  `6363d4870fec14403e78a8dfd439e86918998386`.
 
 ## v0.9.2 verification (2026-11-17)
 
