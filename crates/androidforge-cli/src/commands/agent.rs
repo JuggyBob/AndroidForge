@@ -21,7 +21,7 @@ use crate::cli::{
     FixtureCommand, FixtureRunArgs, SessionEnsureArgs,
 };
 use crate::commands::common::success;
-use crate::commands::{app, automation, session};
+use crate::commands::{apk, app, automation, session};
 use crate::context::CliContext;
 
 pub async fn agent(cli: &Cli, command: &AgentCommand) -> Result<CommandSuccess> {
@@ -38,6 +38,7 @@ struct RunState {
     session: Option<Session>,
     device: Option<Device>,
     apk: Option<ApkInfo>,
+    resolved_apk: Option<Value>,
     installed_matches: Option<bool>,
     failure: Option<(String, ForgeError)>,
 }
@@ -52,6 +53,7 @@ impl RunState {
             session: None,
             device: None,
             apk: None,
+            resolved_apk: None,
             installed_matches: None,
             failure: None,
         }
@@ -410,6 +412,7 @@ fn finalize(ctx: &CliContext, mut state: RunState) -> Result<CommandSuccess> {
         "session": session_value,
         "device": device_value,
         "apk": state.apk,
+        "resolved_apk": state.resolved_apk,
         "stages": state.stages,
         "installed_build_matches_apk": state.installed_matches,
         "final_status": final_status,
@@ -544,15 +547,16 @@ fn pipeline_failure(cli: &Cli, stage: &str, error: ForgeError) -> Result<Command
 }
 
 async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
-    if args.apk.is_none() && args.flow.is_none() && args.fixture.is_none() {
+    if args.apk.is_none() && args.variant.is_none() && args.flow.is_none() && args.fixture.is_none()
+    {
         return pipeline_failure(
             cli,
             "validate_request",
             ForgeError::invalid_argument(
-                "agent test needs at least one of --apk, --flow or --fixture",
+                "agent test needs at least one of --apk, --variant, --flow or --fixture",
             )
             .with_suggestion(
-                "Provide an APK to install or inspect, a conformance flow, or a fixture.",
+                "Provide an APK or variant to install or inspect, a conformance flow, or a fixture.",
             )
             .with_suggestion("Use `androidforge context --json` for a read-only snapshot."),
         );
@@ -827,8 +831,74 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
         );
         state.device = Some(device.clone());
 
+        let resolution_started = Instant::now();
+        let mut resolved_apk = None;
+        let apk_path = if let Some(path) = &args.apk {
+            let path = absolute(&ctx, path);
+            if let Some(variant) = &args.variant {
+                state.warnings.push(format!(
+                    "--apk takes precedence over --variant {variant}; automatic APK resolution was skipped."
+                ));
+            }
+            state.stage(
+                "resolve_apk",
+                "skipped",
+                resolution_started,
+                Vec::new(),
+                json!({"reason": "An explicit --apk path was supplied."}),
+            );
+            Some(path)
+        } else if let Some(variant) = &args.variant {
+            let argv = vec![
+                "androidforge".to_string(),
+                "apk".to_string(),
+                "resolve".to_string(),
+                "--variant".to_string(),
+                variant.clone(),
+                "--json".to_string(),
+            ];
+            match apk::resolve_variant(&ctx, variant, None).await {
+                Ok(resolution) => {
+                    state.warnings.extend(resolution.warnings.clone());
+                    state.stage(
+                        "resolve_apk",
+                        "passed",
+                        resolution_started,
+                        argv,
+                        json!({
+                            "variant": resolution.variant,
+                            "path": resolution.selected.path,
+                            "relative_path": resolution.selected.relative_path,
+                            "sha256": resolution.selected.sha256,
+                            "package": resolution.selected.package,
+                            "version_name": resolution.selected.version_name,
+                            "version_code": resolution.selected.version_code,
+                            "rule": resolution.selected.rule,
+                            "modified_at": resolution.selected.modified_at,
+                            "considered": resolution.considered,
+                        }),
+                    );
+                    let path = PathBuf::from(&resolution.selected.path);
+                    resolved_apk = Some(serde_json::to_value(&resolution.selected)?);
+                    Some(path)
+                }
+                Err(error) => {
+                    state.fail("resolve_apk", resolution_started, argv, error);
+                    break 'pipeline;
+                }
+            }
+        } else {
+            state.stage(
+                "resolve_apk",
+                "skipped",
+                resolution_started,
+                Vec::new(),
+                json!({"reason": "No --apk or --variant was supplied."}),
+            );
+            None
+        };
+        state.resolved_apk = resolved_apk;
         let apk_started = Instant::now();
-        let apk_path = args.apk.as_ref().map(|path| absolute(&ctx, path));
         let apk = if let Some(path) = &apk_path {
             let argv = vec![
                 "androidforge".to_string(),
@@ -968,6 +1038,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                 expected_package: None,
                 expected_cert_sha256: None,
                 timeout: None,
+                only_if_changed: false,
             };
             match app::install(&ctx, &install_args).await {
                 Ok(installed) => {
@@ -1198,7 +1269,72 @@ async fn dry_run(
     );
 
     let apk_started = Instant::now();
-    let apk_path = args.apk.as_ref().map(|path| absolute(ctx, path));
+    let mut resolved_apk = None;
+    let apk_path = if let Some(path) = &args.apk {
+        if let Some(variant) = &args.variant {
+            state.warnings.push(format!(
+                "--apk takes precedence over --variant {variant}; automatic APK resolution was skipped."
+            ));
+        }
+        state.stage(
+            "resolve_apk",
+            "skipped",
+            Instant::now(),
+            Vec::new(),
+            json!({"reason": "An explicit --apk path was supplied."}),
+        );
+        Some(absolute(ctx, path))
+    } else if let Some(variant) = &args.variant {
+        let argv = vec![
+            "androidforge".to_string(),
+            "apk".to_string(),
+            "resolve".to_string(),
+            "--variant".to_string(),
+            variant.clone(),
+            "--json".to_string(),
+        ];
+        match apk::resolve_variant(ctx, variant, None).await {
+            Ok(resolution) => {
+                state.warnings.extend(resolution.warnings.clone());
+                state.stage(
+                    "resolve_apk",
+                    "passed",
+                    Instant::now(),
+                    argv,
+                    json!({
+                        "variant": resolution.variant,
+                        "path": resolution.selected.path,
+                        "relative_path": resolution.selected.relative_path,
+                        "sha256": resolution.selected.sha256,
+                        "package": resolution.selected.package,
+                        "version_name": resolution.selected.version_name,
+                        "version_code": resolution.selected.version_code,
+                        "rule": resolution.selected.rule,
+                        "modified_at": resolution.selected.modified_at,
+                        "considered": resolution.considered,
+                        "read_only": true,
+                    }),
+                );
+                let path = PathBuf::from(&resolution.selected.path);
+                resolved_apk = Some(serde_json::to_value(&resolution.selected)?);
+                Some(path)
+            }
+            Err(error) => {
+                state.fail("resolve_apk", Instant::now(), argv, error);
+                return finalize(ctx, state);
+            }
+        }
+    } else {
+        state.stage(
+            "resolve_apk",
+            "skipped",
+            Instant::now(),
+            Vec::new(),
+            json!({"reason": "No --apk or --variant was supplied."}),
+        );
+        None
+    };
+    state.resolved_apk = resolved_apk;
     let apk = if let Some(path) = &apk_path {
         match ctx.inspector().inspect(path, false).await {
             Ok(apk) => {
@@ -1462,6 +1598,9 @@ fn dry_run_execute_argv(ctx: &CliContext, args: &AgentTestArgs) -> Vec<String> {
     ];
     if let Some(apk) = &args.apk {
         argv.extend(["--apk".to_string(), apk.to_string_lossy().into_owned()]);
+    }
+    if let Some(variant) = &args.variant {
+        argv.extend(["--variant".to_string(), variant.clone()]);
     }
     if let Some(session) = &args.session_id {
         argv.extend(["--session-id".to_string(), session.clone()]);

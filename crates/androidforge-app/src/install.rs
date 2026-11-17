@@ -8,6 +8,7 @@ use androidforge_core::util::{normalize_fingerprint, sha256_file};
 use serde::{Deserialize, Serialize};
 
 use crate::apk::{ApkInfo, ApkInspector};
+use crate::diff::{ApkDiff, Equivalence, compare, inspect_installed};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InstalledPackage {
@@ -52,6 +53,9 @@ pub struct InstallOptions {
     pub confirmed: bool,
     pub allow_downgrade: bool,
     pub verify_installed: bool,
+    /// Skip the install when the candidate is provably byte-equivalent to the
+    /// installed base APK and the split shape is known.
+    pub only_if_changed: bool,
     pub expected_package: Option<String>,
     /// Packages the adapter accepts for this install. Usually the release and
     /// debug application ids, which legitimately differ.
@@ -70,6 +74,7 @@ impl InstallOptions {
             confirmed: false,
             allow_downgrade: false,
             verify_installed: true,
+            only_if_changed: false,
             expected_package: None,
             allowed_packages: Vec::new(),
             expected_cert_sha256: Vec::new(),
@@ -83,6 +88,14 @@ pub struct InstallResult {
     pub apk: ApkInfo,
     pub build: BuildIdentity,
     pub installed: InstalledPackage,
+    #[serde(default)]
+    pub skipped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<ApkDiff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature_diagnosis: Option<SignatureDiagnosis>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -95,6 +108,14 @@ pub async fn install(
     serial: &str,
     options: &InstallOptions,
 ) -> Result<InstallResult> {
+    if options.fresh && options.only_if_changed {
+        return Err(ForgeError::invalid_argument(
+            "--fresh uninstalls the application; it cannot be combined with --only-if-changed",
+        )
+        .with_suggestion(
+            "Use --only-if-changed alone to preserve data and skip equivalent installs.",
+        ));
+    }
     if options.fresh && !options.confirmed {
         return Err(ForgeError::new(
             ErrorCode::InvalidArgument,
@@ -172,6 +193,80 @@ pub async fn install(
     }
 
     let existing = installed_package(adb, serial, &package).await?;
+    let mut only_if_changed_diff = None;
+    let mut only_if_changed_reason = None;
+    if options.only_if_changed {
+        match &existing {
+            None => {
+                only_if_changed_reason = Some("not_installed".to_string());
+            }
+            Some(existing_package) => {
+                match inspect_installed(adb, inspector, serial, &package).await {
+                    Ok(Some(identity)) => {
+                        let diff = compare(&apk, &identity);
+                        if diff.safe_to_skip_install {
+                            let build = BuildIdentity {
+                                package: Some(package.clone()),
+                                version_name: existing_package
+                                    .version_name
+                                    .clone()
+                                    .or(diff.installed.version_name.clone()),
+                                version_code: existing_package
+                                    .version_code
+                                    .or(diff.installed.version_code),
+                                apk_path: Some(options.apk_path.to_string_lossy().into_owned()),
+                                apk_sha256: Some(apk.sha256.clone()),
+                                installed_apk_path: Some(diff.installed.base_remote_path.clone()),
+                                installed_apk_sha256: Some(diff.installed.base_apk.sha256.clone()),
+                                cert_sha256: diff
+                                    .installed
+                                    .base_apk
+                                    .signature
+                                    .cert_sha256
+                                    .clone()
+                                    .or_else(|| apk.signature.cert_sha256.clone()),
+                                debug_signed: apk.signature.debug_signed(),
+                                verified: true,
+                                notes: diff.warnings.clone(),
+                            };
+                            let mut warnings = vec![
+                                "Installation was skipped because the candidate APK is byte-equivalent to the installed base APK."
+                                    .to_string(),
+                            ];
+                            warnings.extend(diff.warnings.clone());
+                            return Ok(InstallResult {
+                                apk,
+                                build,
+                                installed: existing_package.clone(),
+                                skipped: true,
+                                decision: Some("skipped".to_string()),
+                                reason: Some(
+                                    "candidate package, version and base APK SHA-256 match the installed application"
+                                        .to_string(),
+                                ),
+                                diff: Some(diff),
+                                signature_diagnosis: None,
+                                warnings,
+                            });
+                        }
+                        only_if_changed_reason = Some(match diff.overall {
+                            Equivalence::Different => "content_different".to_string(),
+                            Equivalence::Unknown => "identity_unknown".to_string(),
+                            Equivalence::Same => "split_identity_unknown".to_string(),
+                        });
+                        only_if_changed_diff = Some(diff);
+                    }
+                    Ok(None) => {
+                        only_if_changed_reason = Some("installed_apk_unavailable".to_string());
+                    }
+                    Err(error) => {
+                        only_if_changed_reason =
+                            Some(format!("installed_apk_uninspectable: {}", error.message()));
+                    }
+                }
+            }
+        }
+    }
     if options.fresh && existing.is_some() {
         let output = adb
             .run_checked(
@@ -302,6 +397,14 @@ pub async fn install(
             .device(serial.to_string()));
         }
     }
+    if only_if_changed_reason.as_deref().is_some_and(|reason| {
+        reason.starts_with("identity_unknown") || reason.contains("uninspectable")
+    }) {
+        warnings.push(
+            "AndroidForge could not prove the installed build equivalent, so it installed rather than skipping. The reason is recorded in the result."
+                .to_string(),
+        );
+    }
 
     let build = BuildIdentity {
         package: Some(package.clone()),
@@ -324,6 +427,10 @@ pub async fn install(
         apk,
         build,
         installed,
+        skipped: false,
+        decision: options.only_if_changed.then(|| "installed".to_string()),
+        reason: only_if_changed_reason,
+        diff: only_if_changed_diff,
         signature_diagnosis: None,
         warnings,
     })

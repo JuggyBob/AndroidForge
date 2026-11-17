@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/apk-resolution.schema.json",
+  "title": "AndroidForge APK resolution and diff",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "variant": { "type": "string" },
+    "module": { "type": ["string", "null"] },
+    "patterns": { "type": "array", "items": { "type": "string" } },
+    "considered": { "type": "integer", "minimum": 0 },
+    "selected": { "$ref": "#/$defs/apk" },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "rule": { "type": ["string", "null"] },
+          "reason": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "apk": {
+      "type": "object",
+      "required": ["path", "relative_path", "sha256", "size_bytes"],
+      "properties": {
+        "path": { "type": "string" },
+        "relative_path": { "type": "string" },
+        "variant": { "type": "string" },
+        "module": { "type": ["string", "null"] },
+        "rule": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "modified_at": { "type": "string", "format": "date-time" },
+        "sha256": { "type": "string" },
+        "package": { "type": ["string", "null"] },
+        "version_name": { "type": ["string", "null"] },
+        "version_code": { "type": ["integer", "null"] },
+        "cert_sha256": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

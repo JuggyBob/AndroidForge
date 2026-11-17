@@ -1,8 +1,93 @@
 # Verification record
 
-This document records what was actually run for the `0.5.0` Alpha delivery, followed by the historical
+This document records what was actually run for the `0.6.0` Alpha delivery, followed by the `0.5.0`,
 `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
 validation and packaging validation from areas that were not exercised.
+
+## v0.6.0 verification (2026-11-17)
+
+### Scope
+
+Agent Memory: action receipts, failure recurrence memory, APK/build resolution and comparison,
+diagnostic bundles, and desktop Context/Ownership/Triage integration. The starting v0.5.0 state is
+preserved by the pre-v0.6.0 backup at
+`A:\Projects\Archive\Backups\AndroidForge\20261117-071338`.
+
+### Automated checks
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --workspace` | 219 passed, 0 failed across 25 test executables. |
+| `cargo build --workspace --release` | Passed. |
+| New unit tests | 10 recurrence, 7 receipt classification, 6 bundle/archive safety, 4 APK glob resolution, 4 APK diff, 2 desktop model/context, plus CLI integration coverage for recurrence/history/explain/bundle and malformed APK resolution. |
+| Compatibility tests | Existing v0.5.0 CLI tests, desktop backend tests and workspace tests all passed. Plain UI actions without `--receipt` still return their previous shape. |
+
+### Real Android validation
+
+Environment: Android 16 / API 36 emulator `emulator-5554`, session `ses-a4465e206322`, owner
+`v06-verify`, CalcSuite installed (`com.calcsuite` 3.0.3 / versionCode 7).
+
+- `ui tap --content-desc Settings --receipt` returned `effect=content_changed`,
+  `completeness=complete`, distinct before/after tokens and `added=26 removed=25`.
+- `ui text "1+2" --wait-for-value "1+2" --receipt` returned `postcondition.result=satisfied` and
+  `completeness=complete`.
+- `ui text "7" --wait-for-value never-this-value --timeout 1s --receipt` exited 7 with
+  `E_POSTCONDITION_TIMEOUT`, `dispatched=true`, `postcondition.result=timed_out`,
+  `completeness=incomplete` and an after token.
+- A missing selector with `--receipt` exited 7 with `E_SELECTOR_NOT_FOUND`, `dispatched=false`,
+  `completeness=incomplete`, `effect=unknown` and a before token.
+- The same tap without `--receipt` returned the legacy keys only (`matched`, `tap_x`, `tap_y`,
+  `used_clickable_ancestor`, `display_size`, `rotation`) with no `receipt` field.
+- `apk diff installed:com.calcsuite <pulled installed base.apk>` reported `overall=same`,
+  `safe_to_skip_install=true`, with package/version/hash/certificate/SDK/activity/split fields all
+  `same`.
+- `app install <pulled installed base.apk> --only-if-changed` returned `skipped=true`,
+  `decision=skipped`, `diff=same` and the documented reason.
+- `app install <DiscountHunter release APK> --only-if-changed --expected-package ...` installed with
+  `decision=installed`, `reason=not_installed`; the test package was explicitly uninstalled afterwards.
+- `report bundle` on the real failed run `20261117-065835-a65d76ff_ui-tap` produced a 24,403-byte ZIP
+  with 9 payloads, 10 explicit exclusions, `verified=true`; the ZIP reopened and manifest/
+  summary/explanation/evidence/logcat entries were present.
+- Recurrence integration tests covered new, recurring, fixed-then-regressed, unrelated success,
+  non-exercising success, cross-project isolation, version changes and status/fingerprint filters.
+
+### Desktop validation
+
+- Desktop built and launched with `title=AndroidForge`, `responding=True`, and closed gracefully.
+- The Context page rendered real project/session/device/app data from the CLI (`CalcSuite`,
+  `ses-a4465e206322`, `emulator-5554`, `com.calcsuite` 3.0.3).
+- The Ownership page rendered active sessions, owners, device ownership, stale active count and
+  tombstones with copyable safe commands. It has no stop/release control.
+- Triage rendered the deterministic explanation, recurrence panel and diagnostic bundle panel. Windows
+  UI Automation invoked `Preview inclusion` against the real CLI; the page displayed 9 payloads,
+  16,405 bytes and 10 exclusions.
+- `androidforge-desktop.exe --page <name>` was added to open a page directly for diagnostics; invalid
+  page names exit 2.
+
+### Packaging and publication (pre-publication)
+
+- `.\\packaging\\package.ps1 -SkipBuild` produced:
+  - `androidforge-cli-windows-x86_64.zip` (4,759,890 bytes), SHA-256
+    `a275dff8d70eda0efcc29eb7493f5daa7dc33572b20f26a5d6a1ae6237ec0b7f`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,452,541 bytes), SHA-256
+    `76d9fc1e66d5480792f1fce7f649151a08334c6a5079e65a37b3440dc2d2f1f8`.
+  - `androidforge-windows-x86_64-setup.exe` (9,465,475 bytes), SHA-256
+    `31c26e4569d4bb4e4128ed2849123f0036919af524a7eeb04192abbef082b5fc`.
+- The portable ZIP was extracted into a clean directory; CLI and desktop reported `0.6.0`; new help
+  pages loaded; the desktop launched with title `AndroidForge` and stayed responsive.
+- The installer installed CLI/desktop `0.6.0` and uninstalled cleanly with the install directory removed.
+- All three local asset SHA-256 values matched `SHA256SUMS.txt`. Published-asset download results are
+  appended after publication.
+
+### Not exercised
+
+- Physical Android devices, wireless ADB, Maestro, a real instrumentation package, snapshot restore,
+  root-only time changes, vendor ROMs, and desktop layouts other than the tested Windows scale.
+- Receipt classification for system permission dialogs on a non-Android-16 vendor ROM.
+- Split APK installs: comparison correctly reports their identity as unknown and refuses to skip.
+- Screenshot/recording pixel redaction when explicitly included in a bundle.
 
 ## v0.5.0 verification (2026-11-16)
 
@@ -318,9 +403,3 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
-
-
-
-
-
-

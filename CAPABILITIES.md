@@ -21,12 +21,17 @@
 | `context` | supported | local state, optional adb | Compact project/session/device/app/screen/run snapshot with partial results and argv next actions. |
 | `ui.observation` | supported | adb, uiautomator | Compact semantic observations, session/boot-scoped tokens, semantic diffs and `--full` hierarchy. |
 | `ui.postconditions` | supported | adb, uiautomator | One action plus observation polling; no hidden action retries. |
+| `ui.receipts` | supported | adb, uiautomator | Before/after tokens, semantic diff, deterministic effect classification and explicit completeness. |
 | `diagnosis.explain` | supported | local reports | Deterministic categories, confidence, evidence, stable fingerprints and exact argv next actions. No LLM. |
+| `diagnosis.recurrence` | supported | local reports | Project-scoped new/recurring/regressed/unknown memory derived from existing run reports; no second database. |
+| `diagnostics.bundle` | supported | local reports | Redacted, size-bounded, checksummed ZIP plus Markdown/JSON evidence summaries and dry-run preview. |
 | `repair.plan` | supported | local toolchain | Strictly read-only environment repair planning; does not install or edit anything. |
 | `agent.pipeline` | supported | adb, project adapter | Transparent ensure/inspect/install/fixture/conformance/explain stages with dry-run. |
 | `apk.inspect` | supported | aapt2 | Package, version, SDKs, label, launchable activity, architectures, hash. |
 | `apk.verify` | supported | aapt2, apksigner, Java | Local signature verification. No signing automation. |
-| `app.install` | supported | adb | Signature-aware diagnostics; never auto-uninstalls. |
+| `apk.resolve` | supported | aapt2, project config | Deterministic newest valid variant output; never runs Gradle; ambiguity is explicit. |
+| `apk.diff` | supported | adb, aapt2 | Pulls the installed base APK and reports same/different/unknown including split limitations. |
+| `app.install` | supported | adb | Signature-aware diagnostics; `--only-if-changed` requires proven equivalence; never auto-uninstalls. |
 | `ui.uiautomator` | supported | adb, uiautomator | Compose semantics only when exposed through accessibility. |
 | `capture.screenshot` | supported | adb | Binary PNG via `exec-out`; no console redirection. |
 | `capture.recording` | best-effort | adb, screenrecord | Android's 180-second limit; no audio. |
@@ -48,12 +53,13 @@
 `androidforge-desktop.exe` is a separate native executable, so it is not reported by
 `androidforge capabilities --json`. Its scope is deliberately narrower than the CLI:
 
-- P0 read-only: project selection, environment/doctor summary, devices, sessions, report-backed runs,
-  run details/build identity/steps/failure, evidence (screenshots, hierarchy/log text), raw
-  `report.json`/`metadata.json`/`manifest.json` and manifest verification.
+- P0 read-only: project selection, environment/doctor summary, Context, Ownership, devices, sessions,
+  report-backed runs, run details/build identity/steps/failure, evidence (screenshots, hierarchy/log
+  text), raw `report.json`/`metadata.json`/`manifest.json` and manifest verification.
 - P1 controlled actions: session start/attach/release/stop/restart, APK inspect/dry-run/install,
   fixture/conformance/hook launch, streamed output, and cancellation for installs/fixtures/conformance/
-  hooks. Session lifecycle operations run to completion.
+  hooks. Session lifecycle operations run to completion. Triage also previews and creates diagnostic
+  bundles through the CLI; recurrence is shown with the explanation.
 - CLI resolution and schema probing: explicit path, sidecar, workspace build, then `PATH`; unknown report
   schemas are refused.
 - Native Rust/egui/eframe/glow only; no WebView, HTML, JavaScript, Node or bundled browser.
@@ -87,7 +93,7 @@
 
 ### Apps and APKs
 
-- `apk inspect|verify`.
+- `apk inspect|verify|resolve|diff`.
 - `app install|uninstall|clear-data|launch|force-stop|kill|status|info|list|file-push|file-pull|data-backup|data-restore`.
 - `permissions check|grant|revoke`.
 - `appops get|set|reset`.
@@ -98,14 +104,18 @@
 - `ui observe` returns compact semantics and a session/boot-scoped token; `ui diff` compares tokens.
 - `tap`, `long-press`, `text` and `scroll` accept `--wait-for-text`, `--wait-for-absent-text`,
   `--wait-for-value`, `--wait-for-package`, `--wait-for-activity` and `--timeout` postconditions.
+- The same actions accept `--receipt` / `--receipt-full` for before/after tokens, semantic diff,
+  deterministic effect classification and explicit completeness.
 
 ### Agent loop and repair
 
 - `report explain <run|latest>` with `--full` and `--markdown`; deterministic categories, evidence,
-  fingerprints and exact argv next actions.
+  fingerprints, recurrence and exact argv next actions.
+- `report history --fingerprint`, `report recurrences` with project/package/status/device/version/since
+  filters, and `report bundle` with ZIP/Markdown/JSON, dry-run preview and explicit media opt-ins.
 - `doctor fix --plan|--check`; strictly read-only repair planning.
-- `agent test` with `--dry-run`, `--apk`, `--session-id`, `--avd`, `--serial`, `--owner`, `--profile`,
-  `--ttl`, `--install`, `--flow` and `--fixture`.
+- `agent test` with `--dry-run`, `--apk`, `--variant`, `--session-id`, `--avd`, `--serial`, `--owner`,
+  `--profile`, `--ttl`, `--install`, `--flow` and `--fixture`.
 
 ### Evidence and diagnostics
 
@@ -144,4 +154,4 @@
 
 ## Verified versus unverified
 
-The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery introduced and exercised the agent loop: compact context, semantic observations and diffs, postconditions, session ensure, read-only repair planning, deterministic explanations and the agent pipeline. The `0.5.0` delivery fixed the issues reported by three independent app agents: shared-host port selection, UIAutomator recovery, pipeline status, project-scoped run discovery, observation shape, compact diffs, selector guidance, desktop help/version and session project binding. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.
+The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery introduced and exercised the agent loop: compact context, semantic observations and diffs, postconditions, session ensure, read-only repair planning, deterministic explanations and the agent pipeline. The `0.5.0` delivery fixed the issues reported by three independent app agents: shared-host port selection, UIAutomator recovery, pipeline status, project-scoped run discovery, observation shape, compact diffs, selector guidance, desktop help/version and session project binding. The `0.6.0` delivery added and exercised action receipts on a real emulator, real installed-APK diff/only-if-changed, recurrence classification, redacted bundle creation/verification and the Context/Ownership desktop pages. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.

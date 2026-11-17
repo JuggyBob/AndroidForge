@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/bundle.schema.json",
+  "title": "AndroidForge diagnostic bundle manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "bundle_id",
+    "created_at",
+    "run_id",
+    "redaction_enabled",
+    "format",
+    "entries",
+    "excluded",
+    "total_payload_bytes",
+    "checksums_verified"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "bundle_id": { "type": "string", "pattern": "^bundle-" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "tool_version": { "type": "string" },
+    "run_id": { "type": "string" },
+    "project": { "type": "string" },
+    "project_root": { "type": "string" },
+    "source_run_dir": { "type": "string" },
+    "redaction_enabled": { "type": "boolean" },
+    "format": { "enum": ["zip", "json", "markdown"] },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "kind", "size_bytes", "sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "kind": { "type": "string" },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "source": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "excluded": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "kind", "reason"],
+        "properties": {
+          "source": { "type": "string" },
+          "kind": { "type": "string" },
+          "reason": { "type": "string" },
+          "size_bytes": { "type": ["integer", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "total_payload_bytes": { "type": "integer", "minimum": 0 },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "checksums_verified": { "type": "boolean" },
+    "original_run_modified": { "const": false }
+  }
+}

@@ -29,7 +29,7 @@ cargo build --workspace --release
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
-## 2.1 Agent loop commands (v0.5.0)
+## 2.1 Agent loop commands (v0.6.0)
 
 These commands reduce repeated discovery and inspection. They keep the same JSON envelope, exit codes
 and evidence rules as the rest of the CLI.
@@ -83,7 +83,7 @@ tokens are session-scoped, boot-id-scoped, kept in the local AndroidForge state 
 after 24 hours or the per-session retention limit. A reboot or cross-session token returns
 `E_OBSERVATION_EXPIRED` or `E_OBSERVATION_SESSION_MISMATCH`.
 
-### Action postconditions
+### Action receipts and postconditions
 
 ```powershell
 androidforge ui tap --session <ID> --text "Save" --wait-for-text "Saved" --timeout 10 --json
@@ -95,6 +95,54 @@ androidforge ui scroll --session <ID> --direction down --wait-for-text "More" --
 Conditions are ANDed. The action executes once; only observations are polled. A timeout returns
 `E_POSTCONDITION_TIMEOUT` with `action_executed: true`, unsatisfied conditions, current foreground state,
 the timeout and evidence. Actions are never retried automatically.
+
+Add `--receipt` to tap, long-press, text or scroll to get the before/after observation tokens, compact
+semantic diff, effect classification and completeness in the same response. `--receipt-full` expands
+node lists. Receipt-enabled timeouts preserve the action result in `error.context.receipt`; a selector
+failure shows `dispatched: false`.
+
+### Failure recurrence and diagnostic bundles
+
+```powershell
+androidforge report recurrences --project . --json
+androidforge report recurrences --project . --since 30d --package com.example.app --status regressed --json
+androidforge report history --fingerprint sha256:<VALUE> --json
+androidforge report bundle latest --output .\evidence.zip --json
+androidforge report bundle latest --dry-run --json
+androidforge report bundle latest --markdown --json
+```
+
+Recurrence memory derives `new`, `recurring`, `regressed` or `unknown` from existing local reports.
+A passing run counts as resolution only when it exercised the same project/scenario/failing step.
+Bundles include a redacted summary, explanation, reproduction argv, evidence excerpts, bounded logcat,
+hierarchy XML, checksums and an exclusion list. Screenshots, recordings and full raw logs are opt-in.
+ZIPs are written atomically and reopened for checksum verification before success is reported.
+
+### APK resolution and comparison
+
+```powershell
+androidforge apk resolve --variant debug --json
+androidforge apk resolve --variant freeDebug --module app --json
+androidforge agent test --project . --variant debug --flow conformance --json
+androidforge apk diff installed:com.example.app .\app-debug.apk --session <ID> --json
+androidforge app install .\app-debug.apk --only-if-changed --json
+```
+
+Configuration is optional:
+
+```toml
+[build]
+default_variant = "debug"
+
+[build.variants]
+debug = ["app/build/outputs/apk/debug/*.apk"]
+"freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
+```
+
+Resolution never runs Gradle. It selects the newest valid APK and reports the matched rule, mtime,
+SHA-256 and certificate. Equal timestamps with different content are an ambiguity error. An explicit
+`--apk` wins over `--variant`. `--only-if-changed` skips only when package, version code, base APK hash
+and split shape prove equivalence; unknown identity installs rather than silently skipping.
 
 ### Failure explanations
 
@@ -163,15 +211,22 @@ Overview error banner and in Settings.
 ### Pages
 
 - **Overview** — environment status, devices/sessions/runs counters, recent runs and CLI resolution.
+- **Context** — one read-only CLI `context` snapshot: project, active session/owner, device, installed
+  app, current screen, last run, warnings and copyable next commands. Refresh is explicit and the
+  snapshot age is shown.
 - **Devices** — selectable device table with serial, model, Android version, state, battery and owner;
   details include boot state, AVD, port, architecture and resolution.
 - **Sessions** - selectable session table with owner, heartbeat, state, advisory lease and project
   binding; details show prepared settings and expose `Release`, `Stop`, `Restart`, `Use as target` and
   `Install APK`. Released/abandoned tombstones are read-only.
+- **Ownership** — read-only dashboard of active sessions, device owners, stale active leases, tombstones
+  and safe alternative commands when a device is occupied. It never stops or releases another owner's
+  session.
 - **Runs** - report-backed runs, project hooks and `Run project flow`. Selecting `Open` or a row shows
   build identity, steps, failure details and evidence.
-- **Triage** - failure metadata, evidence, flaky analysis and the v0.5.0 deterministic explanation:
-  category, confidence, summary, fingerprint, curated evidence and copyable next-action commands. The
+- **Triage** - failure metadata, evidence, flaky analysis, deterministic explanation with recurrence
+  memory and stored occurrences, plus a diagnostic-bundle inclusion preview and ZIP creation. Category,
+  confidence, summary, fingerprint, curated evidence and copyable next-action commands are shown. The
   commands are never executed by the desktop.
 - **Setup** - the environment section builds the same read-only `doctor fix --plan` result as the CLI,
   lists blocking/recommended/optional issues and offers copyable repair commands without changing the
@@ -249,6 +304,13 @@ default = "smoke"
 
 [conformance]
 flow = ".androidforge/conformance/release-smoke.toml"
+
+[build]
+default_variant = "debug"
+
+[build.variants]
+debug = ["app/build/outputs/apk/debug/*.apk"]
+"freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
 ```
 
 The adapter is optional for `doctor`, `devices`, `avd` and raw ADB, but required for package fallbacks, fixtures, hooks and conformance. See [PROJECT_ADAPTER.md](PROJECT_ADAPTER.md) for every section.
@@ -332,6 +394,37 @@ androidforge apk verify .\app-debug.apk --expected-cert-sha256 <64-hex> --expect
 ```
 
 Inspection reports package, versions, min/target SDK, label, launchable activity, architectures, size, SHA-256 and signature details. Verification returns `E_SIGNATURE_VERIFICATION_FAILED` on a bad certificate and `E_APK_INVALID` on an unreadable APK.
+
+### Variant resolution, diff and only-if-changed
+
+```powershell
+androidforge apk resolve --variant debug --json
+androidforge apk resolve --variant freeDebug --module app --json
+androidforge apk diff installed:com.example.app .\app-debug.apk --session <ID> --json
+androidforge app install .\app-debug.apk --session <ID> --only-if-changed --json
+```
+
+`apk resolve` is deterministic and read-only. It never invokes Gradle. Configure explicit outputs, or
+rely on conventional `app/build/outputs/apk` layouts when no variant patterns are configured:
+
+```toml
+[build]
+default_variant = "debug"
+
+[build.variants]
+debug = ["app/build/outputs/apk/debug/*.apk"]
+"freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
+```
+
+The newest valid APK wins. Malformed APKs are rejected with reasons; equal timestamps and different
+hashes return an ambiguity error; the selected rule, mtime, hash and certificate are reported. An
+explicit `--apk` always wins over `--variant`.
+
+`apk diff` reports each field as `same`, `different` or `unknown`. It pulls the installed base APK to a
+temporary directory and cleans it up. Split installations cannot be proven wholly equivalent from the
+base APK. `--only-if-changed` skips installation only when package, version code, base APK SHA-256 and
+split shape prove equivalence; otherwise it installs and records the reason. It never uninstalls, clears
+data or downgrades automatically.
 
 ### Install and build identity
 
@@ -516,6 +609,38 @@ installed package/version once and marks hash/certificate verification false.
 `.artifacts/runs` directories under the project tree. This makes a conformance run under
 `examples/<App>/.artifacts/runs` inspectable from the repository root without `--project`.
 
+### Recurrence memory
+
+```powershell
+androidforge report recurrences --project . --json
+androidforge report recurrences --project . --since 30d --json
+androidforge report recurrences --project . --package com.example.app --device emulator-5554 --json
+androidforge report recurrences --project . --status regressed --json
+androidforge report history --fingerprint sha256:<VALUE> --json
+```
+
+Recurrence is derived from stored run reports, not a second database. It reports first/last seen,
+occurrence count, run ids, devices, app versions, evidence references and `currently_resolved`.
+Statuses are `new`, `recurring`, `regressed` and `unknown`. A passing run only proves resolution when it
+ran after the failure in the same project/scenario and contains the same failing step as a success. Use
+`--all-projects` to aggregate every discovered local artifact store.
+
+### Diagnostic bundles
+
+```powershell
+androidforge report bundle latest --output .\evidence.zip --json
+androidforge report bundle <RUN_ID> --dry-run --json
+androidforge report bundle <RUN_ID> --markdown --json
+androidforge report bundle <RUN_ID> --format json --json
+androidforge report bundle <RUN_ID> --include-screenshots --include-recordings --json
+```
+
+The ZIP contains a summary, Markdown explanation, exact invocation argv when the run recorded it,
+selected evidence excerpts, bounded logcat, hierarchy XML, `manifest.json` checksums and excluded
+artifacts with reasons. Text is redacted; pairing codes are removed explicitly. Media and full raw logs
+are opt-in. The original run directory is never modified. The ZIP is written atomically and reopened to
+verify every payload checksum before success is reported. `--dry-run` is the inclusion preview.
+
 For one existing script:
 
 ```powershell
@@ -629,7 +754,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.5.0` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.6.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents
@@ -644,5 +769,3 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 8. Treat `--yes`, `--fresh`, `clear-data`, snapshot load, time/network changes and raw ADB as destructive.
 9. In the desktop, check the selected project/session in every confirmation; closing the app does not
    release or stop anything. Cancelling a run preserves the emulator.
-
-

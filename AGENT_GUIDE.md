@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.5.0 agent loop
+## 0. The v0.6.0 agent loop
 
 The shortest reliable loop is:
 
@@ -11,15 +11,17 @@ androidforge doctor --json
 androidforge context --project . --json
 androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
 androidforge ui observe --session ses-... --json
-androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --timeout 10 --json
+androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --receipt --json
 androidforge report explain latest --json
+androidforge report recurrences --project . --json
+androidforge report bundle latest --output .\\evidence.zip --json
 androidforge context --session ses-... --json
 androidforge session release --session ses-... --owner MyAgent --json
 ```
 
 The commands answer, in order: is the host ready, what is the project/device state, which session do I
-own, what is on screen, did my action produce the expected result, why did the last run fail, and what
-changed since I started.
+own, what is on screen, did my action produce the expected result and what changed, why did the last
+run fail, whether that failure is new/recurring/regressed, and where the portable evidence bundle is.
 
 ### 0.1 Command safety classes
 
@@ -27,8 +29,9 @@ Read-only commands (safe to run for discovery; `context` may still capture and p
 observation unless `--dry-run` is used):
 
 - `doctor`, `capabilities`, `devices list|inspect`, `session list|inspect|status`, `context`,
-  `ui observe`, `ui diff`, `ui inspect`, `ui dump`, `report list|show|path|explain`, `doctor fix
-  --plan|--check`, `apk inspect|verify`, `diagnostics logcat peek`.
+  `ui observe`, `ui diff`, `ui inspect`, `ui dump`, `report list|show|path|explain|history|recurrences`,
+  `report bundle --dry-run`, `doctor fix --plan|--check`, `apk inspect|verify|resolve|diff`,
+  `diagnostics logcat peek`. `apk diff` pulls the installed base APK but does not change the device.
 - `session ensure --dry-run` and `agent test --dry-run` make no device or session changes.
 
 Device-modifying commands:
@@ -124,6 +127,31 @@ observation instead of guessing.
 and meaningful bounds changes. Pure pixel movement is ignored. Lists are capped at 12 by default with
 explicit totals/`truncated`; pass `--full` to raise the cap to 100.
 
+### 0.4.1 Action receipts
+
+```powershell
+androidforge ui tap --session ses-... --text "Save" --receipt --json
+androidforge ui text "Example" --session ses-... --wait-for-value "Example" --receipt --json
+androidforge ui long-press --session ses-... --text "Item" --receipt-full --json
+androidforge ui scroll --session ses-... --direction down --receipt --json
+```
+
+A receipt replaces the tap/observe/diff/infer loop. `result.receipt` contains:
+
+- `receipt_id`, action, normalized selector, session and device; `dispatch_state` is
+  `not_dispatched`, `dispatched` or `unknown`;
+- `before` and `after` observation tokens, foreground package/activity and focus;
+- a compact semantic diff (`changes`) with exact totals;
+- `effect`: `no_visible_change`, `content_changed`, `navigated`, `dialog_appeared`,
+  `dialog_disappeared`, `element_disappeared`, `package_changed` or `unknown`;
+- `effect_evidence`, the postcondition definition/result, warnings and `completeness`.
+
+The action is dispatched at most once. Postcondition polling only refreshes observations. If the
+before observation fails, the action is **not** dispatched and the error carries a partial receipt. If
+the device disconnects after dispatch, the receipt says `dispatched: true` and the outcome is
+`unknown`/incomplete — never "did not happen". Without `--receipt`, the action response keeps its old
+shape.
+
 ### 0.5 UI actions with postconditions
 
 ```powershell
@@ -166,6 +194,43 @@ Run next actions from `project_root`, or pass that path with `--project`. The sa
 same fingerprint across timestamps, run IDs, temporary paths and dynamic numeric IDs. Different
 failures are not collapsed by a generic timeout or message.
 
+### 0.6.1 Failure recurrence memory
+
+```powershell
+androidforge report recurrences --project . --json
+androidforge report recurrences --project . --since 30d --package com.example.app --status regressed --json
+androidforge report history --fingerprint sha256:<VALUE> --json
+```
+
+Recurrence is derived from existing local `report.json` files; there is no second database. Statuses
+are:
+
+- `new` — no earlier matching fingerprint in the project scope;
+- `recurring` — earlier occurrences exist and no comparable success intervened;
+- `regressed` — a comparable passing run exercised the same failing step between two occurrences;
+- `unknown` — evidence is too incomplete for a confident classification.
+
+A passing run only proves resolution when it belongs to the same project, command/scenario and package
+and contains the same failing step with a successful status. An unrelated pass never marks a failure
+fixed. Entries include first/last seen, occurrence count, run ids, devices, app versions, evidence
+references and `currently_resolved`. `report explain` adds the same recurrence object.
+
+### 0.6.2 Diagnostic bundles
+
+```powershell
+androidforge report bundle latest --output .\evidence.zip --json
+androidforge report bundle latest --dry-run --json
+androidforge report bundle latest --markdown --json
+androidforge report bundle latest --format json --json
+```
+
+A ZIP bundle contains a run/explanation summary, Markdown explanation, exact recorded argv (or a
+legacy-run fallback), selected evidence excerpts, bounded logcat, hierarchy XML, a checksummed payload
+manifest and an explicit exclusion list. Redaction is on by default and applies to text payloads. Media
+and full raw logs are opt-in. The tool refuses paths that escape the run directory, bounds per-file and
+total size, writes atomically and reopens the ZIP to verify every checksum before reporting success.
+`--dry-run` is the inclusion preview and writes nothing.
+
 ### 0.7 Repair planning
 
 ```powershell
@@ -195,6 +260,27 @@ argv, failure stage/code, explanation and artifact paths, plus a consolidated re
 A failed pipeline returns envelope `status: "failed"` with `exit_code` set to the failure code and the
 full structured `result` preserved. A blocked dry run returns `status: "blocked"` and exit code 8.
 Do not treat a nonzero exit code as an empty error: inspect `result.failure` and the report.
+
+### 0.8.1 APK resolution and comparison
+
+```powershell
+androidforge apk resolve --variant debug --json
+androidforge apk resolve --variant freeDebug --module app --json
+androidforge agent test --project . --variant debug --flow conformance --json
+androidforge apk diff installed:com.example.app .\app-debug.apk --session ses-... --json
+androidforge app install .\app-debug.apk --only-if-changed --json
+```
+
+`apk resolve` reads optional `[build.variants]` patterns and uses conventional Gradle output locations when no
+explicit patterns are configured. It never runs Gradle. The newest valid artifact wins; malformed candidates are rejected,
+equal timestamps with different hashes are an explicit ambiguity error, and the selected rule, size,
+mtime, SHA-256 and certificate are returned. An explicit `--apk` always takes precedence over
+`--variant`.
+
+`apk diff` pulls the installed base APK and reports `same`, `different` or `unknown` per field. Split
+installs cannot be proven equivalent from the base APK alone. `--only-if-changed` skips installation
+only when package, version code, base APK SHA-256 and split shape prove equivalence; unknown identity
+installs rather than silently skipping. It never uninstalls, clears data or downgrades automatically.
 
 ## 1. The operating model
 

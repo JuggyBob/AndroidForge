@@ -1,7 +1,9 @@
 pub mod adb;
 pub mod agent;
+pub mod apk;
 pub mod app;
 pub mod automation;
+pub mod bundle;
 pub mod common;
 pub mod context;
 pub mod devices;
@@ -9,6 +11,7 @@ pub mod diagnostics;
 pub mod doctor;
 pub mod maintenance;
 pub mod observation;
+pub mod receipt;
 pub mod report;
 pub mod session;
 pub mod system;
@@ -75,6 +78,18 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
         } => {
             let ctx = CliContext::new(cli)?;
             app::apk_verify(&ctx, args).await
+        }
+        Command::Apk {
+            command: crate::cli::ApkCommand::Resolve(args),
+        } => {
+            let ctx = CliContext::new(cli)?;
+            apk::resolve_command(&ctx, args).await
+        }
+        Command::Apk {
+            command: crate::cli::ApkCommand::Diff(args),
+        } => {
+            let ctx = CliContext::new(cli)?;
+            apk::diff_command(&ctx, args).await
         }
         Command::Ui { command } => {
             let ctx = CliContext::new(cli)?;
@@ -187,6 +202,8 @@ pub fn canonical_name(command: &Command) -> String {
         Command::Apk { command } => match command {
             crate::cli::ApkCommand::Inspect { .. } => "apk.inspect".to_string(),
             crate::cli::ApkCommand::Verify(_) => "apk.verify".to_string(),
+            crate::cli::ApkCommand::Resolve(_) => "apk.resolve".to_string(),
+            crate::cli::ApkCommand::Diff(_) => "apk.diff".to_string(),
         },
         Command::Ui { command } => format!("ui.{}", ui_name(command)),
         Command::Capture { command } => capture_name(command),
@@ -366,6 +383,9 @@ fn report_name(command: &ReportCommand) -> &'static str {
         ReportCommand::Compare(_) => "compare",
         ReportCommand::Flaky(_) => "flaky",
         ReportCommand::Explain(_) => "explain",
+        ReportCommand::History(_) => "history",
+        ReportCommand::Recurrences(_) => "recurrences",
+        ReportCommand::Bundle(_) => "bundle",
         ReportCommand::Import { .. } => "import",
     }
 }

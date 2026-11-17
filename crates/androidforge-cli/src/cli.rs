@@ -265,9 +265,12 @@ pub enum AgentCommand {
 
 #[derive(Debug, Args)]
 pub struct AgentTestArgs {
-    /// APK to inspect and optionally install before testing.
+    /// APK to inspect and optionally install before testing. Takes precedence over --variant.
     #[arg(long)]
     pub apk: Option<PathBuf>,
+    /// Resolve an APK from [build.variants] configuration without running Gradle.
+    #[arg(long)]
+    pub variant: Option<String>,
     /// Existing session id. If omitted, a session is reused or ensured.
     #[arg(long)]
     pub session_id: Option<String>,
@@ -592,6 +595,9 @@ pub struct AppInstallArgs {
     pub expected_cert_sha256: Option<String>,
     #[arg(long)]
     pub timeout: Option<String>,
+    /// Skip installation when the candidate APK is byte-equivalent to the installed base APK.
+    #[arg(long)]
+    pub only_if_changed: bool,
 }
 
 #[derive(Debug, Args)]
@@ -668,8 +674,32 @@ pub struct AppDataArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ApkCommand {
-    Inspect { apk: PathBuf },
+    Inspect {
+        apk: PathBuf,
+    },
     Verify(ApkVerifyArgs),
+    /// Resolve the newest valid APK for a configured variant without running Gradle.
+    Resolve(ApkResolveArgs),
+    /// Compare a candidate APK with an installed package.
+    Diff(ApkDiffArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ApkResolveArgs {
+    /// Variant configured in [build.variants], for example debug or freeDebug.
+    #[arg(long)]
+    pub variant: Option<String>,
+    /// Restrict candidates to a module directory, for example app.
+    #[arg(long)]
+    pub module: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ApkDiffArgs {
+    /// Either `installed:<package>` or a local APK path.
+    pub target: String,
+    /// The other side of the comparison (APK path or `installed:<package>`).
+    pub apk: String,
 }
 
 #[derive(Debug, Args)]
@@ -793,6 +823,12 @@ pub struct UiTapArgs {
     pub x: Option<i32>,
     #[arg(long)]
     pub y: Option<i32>,
+    /// Return a compact action receipt with before/after observations and an effect classification.
+    #[arg(long)]
+    pub receipt: bool,
+    /// Include expanded node details in the action receipt.
+    #[arg(long)]
+    pub receipt_full: bool,
     #[command(flatten)]
     pub postcondition: PostconditionArgs,
 }
@@ -809,6 +845,12 @@ pub struct UiTextArgs {
     pub hide_keyboard: bool,
     #[arg(long)]
     pub no_verify: bool,
+    /// Return a compact action receipt with before/after observations and an effect classification.
+    #[arg(long)]
+    pub receipt: bool,
+    /// Include expanded node details in the action receipt.
+    #[arg(long)]
+    pub receipt_full: bool,
     #[command(flatten)]
     pub postcondition: PostconditionArgs,
 }
@@ -863,6 +905,12 @@ pub struct UiScrollArgs {
     pub direction: String,
     #[command(flatten)]
     pub selector: SelectorArgs,
+    /// Return a compact action receipt with before/after observations and an effect classification.
+    #[arg(long)]
+    pub receipt: bool,
+    /// Include expanded node details in the action receipt.
+    #[arg(long)]
+    pub receipt_full: bool,
     #[command(flatten)]
     pub postcondition: PostconditionArgs,
 }
@@ -1360,6 +1408,12 @@ pub enum ReportCommand {
     Flaky(ReportFlakyArgs),
     /// Explain a failure deterministically and return exact next commands.
     Explain(ReportExplainArgs),
+    /// Show every stored occurrence of a deterministic failure fingerprint.
+    History(ReportHistoryArgs),
+    /// Aggregate recurring, regressed and new failure fingerprints across local runs.
+    Recurrences(ReportRecurrencesArgs),
+    /// Create a portable diagnostic bundle or a Markdown/JSON evidence summary.
+    Bundle(ReportBundleArgs),
     Import {
         #[command(subcommand)]
         command: ReportImportCommand,
@@ -1409,6 +1463,67 @@ pub struct ReportFlakyArgs {
     pub limit: usize,
     #[arg(long, default_value_t = 3)]
     pub min_runs: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportHistoryArgs {
+    /// Deterministic fingerprint such as sha256:<hex>.
+    #[arg(long)]
+    pub fingerprint: String,
+    /// Maximum number of occurrences to return.
+    #[arg(long, default_value_t = 100)]
+    pub limit: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportRecurrencesArgs {
+    /// Only fingerprints last seen within this duration, for example 30d.
+    #[arg(long)]
+    pub since: Option<String>,
+    #[arg(long)]
+    pub package: Option<String>,
+    /// Filter by status: new, recurring, regressed or unknown.
+    #[arg(long)]
+    pub status: Option<String>,
+    #[arg(long)]
+    pub device: Option<String>,
+    #[arg(long = "app-version")]
+    pub app_version: Option<String>,
+    /// Include only fingerprints for this project root. Defaults to the current project.
+    #[arg(long)]
+    pub project_root: Option<String>,
+    /// Include failures from every discovered local project instead of only the current project.
+    #[arg(long)]
+    pub all_projects: bool,
+    #[arg(long, default_value_t = 50)]
+    pub limit: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct ReportBundleArgs {
+    /// Run id or `latest`.
+    pub run: String,
+    /// Output path for a ZIP, JSON manifest or Markdown file. ZIP defaults to .artifacts/bundles/<run>-evidence.zip.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    /// Produce a Markdown evidence summary instead of a ZIP.
+    #[arg(long)]
+    pub markdown: bool,
+    /// Output format: zip, json or markdown.
+    #[arg(long)]
+    pub format: Option<String>,
+    /// Include screenshots found in the run artifacts.
+    #[arg(long)]
+    pub include_screenshots: bool,
+    /// Include screen recordings found in the run artifacts.
+    #[arg(long)]
+    pub include_recordings: bool,
+    /// Include the full stored logcat instead of a bounded excerpt.
+    #[arg(long = "include-full-logs")]
+    pub include_full_logs: bool,
+    /// Maximum uncompressed payload size in bytes.
+    #[arg(long, default_value_t = 26_214_400)]
+    pub max_bytes: u64,
 }
 
 #[derive(Debug, Subcommand)]

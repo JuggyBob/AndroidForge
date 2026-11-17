@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/apk-diff.schema.json",
+  "title": "AndroidForge APK identity comparison",
+  "type": "object",
+  "required": ["schema_version", "candidate", "installed", "fields", "overall", "safe_to_skip_install"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate": { "type": "object" },
+    "installed": {
+      "type": "object",
+      "required": ["package", "remote_paths", "base_remote_path", "base_apk", "split_count"],
+      "properties": {
+        "package": { "type": "string" },
+        "remote_paths": { "type": "array", "items": { "type": "string" } },
+        "base_remote_path": { "type": "string" },
+        "base_apk": { "type": "object" },
+        "split_count": { "type": "integer", "minimum": 0 },
+        "version_name": { "type": ["string", "null"] },
+        "version_code": { "type": ["integer", "null"] },
+        "data_dir": { "type": ["string", "null"] },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "status"],
+        "properties": {
+          "field": { "type": "string" },
+          "status": { "enum": ["same", "different", "unknown"] },
+          "candidate": { "type": ["string", "null"] },
+          "installed": { "type": ["string", "null"] },
+          "note": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "overall": { "enum": ["same", "different", "unknown"] },
+    "summary": { "type": "string" },
+    "safe_to_skip_install": { "type": "boolean" },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

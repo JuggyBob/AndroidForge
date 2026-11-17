@@ -37,6 +37,14 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
                     "Overview",
                     None,
                 );
+                nav(
+                    app,
+                    ui,
+                    Page::Context,
+                    theme::NavIcon::Context,
+                    "Context",
+                    None,
+                );
             });
             nav_group(ui, "TEST & DEBUG", &mut |ui| {
                 nav(
@@ -54,6 +62,14 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
                     theme::NavIcon::Sessions,
                     "Sessions",
                     Some(app.sessions.value.sessions.len().to_string()),
+                );
+                nav(
+                    app,
+                    ui,
+                    Page::Ownership,
+                    theme::NavIcon::Ownership,
+                    "Ownership",
+                    None,
                 );
                 nav(
                     app,

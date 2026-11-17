@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/action-receipt.schema.json",
+  "title": "AndroidForge action receipt",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "action",
+    "session_id",
+    "device_serial",
+    "started_at",
+    "duration_ms",
+    "target_resolved",
+    "dispatched",
+    "dispatch_state",
+    "effect",
+    "completeness"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "receipt_id": { "type": "string", "pattern": "^rcpt-" },
+    "action": { "enum": ["tap", "long_press", "text", "scroll"] },
+    "selector": { "type": ["object", "null"] },
+    "session_id": { "type": "string" },
+    "device_serial": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": ["string", "null"], "format": "date-time" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "target_resolved": { "type": "boolean" },
+    "dispatched": { "type": "boolean" },
+    "dispatch_state": { "enum": ["not_dispatched", "dispatched", "unknown"] },
+    "target": { "type": ["object", "null"] },
+    "before": { "$ref": "#/$defs/observation_ref" },
+    "after": { "$ref": "#/$defs/observation_ref" },
+    "effect": {
+      "enum": [
+        "no_visible_change",
+        "content_changed",
+        "navigated",
+        "dialog_appeared",
+        "dialog_disappeared",
+        "element_disappeared",
+        "package_changed",
+        "unknown"
+      ]
+    },
+    "effect_evidence": { "type": "array", "items": { "type": "string" } },
+    "changes": { "type": ["object", "null"] },
+    "completeness": {
+      "enum": ["complete", "before_missing", "after_missing", "incomplete"]
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "postcondition": {
+      "type": "object",
+      "required": ["result", "duration_ms"],
+      "properties": {
+        "result": {
+          "enum": ["not_requested", "satisfied", "timed_out", "not_evaluated"]
+        },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "expected": { "type": "string" },
+              "satisfied": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "foreground_package": { "type": ["string", "null"] },
+        "foreground_activity": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "dispatch_error": { "type": ["string", "null"] },
+    "action_result": { "type": ["object", "null"] }
+  },
+  "$defs": {
+    "observation_ref": {
+      "type": ["object", "null"],
+      "required": ["token", "observed_at"],
+      "properties": {
+        "token": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "foreground_package": { "type": ["string", "null"] },
+        "foreground_activity": { "type": ["string", "null"] },
+        "focused": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

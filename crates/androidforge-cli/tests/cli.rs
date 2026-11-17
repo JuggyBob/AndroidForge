@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::process::Command as StdCommand;
 
 use assert_cmd::Command;
@@ -596,4 +597,345 @@ fn report_explain_latest_finds_failures_across_project_boundaries() {
     assert!(by_id.status.success(), "{by_id:?}");
     let by_id_json: Value = serde_json::from_slice(&by_id.stdout).unwrap();
     assert_eq!(by_id_json["result"]["run_id"], failed_id);
+}
+
+fn write_memory_report(
+    root: &std::path::Path,
+    run_id: &str,
+    status: &str,
+    started_at: &str,
+    artifacts: serde_json::Value,
+) {
+    let dir = root.join(".artifacts").join("runs").join(run_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let failure = if status == "passed" {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!({
+            "code": "E_UI_ASSERTION_FAILED",
+            "message": "expected dialog did not appear",
+            "failed_operation": "ui.tap",
+            "recoverable": true,
+            "suggestions": [],
+            "context": {},
+            "artifacts": artifacts.clone()
+        })
+    };
+    let step_status = if status == "passed" {
+        "success"
+    } else {
+        "failed"
+    };
+    let report = serde_json::json!({
+        "schema_version": 1,
+        "run_id": run_id,
+        "command": "conformance.run",
+        "project": "RecurrenceTest",
+        "project_root": root.to_string_lossy(),
+        "build": {
+            "package": "com.example.recurrence",
+            "version_name": "1.0",
+            "version_code": 1,
+            "apk_sha256": "aaaa"
+        },
+        "device_serial": "emulator-5554",
+        "device": {"serial": "emulator-5554", "state": "device", "kind": "emulator", "model": "Pixel", "api_level": 35},
+        "status": status,
+        "exit_code": if status == "passed" { 0 } else { 6 },
+        "started_at": started_at,
+        "ended_at": started_at,
+        "duration_ms": 10,
+        "steps": [{
+            "id": "step-001",
+            "name": "conformance:release_smoke",
+            "command": "conformance release_smoke",
+            "status": step_status,
+            "exit_code": if status == "passed" { 0 } else { 7 },
+            "started_at": started_at,
+            "ended_at": started_at,
+            "duration_ms": 10,
+            "failure": failure.clone(),
+            "artifacts": artifacts.clone(),
+            "details": {},
+            "retries": 0
+        }],
+        "failure": failure,
+        "artifacts": artifacts,
+        "recovery_suggestions": []
+    });
+    std::fs::write(
+        dir.join("report.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn recurrence_memory_detects_regression_and_bundle_is_redacted_and_verifiable() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("Project (Recurrence)");
+    project_with_defaults(&root);
+    let log_dir = root.join(".artifacts/runs/run-fail-2/logs");
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(
+        log_dir.join("app.log"),
+        "expected dialog did not appear\npassword=hunter2\npairing code: 123456\n",
+    )
+    .unwrap();
+    let artifacts = serde_json::json!([{
+        "kind": "logcat_filtered",
+        "path": "logs/app.log",
+        "sha256": null,
+        "size_bytes": 80,
+        "description": "Filtered logcat excerpt"
+    }]);
+    write_memory_report(
+        &root,
+        "run-fail-1",
+        "failed",
+        "2026-01-01T00:00:00Z",
+        serde_json::json!([]),
+    );
+    write_memory_report(
+        &root,
+        "run-pass",
+        "passed",
+        "2026-01-02T00:00:00Z",
+        serde_json::json!([]),
+    );
+    write_memory_report(
+        &root,
+        "run-fail-2",
+        "failed",
+        "2026-01-03T00:00:00Z",
+        artifacts,
+    );
+
+    let recurrences = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["report", "recurrences", "--json"])
+        .output()
+        .expect("recurrences");
+    assert!(recurrences.status.success(), "{recurrences:?}");
+    let json: Value = serde_json::from_slice(&recurrences.stdout).unwrap();
+    assert_eq!(json["result"]["count"], 1);
+    assert_eq!(json["result"]["fingerprints"][0]["status"], "regressed");
+    assert_eq!(json["result"]["fingerprints"][0]["occurrence_count"], 2);
+    assert_eq!(
+        json["result"]["fingerprints"][0]["currently_resolved"],
+        false
+    );
+    let fingerprint = json["result"]["fingerprints"][0]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let history = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["report", "history", "--fingerprint", &fingerprint, "--json"])
+        .output()
+        .expect("history");
+    assert!(history.status.success(), "{history:?}");
+    let history_json: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert_eq!(
+        history_json["result"]["fingerprint"]["occurrences"][0]["run_id"],
+        "run-fail-2"
+    );
+    assert_eq!(
+        history_json["result"]["fingerprint"]["occurrences"][1]["run_id"],
+        "run-fail-1"
+    );
+
+    let explain = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["report", "explain", "run-fail-2", "--json"])
+        .output()
+        .expect("explain");
+    assert!(explain.status.success(), "{explain:?}");
+    let explain_json: Value = serde_json::from_slice(&explain.stdout).unwrap();
+    assert_eq!(explain_json["result"]["recurrence"]["status"], "regressed");
+
+    let bundle_path = root.join("evidence.zip");
+    let bundle = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "report",
+            "bundle",
+            "run-fail-2",
+            "--output",
+            bundle_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("bundle");
+    assert!(bundle.status.success(), "{bundle:?}");
+    let bundle_json: Value = serde_json::from_slice(&bundle.stdout).unwrap();
+    assert_eq!(bundle_json["result"]["verified"], true);
+    assert_eq!(
+        bundle_json["result"]["manifest"]["checksums_verified"],
+        true
+    );
+    assert!(bundle_path.is_file());
+
+    let file = std::fs::File::open(&bundle_path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    assert!(archive.by_name("manifest.json").is_ok());
+    assert!(archive.by_name("summary.json").is_ok());
+    assert!(archive.by_name("explanation.md").is_ok());
+    assert!(archive.by_name("evidence/001-app.log").is_ok());
+    let mut log = String::new();
+    archive
+        .by_name("evidence/001-app.log")
+        .unwrap()
+        .read_to_string(&mut log)
+        .unwrap();
+    assert!(!log.contains("hunter2"));
+    assert!(!log.contains("123456"));
+    assert!(log.contains("[REDACTED]"));
+
+    let preview_path = root.join("preview.zip");
+    let preview = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args([
+            "report",
+            "bundle",
+            "run-fail-2",
+            "--output",
+            preview_path.to_str().unwrap(),
+            "--dry-run",
+            "--json",
+        ])
+        .output()
+        .expect("bundle preview");
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!preview_path.exists());
+}
+
+#[test]
+fn apk_resolve_rejects_malformed_candidates_and_unknown_variants() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("Apk Resolve");
+    std::fs::create_dir_all(root.join(".androidforge")).unwrap();
+    std::fs::create_dir_all(root.join("app/build/outputs/apk/debug")).unwrap();
+    std::fs::write(
+        root.join(".androidforge/project.toml"),
+        "adapter_version = 1\n[project]\nname = \"Resolve\"\n[build.variants]\ndebug = [\"app/build/outputs/apk/debug/*.apk\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("app/build/outputs/apk/debug/broken.apk"),
+        b"not an apk",
+    )
+    .unwrap();
+    let malformed = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["apk", "resolve", "--variant", "debug", "--json"])
+        .output()
+        .expect("resolve malformed");
+    assert_eq!(malformed.status.code(), Some(6));
+    let json: Value = serde_json::from_slice(&malformed.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "E_APK_INVALID");
+    assert!(
+        json["error"]["context"]["rejected"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+
+    let unknown = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["apk", "resolve", "--variant", "release", "--json"])
+        .output()
+        .expect("resolve unknown");
+    assert_eq!(unknown.status.code(), Some(2));
+    let json: Value = serde_json::from_slice(&unknown.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "E_INVALID_ARGUMENT");
+}
+
+#[test]
+fn v06_commands_expose_their_new_options_in_help() {
+    binary()
+        .args(["ui", "tap", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--receipt"))
+        .stdout(predicate::str::contains("--receipt-full"));
+    binary()
+        .args(["agent", "test", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--variant"));
+    binary()
+        .args(["apk", "resolve", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--variant"));
+    binary()
+        .args(["apk", "diff", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("installed"));
+    binary()
+        .args(["report", "recurrences", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--all-projects"));
+    binary()
+        .args(["report", "bundle", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--include-screenshots"));
+    binary()
+        .args(["app", "install", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--only-if-changed"));
+}
+
+#[test]
+fn adapter_accepts_build_variant_configuration_and_rejects_escaping_patterns() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("Build Config");
+    std::fs::create_dir_all(root.join(".androidforge")).unwrap();
+    std::fs::write(
+        root.join(".androidforge/project.toml"),
+        "adapter_version = 1\n[project]\nname = \"Build\"\n[build]\ndefault_variant = \"debug\"\n[build.variants]\ndebug = [\"app/build/outputs/apk/debug/*.apk\"]\n",
+    )
+    .unwrap();
+    let output = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["config", "validate", "--json"])
+        .output()
+        .expect("config validate");
+    assert!(output.status.success(), "{output:?}");
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["valid"], true);
+
+    std::fs::write(
+        root.join(".androidforge/project.toml"),
+        "adapter_version = 1\n[project]\nname = \"Build\"\n[build.variants]\ndebug = [\"../outside/*.apk\"]\n",
+    )
+    .unwrap();
+    let output = binary()
+        .current_dir(&root)
+        .env("ANDROIDFORGE_HOME", temp.path())
+        .args(["config", "validate", "--json"])
+        .output()
+        .expect("config validate invalid");
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["valid"], false);
+    assert!(
+        json["result"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["message"].as_str().unwrap().contains("project root"))
+    );
 }

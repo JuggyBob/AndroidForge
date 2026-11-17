@@ -1,10 +1,12 @@
 pub mod compare;
+pub mod context;
 pub mod devices;
 pub mod inspector;
 pub mod logcat;
 pub mod maintenance;
 pub mod operations;
 pub mod overview;
+pub mod ownership;
 pub mod run_details;
 pub mod runs;
 pub mod sessions;
@@ -20,8 +22,10 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     match app.page {
         Page::Setup => setup::show(app, ui),
         Page::Overview => overview::show(app, ui),
+        Page::Context => context::show(app, ui),
         Page::Devices => devices::show(app, ui),
         Page::Sessions => sessions::show(app, ui),
+        Page::Ownership => ownership::show(app, ui),
         Page::Runs => runs::show(app, ui),
         Page::Triage => triage::show(app, ui),
         Page::Compare => compare::show(app, ui),

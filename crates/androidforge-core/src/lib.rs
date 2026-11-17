@@ -12,6 +12,7 @@ pub mod error;
 pub mod model;
 pub mod output;
 pub mod paths;
+pub mod recurrence;
 pub mod redact;
 pub mod run;
 pub mod session;
@@ -20,5 +21,5 @@ pub mod util;
 
 pub use error::{ErrorBody, ErrorCode, ForgeError, Result};
 pub use model::{ArtifactRef, BuildIdentity, Device, DeviceKind, DeviceState, ToolInfo};
-pub use run::{FailureInfo, RunReport, RunStatus, RunStep, StepStatus};
+pub use run::{FailureInfo, RunInvocation, RunReport, RunStatus, RunStep, StepStatus};
 pub use session::{Session, SessionKind, SessionState};

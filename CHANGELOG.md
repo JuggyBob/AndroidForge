@@ -8,6 +8,44 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.6.0] - 2026-11-17
+
+Sixth alpha, focused on returning more trustworthy evidence per agent command and remembering failures
+across local runs.
+
+### Added
+
+- Action receipts for `ui tap`, `ui long-press`, `ui text` and `ui scroll` via `--receipt` and
+  `--receipt-full`: before/after observation tokens, compact semantic diff, focus/package/activity
+  transitions, deterministic effect classification, postcondition result and explicit completeness.
+- Failure recurrence memory derived from existing run reports: `report recurrences`, `report history
+  --fingerprint`, recurrence data in `report explain`, and `new`/`recurring`/`regressed`/`unknown`
+  classification with conservative scenario comparability.
+- Optional `[build]` variant configuration, conventional Gradle output fallback, `apk resolve`,
+  `agent test --variant`, `apk diff installed:<package>` and `app install --only-if-changed`.
+- `report bundle` for redacted, size-bounded, checksummed diagnostic ZIPs plus Markdown/JSON summaries,
+  dry-run inclusion previews, evidence/logcat/hierarchy excerpts and explicit media/full-log opt-ins.
+- Desktop Context and Ownership pages, recurrence history and related runs in Triage, and a diagnostic
+  bundle inclusion preview/creation workflow.
+- Schema files for action receipts, recurrence, APK resolution/diff and diagnostic bundles.
+- Run reports now record the exact CLI invocation argv when created.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.6.0`.
+- `report recurrences` is project-scoped by default; `--all-projects` aggregates every discovered local
+  artifact store.
+- Installed APK comparison reports `same`, `different` or `unknown` per field instead of inferring
+  equality from version strings.
+
+### Safety
+
+- Receipts never retry a state-changing action when a postcondition is absent or times out.
+- `--only-if-changed` never uninstalls, clears data or downgrades; unverifiable identity installs and
+  records the reason.
+- Bundles never modify the source run, never include keystores/credentials, reject traversal, and
+  require opt-in for screenshots, recordings and full raw logs.
+
 ## [0.5.0] - 2026-11-16
 
 Fifth alpha. Fixes every issue confirmed by the three independent app verification agents and adds
@@ -317,7 +355,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.6.0
 [0.5.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.5.0
 [0.4.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.4.0
 [0.3.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0

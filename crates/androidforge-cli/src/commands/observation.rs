@@ -156,6 +156,11 @@ impl ObservationNode {
             })
     }
 
+    /// A label safe to include in receipts (passwords are already masked).
+    pub fn label_for_receipt(&self) -> Option<String> {
+        self.label().map(str::to_string)
+    }
+
     fn is_layout_container(&self) -> bool {
         let class = self.class.as_deref().unwrap_or("").to_ascii_lowercase();
         matches!(

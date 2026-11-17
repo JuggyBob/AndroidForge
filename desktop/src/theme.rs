@@ -291,8 +291,10 @@ pub fn paint_gear_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32
 pub enum NavIcon {
     Setup,
     Overview,
+    Context,
     Devices,
     Sessions,
+    Ownership,
     Runs,
     Triage,
     Compare,
@@ -345,6 +347,42 @@ pub fn paint_nav_icon(painter: &egui::Painter, rect: egui::Rect, icon: NavIcon, 
                 [
                     egui::pos2(phone.center().x - 2.0, phone.bottom() - 1.5),
                     egui::pos2(phone.center().x + 2.0, phone.bottom() - 1.5),
+                ],
+                faint,
+            );
+        }
+        NavIcon::Context => {
+            painter.rect_stroke(
+                r.shrink2(egui::vec2(1.5, 0.0)),
+                2.0,
+                stroke,
+                StrokeKind::Inside,
+            );
+            for index in 0..3 {
+                let y = r.top() + 4.0 + index as f32 * 3.5;
+                painter.line_segment(
+                    [
+                        egui::pos2(r.left() + 4.0, y),
+                        egui::pos2(r.right() - 3.0, y),
+                    ],
+                    faint,
+                );
+            }
+        }
+        NavIcon::Ownership => {
+            painter.circle_stroke(egui::pos2(r.left() + 5.0, r.top() + 5.0), 2.6, stroke);
+            painter.circle_stroke(egui::pos2(r.right() - 5.0, r.top() + 5.0), 2.6, stroke);
+            painter.line_segment(
+                [
+                    egui::pos2(r.left() + 2.0, r.bottom() - 2.0),
+                    egui::pos2(r.left() + 5.0, r.center().y + 3.0),
+                ],
+                faint,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.right() - 2.0, r.bottom() - 2.0),
+                    egui::pos2(r.right() - 5.0, r.center().y + 3.0),
                 ],
                 faint,
             );

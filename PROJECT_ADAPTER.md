@@ -29,6 +29,16 @@ default = "clean-install"
 [conformance]
 flow = ".androidforge/conformance/release-smoke.toml"
 
+[build]
+default_variant = "debug"
+default_module = "app"
+conventional_fallback = true
+
+[build.variants]
+debug = ["app/build/outputs/apk/debug/*.apk"]
+"freeDebug" = ["app/build/outputs/apk/free/debug/*.apk"]
+release = ["app/build/outputs/apk/release/app-release.apk"]
+
 [ui]
 backend = "uiautomator"
 default_timeout_secs = 15
@@ -61,6 +71,13 @@ idempotent = true
 `expected_cert_sha256` is enforced before an install proceeds; list both release and debug
 certificates when both builds are installed. SDK paths, build-tools, timeouts and redaction patterns
 may also be set. Run `androidforge config validate --json`; unknown keys are rejected deliberately.
+
+`[build.variants]` powers `apk resolve` and `agent test --variant`. Values are project-relative
+explicit paths or bounded glob patterns (`*`, `?`, `**`). `apk resolve` never runs Gradle. When no explicit
+patterns are configured, conventional `app/build/outputs/apk` locations are tried unless
+`conventional_fallback = false`. `default_module`
+filters candidates to that module directory; `max_candidates` bounds inspection. Equal timestamps with
+different content are reported as ambiguity rather than guessed.
 
 ## Fixture format
 

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/recurrence.schema.json",
+  "title": "AndroidForge failure recurrence memory",
+  "type": "object",
+  "required": ["schema_version", "fingerprints"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "scanned_runs": { "type": "integer", "minimum": 0 },
+    "failed_runs": { "type": "integer", "minimum": 0 },
+    "unreadable_runs": { "type": "integer", "minimum": 0 },
+    "count": { "type": "integer", "minimum": 0 },
+    "returned": { "type": "integer", "minimum": 0 },
+    "unresolved": { "type": "integer", "minimum": 0 },
+    "counts": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "fingerprints": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fingerprint" }
+    }
+  },
+  "$defs": {
+    "fingerprint": {
+      "type": "object",
+      "required": [
+        "fingerprint",
+        "fingerprint_version",
+        "category",
+        "project_root",
+        "first_seen",
+        "last_seen",
+        "occurrence_count",
+        "run_ids",
+        "status",
+        "currently_resolved"
+      ],
+      "properties": {
+        "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "fingerprint_version": { "type": "integer", "minimum": 1 },
+        "category": { "type": "string" },
+        "code": { "type": ["string", "null"] },
+        "project_root": { "type": "string" },
+        "package": { "type": ["string", "null"] },
+        "first_seen": { "type": "string", "format": "date-time" },
+        "last_seen": { "type": "string", "format": "date-time" },
+        "occurrence_count": { "type": "integer", "minimum": 1 },
+        "run_ids": { "type": "array", "items": { "type": "string" } },
+        "status": { "enum": ["new", "recurring", "regressed", "unknown"] },
+        "currently_resolved": { "type": "boolean" },
+        "resolved_by_run": { "type": ["string", "null"] },
+        "resolved_at": { "type": ["string", "null"], "format": "date-time" },
+        "devices": { "type": "array", "items": { "type": "string" } },
+        "app_versions": { "type": "array", "items": { "type": "string" } },
+        "occurrences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["run_id", "started_at", "run_status"],
+            "properties": {
+              "run_id": { "type": "string" },
+              "started_at": { "type": "string", "format": "date-time" },
+              "run_status": { "type": "string" },
+              "failed_step": { "type": ["string", "null"] },
+              "failed_operation": { "type": ["string", "null"] },
+              "code": { "type": ["string", "null"] },
+              "device_serial": { "type": ["string", "null"] },
+              "device_model": { "type": ["string", "null"] },
+              "api_level": { "type": ["integer", "null"] },
+              "package": { "type": ["string", "null"] },
+              "version_name": { "type": ["string", "null"] },
+              "version_code": { "type": ["integer", "null"] },
+              "apk_sha256": { "type": ["string", "null"] },
+              "evidence": { "type": "array", "items": { "type": "object" } },
+              "followed_by_covered_success": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "uncertainty": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

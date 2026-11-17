@@ -12,6 +12,7 @@ use crate::cli::{
 };
 use crate::commands::common::{require_selector, success};
 use crate::commands::observation;
+use crate::commands::receipt;
 use crate::context::CliContext;
 
 pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess> {
@@ -129,6 +130,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                         "choose either a semantic selector or --x/--y, not both",
                     ));
                 }
+                let receipt_requested = args.receipt || args.receipt_full;
+                let full = args.receipt_full;
                 execute_in_run!(
                     ctx,
                     "ui.tap",
@@ -138,6 +141,84 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                     true,
                     |_run| async {
                         let ui = ctx.ui_manager()?;
+                        if receipt_requested {
+                            let Some(session) = session.as_ref() else {
+                                return Err(ForgeError::new(
+                                    androidforge_core::error::ErrorCode::SessionNotFound,
+                                    "action receipts require a session",
+                                )
+                                .with_suggestion(
+                                    "Pass --session <ID> or run `androidforge session ensure`.",
+                                ));
+                            };
+                            let selector_value = serde_json::json!({"x": x, "y": y});
+                            let mut builder = receipt::ReceiptBuilder::new(
+                                "tap",
+                                Some(selector_value.clone()),
+                                session,
+                                &device,
+                            );
+                            let before = match observation::collect_observation(
+                                ctx, session, &device, None, false,
+                            )
+                            .await
+                            {
+                                Ok(observation) => observation,
+                                Err(error) => {
+                                    let receipt = builder.finish(
+                                        receipt::DispatchState::NotDispatched,
+                                        false,
+                                        None,
+                                        None,
+                                        None,
+                                        None,
+                                        Some(error.message().to_string()),
+                                        full,
+                                    );
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "before observation failed; the action was not dispatched",
+                                    ));
+                                }
+                            };
+                            builder.set_before(before);
+                            let display = match ui.tap_xy(&serial, x, y).await {
+                                Ok(display) => display,
+                                Err(error) => {
+                                    let receipt =
+                                        dispatch_error_receipt(builder, &error, true, None, full)?;
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "action dispatch failed",
+                                    ));
+                                }
+                            };
+                            let action =
+                                serde_json::json!({"x": x, "y": y, "display_size": display});
+                            let (value, suffix) = complete_receipt(
+                                ctx,
+                                session,
+                                &device,
+                                builder,
+                                true,
+                                true,
+                                Some(selector_value),
+                                action,
+                                None,
+                                &args.postcondition,
+                                full,
+                            )
+                            .await?;
+                            return Ok(success(
+                                "ui.tap",
+                                value,
+                                format!("Tapped ({x}, {y}) on {serial}{suffix}\n"),
+                            )
+                            .with_session(session.id.clone())
+                            .with_device(serial.clone()));
+                        }
                         let display = ui.tap_xy(&serial, x, y).await?;
                         let action = serde_json::json!({"x": x, "y": y, "display_size": display});
                         let (value, suffix) = apply_postconditions(
@@ -161,6 +242,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                 .await
             } else {
                 let selector = require_selector(&args.selector)?;
+                let receipt_requested = args.receipt || args.receipt_full;
+                let full = args.receipt_full;
                 execute_in_run!(
                     ctx,
                     "ui.tap",
@@ -170,6 +253,107 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                     true,
                     |_run| async {
                         let ui = ctx.ui_manager()?;
+                        if receipt_requested {
+                            let Some(session) = session.as_ref() else {
+                                return Err(ForgeError::new(
+                                    androidforge_core::error::ErrorCode::SessionNotFound,
+                                    "action receipts require a session",
+                                )
+                                .with_suggestion(
+                                    "Pass --session <ID> or run `androidforge session ensure`.",
+                                ));
+                            };
+                            let selector_value = serde_json::to_value(&selector)?;
+                            let mut builder = receipt::ReceiptBuilder::new(
+                                "tap",
+                                Some(selector_value.clone()),
+                                session,
+                                &device,
+                            );
+                            let before = match observation::collect_observation(
+                                ctx, session, &device, None, false,
+                            )
+                            .await
+                            {
+                                Ok(observation) => observation,
+                                Err(error) => {
+                                    let receipt = builder.finish(
+                                        receipt::DispatchState::NotDispatched,
+                                        false,
+                                        None,
+                                        None,
+                                        None,
+                                        None,
+                                        Some(error.message().to_string()),
+                                        full,
+                                    );
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "before observation failed; the action was not dispatched",
+                                    ));
+                                }
+                            };
+                            builder.set_before(before);
+                            let result = match ui.tap(&serial, &selector).await {
+                                Ok(result) => result,
+                                Err(error) => {
+                                    let resolved = !matches!(
+                                        error.code(),
+                                        androidforge_core::error::ErrorCode::SelectorNotFound
+                                            | androidforge_core::error::ErrorCode::SelectorAmbiguous
+                                    );
+                                    let receipt = dispatch_error_receipt(
+                                        builder, &error, resolved, None, full,
+                                    )?;
+                                    return Err(receipt_error(
+                                        error,
+                                        &receipt,
+                                        "action dispatch failed",
+                                    ));
+                                }
+                            };
+                            let target = serde_json::to_value(&result.matched)?;
+                            let action = serde_json::to_value(&result)?;
+                            let (value, suffix) = complete_receipt(
+                                ctx,
+                                session,
+                                &device,
+                                builder,
+                                true,
+                                true,
+                                Some(target),
+                                action,
+                                Some(&selector),
+                                &args.postcondition,
+                                full,
+                            )
+                            .await?;
+                            return Ok(success(
+                                "ui.tap",
+                                value,
+                                format!(
+                                    "Tapped {} at ({}, {}){}{}\n",
+                                    result
+                                        .matched
+                                        .text
+                                        .as_deref()
+                                        .or(result.matched.content_desc.as_deref())
+                                        .or(result.matched.resource_id.as_deref())
+                                        .unwrap_or("matched element"),
+                                    result.tap_x,
+                                    result.tap_y,
+                                    if result.used_clickable_ancestor {
+                                        " via clickable ancestor"
+                                    } else {
+                                        ""
+                                    },
+                                    suffix
+                                ),
+                            )
+                            .with_session(session.id.clone())
+                            .with_device(serial.clone()));
+                        }
                         let result = ui.tap(&serial, &selector).await?;
                         let action = serde_json::to_value(&result)?;
                         let (value, suffix) = apply_postconditions(
@@ -212,6 +396,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
         }
         UiCommand::LongPress(args) => {
             let selector = require_selector(&args.selector)?;
+            let receipt_requested = args.receipt || args.receipt_full;
+            let full = args.receipt_full;
             execute_in_run!(
                 ctx,
                 "ui.long-press",
@@ -221,6 +407,92 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                 true,
                 |_run| async {
                     let ui = ctx.ui_manager()?;
+                    if receipt_requested {
+                        let Some(session) = session.as_ref() else {
+                            return Err(ForgeError::new(
+                                androidforge_core::error::ErrorCode::SessionNotFound,
+                                "action receipts require a session",
+                            )
+                            .with_suggestion(
+                                "Pass --session <ID> or run `androidforge session ensure`.",
+                            ));
+                        };
+                        let selector_value = serde_json::to_value(&selector)?;
+                        let mut builder = receipt::ReceiptBuilder::new(
+                            "long_press",
+                            Some(selector_value.clone()),
+                            session,
+                            &device,
+                        );
+                        let before = match observation::collect_observation(
+                            ctx, session, &device, None, false,
+                        )
+                        .await
+                        {
+                            Ok(observation) => observation,
+                            Err(error) => {
+                                let receipt = builder.finish(
+                                    receipt::DispatchState::NotDispatched,
+                                    false,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    Some(error.message().to_string()),
+                                    full,
+                                );
+                                return Err(receipt_error(
+                                    error,
+                                    &receipt,
+                                    "before observation failed; the action was not dispatched",
+                                ));
+                            }
+                        };
+                        builder.set_before(before);
+                        let result = match ui.long_press(&serial, &selector).await {
+                            Ok(result) => result,
+                            Err(error) => {
+                                let resolved = !matches!(
+                                    error.code(),
+                                    androidforge_core::error::ErrorCode::SelectorNotFound
+                                        | androidforge_core::error::ErrorCode::SelectorAmbiguous
+                                );
+                                let receipt =
+                                    dispatch_error_receipt(builder, &error, resolved, None, full)?;
+                                return Err(receipt_error(
+                                    error,
+                                    &receipt,
+                                    "action dispatch failed",
+                                ));
+                            }
+                        };
+                        let target = serde_json::to_value(&result.matched)?;
+                        let action = serde_json::to_value(&result)?;
+                        let (value, suffix) = complete_receipt(
+                            ctx,
+                            session,
+                            &device,
+                            builder,
+                            true,
+                            true,
+                            Some(target),
+                            action,
+                            Some(&selector),
+                            &args.postcondition,
+                            full,
+                        )
+                        .await?;
+                        return Ok(success(
+                            "ui.long-press",
+                            value,
+                            format!(
+                                "Long-pressed at ({}, {}).{suffix}\n",
+                                result.tap_x, result.tap_y
+                            ),
+                        )
+                        .with_session(session.id.clone())
+                        .with_device(serial.clone()));
+                    }
                     let result = ui.long_press(&serial, &selector).await?;
                     let action = serde_json::to_value(&result)?;
                     let (value, suffix) = apply_postconditions(
@@ -512,6 +784,8 @@ async fn text(
         None
     };
     let serial = device.serial.clone();
+    let receipt_requested = args.receipt || args.receipt_full;
+    let full = args.receipt_full;
     execute_in_run!(
         ctx,
         "ui.text",
@@ -522,6 +796,96 @@ async fn text(
         |_run| async {
             let mut ui = ctx.ui_manager()?;
             ui.text_verify = !args.no_verify;
+            if receipt_requested {
+                let Some(session) = session else {
+                    return Err(ForgeError::new(
+                        androidforge_core::error::ErrorCode::SessionNotFound,
+                        "action receipts require a session",
+                    )
+                    .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+                };
+                let selector_value = selector.as_ref().map(serde_json::to_value).transpose()?;
+                let mut builder =
+                    receipt::ReceiptBuilder::new("text", selector_value, session, device);
+                let before =
+                    match observation::collect_observation(ctx, session, device, None, false).await
+                    {
+                        Ok(observation) => observation,
+                        Err(error) => {
+                            let receipt = builder.finish(
+                                receipt::DispatchState::NotDispatched,
+                                false,
+                                None,
+                                None,
+                                None,
+                                None,
+                                Some(error.message().to_string()),
+                                full,
+                            );
+                            return Err(receipt_error(
+                                error,
+                                &receipt,
+                                "before observation failed; the action was not dispatched",
+                            ));
+                        }
+                    };
+                builder.set_before(before);
+                let result = match ui
+                    .text(
+                        &serial,
+                        &args.value,
+                        selector.as_ref(),
+                        args.clear,
+                        args.hide_keyboard,
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let resolved = !matches!(
+                            error.code(),
+                            androidforge_core::error::ErrorCode::SelectorNotFound
+                                | androidforge_core::error::ErrorCode::SelectorAmbiguous
+                        );
+                        let receipt =
+                            dispatch_error_receipt(builder, &error, resolved, None, full)?;
+                        return Err(receipt_error(error, &receipt, "action dispatch failed"));
+                    }
+                };
+                let action = serde_json::to_value(&result)?;
+                let (value, suffix) = complete_receipt(
+                    ctx,
+                    session,
+                    device,
+                    builder,
+                    true,
+                    true,
+                    None,
+                    action,
+                    selector.as_ref(),
+                    &args.postcondition,
+                    full,
+                )
+                .await?;
+                let human = format!(
+                    "Text entry {} for {} character(s){}.{}\n",
+                    if result.verified {
+                        "verified"
+                    } else {
+                        "completed without verification"
+                    },
+                    args.value.chars().count(),
+                    if result.cleared {
+                        " after clearing the field"
+                    } else {
+                        ""
+                    },
+                    suffix
+                );
+                return Ok(success("ui.text", value, human)
+                    .with_session(session.id.clone())
+                    .with_device(serial.clone()));
+            }
             let result = ui
                 .text(
                     &serial,
@@ -557,7 +921,7 @@ async fn text(
                 suffix
             );
             Ok(success("ui.text", value, human)
-                .with_optional_session(session.map(|session| session.id.clone()))
+                .with_optional_session(session_id(session))
                 .with_device(serial.clone()))
         },
     )
@@ -665,6 +1029,8 @@ async fn scroll(
         None
     };
     let serial = device.serial.clone();
+    let receipt_requested = args.receipt || args.receipt_full;
+    let full = args.receipt_full;
     execute_in_run!(
         ctx,
         "ui.scroll",
@@ -674,6 +1040,84 @@ async fn scroll(
         true,
         |_run| async {
             let ui = ctx.ui_manager()?;
+            if receipt_requested {
+                let Some(session) = session else {
+                    return Err(ForgeError::new(
+                        androidforge_core::error::ErrorCode::SessionNotFound,
+                        "action receipts require a session",
+                    )
+                    .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+                };
+                let selector_value = selector.as_ref().map(serde_json::to_value).transpose()?;
+                let mut builder =
+                    receipt::ReceiptBuilder::new("scroll", selector_value, session, device);
+                let before =
+                    match observation::collect_observation(ctx, session, device, None, false).await
+                    {
+                        Ok(observation) => observation,
+                        Err(error) => {
+                            let receipt = builder.finish(
+                                receipt::DispatchState::NotDispatched,
+                                false,
+                                None,
+                                None,
+                                None,
+                                None,
+                                Some(error.message().to_string()),
+                                full,
+                            );
+                            return Err(receipt_error(
+                                error,
+                                &receipt,
+                                "before observation failed; the action was not dispatched",
+                            ));
+                        }
+                    };
+                builder.set_before(before);
+                let result = match ui.scroll(&serial, &args.direction, selector.as_ref()).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let resolved = !matches!(
+                            error.code(),
+                            androidforge_core::error::ErrorCode::SelectorNotFound
+                                | androidforge_core::error::ErrorCode::SelectorAmbiguous
+                        );
+                        let receipt =
+                            dispatch_error_receipt(builder, &error, resolved, None, full)?;
+                        return Err(receipt_error(error, &receipt, "action dispatch failed"));
+                    }
+                };
+                let action = serde_json::to_value(&result)?;
+                let (value, suffix) = complete_receipt(
+                    ctx,
+                    session,
+                    device,
+                    builder,
+                    true,
+                    true,
+                    None,
+                    action,
+                    selector.as_ref(),
+                    &args.postcondition,
+                    full,
+                )
+                .await?;
+                return Ok(success(
+                    "ui.scroll",
+                    value,
+                    format!(
+                        "Scrolled {} within [{},{}][{},{}].{}\n",
+                        args.direction,
+                        result.target_bounds.left,
+                        result.target_bounds.top,
+                        result.target_bounds.right,
+                        result.target_bounds.bottom,
+                        suffix
+                    ),
+                )
+                .with_session(session.id.clone())
+                .with_device(serial.clone()));
+            }
             let result = ui
                 .scroll(&serial, &args.direction, selector.as_ref())
                 .await?;
@@ -700,7 +1144,7 @@ async fn scroll(
                     suffix
                 ),
             )
-            .with_optional_session(session.map(|session| session.id.clone()))
+            .with_optional_session(session_id(session))
             .with_device(serial.clone()))
         },
     )
@@ -873,34 +1317,114 @@ fn value_matches(hierarchy: &UiHierarchy, selector: Option<&Selector>, expected:
     })
 }
 
+struct PostconditionOutcome {
+    requested: bool,
+    result: receipt::PostconditionResult,
+    duration_ms: u64,
+    conditions: Vec<receipt::PostconditionCondition>,
+    foreground_package: Option<String>,
+    foreground_activity: Option<String>,
+    observation: Option<observation::Observation>,
+    evaluation_error: Option<String>,
+}
+
+impl PostconditionOutcome {
+    fn not_requested() -> Self {
+        Self {
+            requested: false,
+            result: receipt::PostconditionResult::NotRequested,
+            duration_ms: 0,
+            conditions: Vec::new(),
+            foreground_package: None,
+            foreground_activity: None,
+            observation: None,
+            evaluation_error: None,
+        }
+    }
+
+    fn to_receipt(&self) -> receipt::PostconditionReceipt {
+        receipt::PostconditionReceipt {
+            result: self.result,
+            duration_ms: self.duration_ms,
+            conditions: self.conditions.clone(),
+            foreground_package: self.foreground_package.clone(),
+            foreground_activity: self.foreground_activity.clone(),
+        }
+    }
+}
+
 /// Poll the requested postconditions after an action. The action itself is
 /// never repeated: only observations are refreshed until the deadline.
-async fn apply_postconditions(
+async fn evaluate_postconditions(
     ctx: &CliContext,
     session: Option<&Session>,
     device: &androidforge_core::model::Device,
     selector: Option<&Selector>,
     post: &PostconditionArgs,
-    action: serde_json::Value,
-) -> Result<(serde_json::Value, String)> {
+) -> PostconditionOutcome {
     if !postconditions_requested(post) {
-        return Ok((action, String::new()));
+        return PostconditionOutcome::not_requested();
     }
-    let timeout = ctx.parse_timeout(post.timeout.as_deref(), 10)?;
     let started = Instant::now();
-    let ui = ctx.ui_manager()?;
-    let adb = ctx.adb()?;
+    let timeout = match ctx.parse_timeout(post.timeout.as_deref(), 10) {
+        Ok(timeout) => timeout,
+        Err(error) => {
+            return PostconditionOutcome {
+                requested: true,
+                result: receipt::PostconditionResult::NotEvaluated,
+                duration_ms: 0,
+                conditions: Vec::new(),
+                foreground_package: None,
+                foreground_activity: None,
+                observation: None,
+                evaluation_error: Some(error.message().to_string()),
+            };
+        }
+    };
+    let ui = match ctx.ui_manager() {
+        Ok(ui) => ui,
+        Err(error) => {
+            return PostconditionOutcome {
+                requested: true,
+                result: receipt::PostconditionResult::NotEvaluated,
+                duration_ms: 0,
+                conditions: Vec::new(),
+                foreground_package: None,
+                foreground_activity: None,
+                observation: None,
+                evaluation_error: Some(error.message().to_string()),
+            };
+        }
+    };
+    let adb = ctx.adb().ok();
     let serial = device.serial.clone();
     let needs_hierarchy = !post.wait_for_text.is_empty()
         || !post.wait_for_absent_text.is_empty()
         || !post.wait_for_value.is_empty();
     loop {
         let hierarchy = if needs_hierarchy {
-            Some(ui.dump(&serial).await?)
+            match ui.dump(&serial).await {
+                Ok(hierarchy) => Some(hierarchy),
+                Err(error) => {
+                    return PostconditionOutcome {
+                        requested: true,
+                        result: receipt::PostconditionResult::NotEvaluated,
+                        duration_ms: started.elapsed().as_millis() as u64,
+                        conditions: Vec::new(),
+                        foreground_package: None,
+                        foreground_activity: None,
+                        observation: None,
+                        evaluation_error: Some(error.message().to_string()),
+                    };
+                }
+            }
         } else {
             None
         };
-        let focus = adb.current_focus(&serial).await;
+        let focus = match &adb {
+            Some(adb) => adb.current_focus(&serial).await,
+            None => None,
+        };
         let foreground_package = focus
             .as_ref()
             .map(|focus| focus.package.clone())
@@ -912,83 +1436,68 @@ async fn apply_postconditions(
         let foreground_activity = focus.as_ref().and_then(|focus| focus.activity.clone());
         let mut conditions = Vec::new();
         for expected in &post.wait_for_text {
-            conditions.push(serde_json::json!({
-                "type": "text_visible",
-                "expected": expected,
-                "satisfied": hierarchy
+            conditions.push(receipt::PostconditionCondition {
+                kind: "text_visible".to_string(),
+                expected: expected.clone(),
+                satisfied: hierarchy
                     .as_ref()
                     .is_some_and(|hierarchy| contains_text(hierarchy, expected)),
-            }));
+            });
         }
         for expected in &post.wait_for_absent_text {
-            conditions.push(serde_json::json!({
-                "type": "text_absent",
-                "expected": expected,
-                "satisfied": hierarchy
+            conditions.push(receipt::PostconditionCondition {
+                kind: "text_absent".to_string(),
+                expected: expected.clone(),
+                satisfied: hierarchy
                     .as_ref()
                     .is_some_and(|hierarchy| !contains_text(hierarchy, expected)),
-            }));
+            });
         }
         for expected in &post.wait_for_value {
-            conditions.push(serde_json::json!({
-                "type": "value_contains",
-                "expected": expected,
-                "satisfied": hierarchy
+            conditions.push(receipt::PostconditionCondition {
+                kind: "value_contains".to_string(),
+                expected: expected.clone(),
+                satisfied: hierarchy
                     .as_ref()
                     .is_some_and(|hierarchy| value_matches(hierarchy, selector, expected)),
-            }));
+            });
         }
         for expected in &post.wait_for_package {
-            conditions.push(serde_json::json!({
-                "type": "package_foreground",
-                "expected": expected,
-                "satisfied": foreground_package.as_deref() == Some(expected.as_str()),
-            }));
+            conditions.push(receipt::PostconditionCondition {
+                kind: "package_foreground".to_string(),
+                expected: expected.clone(),
+                satisfied: foreground_package.as_deref() == Some(expected.as_str()),
+            });
         }
         for expected in &post.wait_for_activity {
-            conditions.push(serde_json::json!({
-                "type": "activity_foreground",
-                "expected": expected,
-                "satisfied": foreground_activity
+            conditions.push(receipt::PostconditionCondition {
+                kind: "activity_foreground".to_string(),
+                expected: expected.clone(),
+                satisfied: foreground_activity
                     .as_deref()
                     .is_some_and(|activity| activity.contains(expected.as_str())),
-            }));
+            });
         }
-        let satisfied = conditions.iter().all(|condition| {
-            condition
-                .get("satisfied")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-        });
+        let satisfied = conditions.iter().all(|condition| condition.satisfied);
         if satisfied {
-            let observation_id = match session {
+            let observation = match session {
                 Some(session) => {
                     observation::collect_observation(ctx, session, device, None, false)
                         .await
                         .ok()
-                        .map(|observation| observation.id)
                 }
                 None => None,
             };
-            let result = serde_json::json!({
-                "action_executed": true,
-                "action": action,
-                "postcondition": {
-                    "satisfied": true,
-                    "duration_ms": started.elapsed().as_millis() as u64,
-                    "conditions": conditions,
-                    "foreground_package": foreground_package,
-                    "foreground_activity": foreground_activity,
-                    "observation_id": observation_id,
-                }
-            });
-            return Ok((
-                result,
-                format!(
-                    " Postcondition satisfied in {}ms.",
-                    started.elapsed().as_millis()
-                ),
-            ));
+            return PostconditionOutcome {
+                requested: true,
+                result: receipt::PostconditionResult::Satisfied,
+                duration_ms: started.elapsed().as_millis() as u64,
+                conditions,
+                foreground_package,
+                foreground_activity,
+                observation,
+                evaluation_error: None,
+            };
         }
         if started.elapsed() >= timeout {
             let observation = match session {
@@ -999,39 +1508,264 @@ async fn apply_postconditions(
                 }
                 None => None,
             };
-            let mut error = ForgeError::new(
-                androidforge_core::error::ErrorCode::PostconditionTimeout,
-                format!(
-                    "the UI action completed but its postcondition was not satisfied within {}s",
-                    timeout.as_secs()
-                ),
-            )
-            .with_context("action_executed", serde_json::json!(true))
-            .with_context("postconditions", serde_json::json!(conditions))
-            .with_context(
-                "foreground_package",
-                serde_json::json!(foreground_package),
-            )
-            .with_context(
-                "foreground_activity",
-                serde_json::json!(foreground_activity),
-            )
-            .with_context("timeout_ms", serde_json::json!(timeout.as_millis() as u64))
-            .with_suggestion(
-                "Run `androidforge ui observe --session <ID> --json` to inspect the actual screen.",
-            )
-            .with_suggestion(
-                "Do not retry a destructive action blindly; verify whether it already changed state.",
-            )
-            .device(serial);
-            if let Some(session) = session {
-                error = error.session(session.id.clone());
-            }
-            if let Some(observation) = observation {
-                error = error.with_context("observation_id", serde_json::json!(observation.id));
-            }
-            return Err(error);
+            return PostconditionOutcome {
+                requested: true,
+                result: receipt::PostconditionResult::TimedOut,
+                duration_ms: started.elapsed().as_millis() as u64,
+                conditions,
+                foreground_package,
+                foreground_activity,
+                observation,
+                evaluation_error: None,
+            };
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
+}
+
+fn postcondition_value(outcome: &PostconditionOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "requested": outcome.requested,
+        "result": match outcome.result {
+            receipt::PostconditionResult::NotRequested => "not_requested",
+            receipt::PostconditionResult::Satisfied => "satisfied",
+            receipt::PostconditionResult::TimedOut => "timed_out",
+            receipt::PostconditionResult::NotEvaluated => "not_evaluated",
+        },
+        "satisfied": outcome.result == receipt::PostconditionResult::Satisfied,
+        "duration_ms": outcome.duration_ms,
+        "conditions": outcome.conditions,
+        "foreground_package": outcome.foreground_package,
+        "foreground_activity": outcome.foreground_activity,
+        "observation_id": outcome.observation.as_ref().map(|observation| observation.id.clone()),
+        "evaluation_error": outcome.evaluation_error,
+    })
+}
+
+/// Run postconditions and return the legacy wrapper used by actions without
+/// `--receipt`. Action dispatch has already happened and is never repeated.
+async fn apply_postconditions(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    selector: Option<&Selector>,
+    post: &PostconditionArgs,
+    action: serde_json::Value,
+) -> Result<(serde_json::Value, String)> {
+    let outcome = evaluate_postconditions(ctx, session, device, selector, post).await;
+    if outcome.result == receipt::PostconditionResult::TimedOut {
+        let timeout_ms = outcome.duration_ms;
+        let mut error = ForgeError::new(
+            androidforge_core::error::ErrorCode::PostconditionTimeout,
+            format!(
+                "the UI action completed but its postcondition was not satisfied within {}ms",
+                timeout_ms
+            ),
+        )
+        .with_context("action_executed", serde_json::json!(true))
+        .with_context("postconditions", serde_json::json!(outcome.conditions))
+        .with_context(
+            "foreground_package",
+            serde_json::json!(outcome.foreground_package),
+        )
+        .with_context(
+            "foreground_activity",
+            serde_json::json!(outcome.foreground_activity),
+        )
+        .with_context("timeout_ms", serde_json::json!(timeout_ms))
+        .with_suggestion(
+            "Run `androidforge ui observe --session <ID> --json` to inspect the actual screen.",
+        )
+        .with_suggestion(
+            "Do not retry a destructive action blindly; verify whether it already changed state.",
+        )
+        .device(device.serial.clone());
+        if let Some(session) = session {
+            error = error.session(session.id.clone());
+        }
+        if let Some(observation) = &outcome.observation {
+            error = error.with_context("observation_id", serde_json::json!(observation.id));
+        }
+        return Err(error);
+    }
+    if outcome.result == receipt::PostconditionResult::NotEvaluated {
+        let mut error = ForgeError::new(
+            androidforge_core::error::ErrorCode::CommandFailed,
+            format!(
+                "the UI action completed but its postcondition could not be evaluated: {}",
+                outcome
+                    .evaluation_error
+                    .as_deref()
+                    .unwrap_or("observation failed")
+            ),
+        )
+        .with_context("action_executed", serde_json::json!(true))
+        .with_context("postcondition_result", serde_json::json!("not_evaluated"))
+        .with_suggestion(
+            "Run `androidforge ui observe --session <ID> --json` to inspect the device state.",
+        )
+        .device(device.serial.clone());
+        if let Some(session) = session {
+            error = error.session(session.id.clone());
+        }
+        return Err(error);
+    }
+    if outcome.requested {
+        let result = serde_json::json!({
+            "action_executed": true,
+            "action": action,
+            "postcondition": postcondition_value(&outcome),
+        });
+        return Ok((
+            result,
+            format!(" Postcondition satisfied in {}ms.", outcome.duration_ms),
+        ));
+    }
+    Ok((action, String::new()))
+}
+
+fn receipt_error(
+    mut error: ForgeError,
+    receipt: &receipt::ActionReceipt,
+    message: &str,
+) -> ForgeError {
+    error = error.with_context(
+        "receipt",
+        serde_json::to_value(receipt).unwrap_or(serde_json::Value::Null),
+    );
+    error = error.with_context("action_dispatched", serde_json::json!(receipt.dispatched));
+    error.with_context_string("receipt_message", message.to_string())
+}
+
+/// Complete a receipt-enabled action. The action has already been dispatched
+/// exactly once. A postcondition timeout or evaluation failure is returned as
+/// an error that still carries the full partial receipt.
+#[allow(clippy::too_many_arguments)]
+async fn complete_receipt(
+    ctx: &CliContext,
+    session: &Session,
+    device: &androidforge_core::model::Device,
+    builder: receipt::ReceiptBuilder,
+    dispatched: bool,
+    target_resolved: bool,
+    target: Option<serde_json::Value>,
+    action: serde_json::Value,
+    selector: Option<&Selector>,
+    post: &PostconditionArgs,
+    full: bool,
+) -> Result<(serde_json::Value, String)> {
+    let outcome = evaluate_postconditions(ctx, Some(session), device, selector, post).await;
+    let after = match outcome.observation.clone() {
+        Some(observation) => Some(observation),
+        None => observation::collect_observation(ctx, session, device, None, false)
+            .await
+            .ok(),
+    };
+    let receipt = builder.finish(
+        if dispatched {
+            receipt::DispatchState::Dispatched
+        } else {
+            receipt::DispatchState::NotDispatched
+        },
+        target_resolved,
+        target,
+        after,
+        Some(action.clone()),
+        outcome.requested.then(|| outcome.to_receipt()),
+        None,
+        full,
+    );
+    if outcome.result == receipt::PostconditionResult::TimedOut {
+        let error = ForgeError::new(
+            androidforge_core::error::ErrorCode::PostconditionTimeout,
+            format!(
+                "the UI action completed but its postcondition was not satisfied within {}ms",
+                outcome.duration_ms
+            ),
+        )
+        .with_suggestion(
+            "Run `androidforge ui observe --session <ID> --json` to inspect the actual screen.",
+        )
+        .with_suggestion(
+            "Do not retry a destructive action blindly; verify whether it already changed state.",
+        )
+        .session(session.id.clone())
+        .device(device.serial.clone());
+        return Err(receipt_error(
+            error,
+            &receipt,
+            "action executed; postcondition timed out",
+        ));
+    }
+    if outcome.result == receipt::PostconditionResult::NotEvaluated {
+        let error = ForgeError::new(
+            androidforge_core::error::ErrorCode::CommandFailed,
+            format!(
+                "the UI action completed but its postcondition could not be evaluated: {}",
+                outcome
+                    .evaluation_error
+                    .as_deref()
+                    .unwrap_or("observation failed")
+            ),
+        )
+        .with_suggestion(
+            "Run `androidforge ui observe --session <ID> --json` to inspect the device state.",
+        )
+        .session(session.id.clone())
+        .device(device.serial.clone());
+        return Err(receipt_error(
+            error,
+            &receipt,
+            "action executed; postcondition could not be evaluated",
+        ));
+    }
+    let mut value = match action {
+        serde_json::Value::Object(mut object) => {
+            object.insert("receipt".to_string(), serde_json::to_value(&receipt)?);
+            if outcome.requested {
+                object.insert("postcondition".to_string(), postcondition_value(&outcome));
+            }
+            serde_json::Value::Object(object)
+        }
+        other => serde_json::json!({"action": other, "receipt": receipt}),
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "action_executed".to_string(),
+            serde_json::Value::Bool(dispatched),
+        );
+    }
+    let suffix = match receipt.effect {
+        receipt::Effect::NoVisibleChange => " No visible semantic change was observed.".to_string(),
+        effect => format!(" Effect: {}.", effect.as_str()),
+    };
+    Ok((value, suffix))
+}
+
+fn dispatch_error_receipt(
+    builder: receipt::ReceiptBuilder,
+    error: &ForgeError,
+    target_resolved: bool,
+    after: Option<observation::Observation>,
+    full: bool,
+) -> Result<receipt::ActionReceipt> {
+    let dispatch_state = if matches!(
+        error.code(),
+        androidforge_core::error::ErrorCode::SelectorNotFound
+            | androidforge_core::error::ErrorCode::SelectorAmbiguous
+    ) {
+        receipt::DispatchState::NotDispatched
+    } else {
+        receipt::DispatchState::Unknown
+    };
+    Ok(builder.finish(
+        dispatch_state,
+        target_resolved,
+        None,
+        after,
+        None,
+        None,
+        Some(error.message().to_string()),
+        full,
+    ))
 }

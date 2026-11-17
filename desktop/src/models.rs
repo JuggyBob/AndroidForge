@@ -285,6 +285,36 @@ pub struct EvidenceRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RecurrenceInfo {
+    #[serde(default)]
+    pub fingerprint: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub occurrence_count: usize,
+    #[serde(default)]
+    pub first_seen: String,
+    #[serde(default)]
+    pub last_seen: String,
+    #[serde(default)]
+    pub currently_resolved: bool,
+    #[serde(default)]
+    pub resolved_by_run: Option<String>,
+    #[serde(default)]
+    pub devices: Vec<String>,
+    #[serde(default)]
+    pub app_versions: Vec<String>,
+    #[serde(default)]
+    pub run_ids: Vec<String>,
+    #[serde(default)]
+    pub uncertainty: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DiagnosisExplanation {
     #[serde(default)]
     pub schema_version: u32,
@@ -306,6 +336,8 @@ pub struct DiagnosisExplanation {
     pub next_actions: Vec<NextAction>,
     #[serde(default)]
     pub fingerprint: String,
+    #[serde(default)]
+    pub recurrence: Option<RecurrenceInfo>,
     #[serde(default)]
     pub uncertainty: Vec<String>,
 }
@@ -1089,4 +1121,43 @@ pub struct MaintenanceSummary {
     pub largest_runs: Vec<RunStorage>,
     #[serde(default)]
     pub terminal_sessions: Vec<SessionStorage>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explanation_deserializes_recurrence_memory() {
+        let value = serde_json::json!({
+            "run_id": "run-1",
+            "fingerprint": "sha256:abc",
+            "diagnosis": {"category": "assertion", "confidence": "high", "summary": "failed"},
+            "recurrence": {
+                "fingerprint": "sha256:abc",
+                "status": "regressed",
+                "occurrence_count": 2,
+                "first_seen": "2026-01-01T00:00:00Z",
+                "last_seen": "2026-01-03T00:00:00Z",
+                "currently_resolved": false,
+                "devices": ["emulator-5554"],
+                "app_versions": ["1.0 (1)"],
+                "run_ids": ["run-1", "run-2"]
+            }
+        });
+        let explanation: DiagnosisExplanation = serde_json::from_value(value).unwrap();
+        let recurrence = explanation.recurrence.unwrap();
+        assert_eq!(recurrence.status, "regressed");
+        assert_eq!(recurrence.occurrence_count, 2);
+    }
+
+    #[test]
+    fn page_navigation_includes_memory_and_ownership_pages() {
+        let labels = crate::state::Page::ALL
+            .iter()
+            .map(|page| page.label())
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"Context"));
+        assert!(labels.contains(&"Ownership"));
+    }
 }

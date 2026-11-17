@@ -412,11 +412,76 @@ impl App {
                 self.triage.explanation_loading = false;
                 match result {
                     Ok(explanation) => {
-                        self.triage.explanation = Some(explanation);
+                        self.triage.explanation = Some(explanation.clone());
                         self.triage.explanation_error = None;
+                        self.refresh_recurrence_history(&explanation.fingerprint, ctx);
                     }
                     Err(error) => {
                         self.triage.explanation_error = Some(error);
+                    }
+                }
+            }
+            AppEvent::Context(result) => {
+                self.context.loading = false;
+                match result {
+                    Ok(snapshot) => {
+                        self.context.snapshot = Some(snapshot);
+                        self.context.error = None;
+                        self.context.updated = Some(Instant::now());
+                    }
+                    Err(error) => {
+                        self.context.error = Some(error);
+                    }
+                }
+            }
+            AppEvent::RecurrenceHistory(result) => {
+                self.triage.history_loading = false;
+                match result {
+                    Ok(history) => {
+                        self.triage.history = Some(history);
+                        self.triage.history_error = None;
+                    }
+                    Err(error) => self.triage.history_error = Some(error),
+                }
+            }
+            AppEvent::BundlePreview { run_id, result } => {
+                self.triage.bundle.preview_loading = false;
+                if self.triage.run_id.as_deref() != Some(run_id.as_str()) {
+                    return;
+                }
+                match result {
+                    Ok(preview) => {
+                        self.triage.bundle.preview = Some(preview);
+                        self.triage.bundle.preview_error = None;
+                    }
+                    Err(error) => self.triage.bundle.preview_error = Some(error),
+                }
+            }
+            AppEvent::BundleCreated { run_id, result } => {
+                self.triage.bundle.creating = false;
+                if self.triage.run_id.as_deref() != Some(run_id.as_str()) {
+                    return;
+                }
+                match result {
+                    Ok(result) => {
+                        let path = result
+                            .get("output")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("the bundle output")
+                            .to_string();
+                        self.triage.bundle.result = Some(result);
+                        self.triage.bundle.create_error = None;
+                        self.toast(
+                            format!("Diagnostic bundle created: {path}"),
+                            ToastLevel::Success,
+                        );
+                    }
+                    Err(error) => {
+                        self.triage.bundle.create_error = Some(error.clone());
+                        self.toast(
+                            format!("Bundle creation failed: {error}"),
+                            ToastLevel::Error,
+                        );
                     }
                 }
             }

@@ -102,12 +102,23 @@ pub struct RunStep {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunInvocation {
+    pub argv: Vec<String>,
+    pub cwd: String,
+    pub project_root: String,
+    pub captured_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunReport {
     pub schema_version: u32,
     pub run_id: String,
     pub command: String,
     pub project: String,
     pub project_root: String,
+    /// Exact CLI argv that started the run. Older reports do not contain it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<RunInvocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,6 +156,7 @@ impl RunReport {
             command: command.into(),
             project: project.into(),
             project_root: project_root.into(),
+            invocation: None,
             session_id: None,
             device_serial: None,
             device: None,
@@ -275,6 +287,16 @@ impl RunContext {
         report.device_serial = options.device.as_ref().map(|device| device.serial.clone());
         report.device = options.device.clone();
         report.build = options.build.clone();
+        report.invocation = Some(RunInvocation {
+            argv: std::env::args_os()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect(),
+            cwd: std::env::current_dir()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            project_root: options.project_root.to_string_lossy().into_owned(),
+            captured_at: now_rfc3339(),
+        });
 
         let metadata = RunMetadata {
             schema_version: REPORT_SCHEMA_VERSION,

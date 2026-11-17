@@ -8,7 +8,7 @@ use crate::state::*;
 use crate::theme;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
-    if app.run_detail.is_none() && app.triage.run_id.is_none() {
+    if app.run_detail.is_none() && app.triage.run_id.is_none() && !app.runs.value.runs.is_empty() {
         app.open_triage(None, ui.ctx());
     }
     page_header(
@@ -75,6 +75,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(12.0);
     diagnosis_panel(app, ui);
+    ui.add_space(12.0);
+    recurrence_panel(app, ui);
+    ui.add_space(12.0);
+    bundle_panel(app, ui);
     ui.add_space(12.0);
     artifacts_panel(app, ui, &report, &path);
     ui.add_space(12.0);
@@ -303,6 +307,263 @@ fn diagnosis_panel(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(RichText::new(warning).size(9.0).color(theme::RED));
                 }
             }
+        }
+    });
+}
+
+fn recurrence_panel(app: &mut App, ui: &mut egui::Ui) {
+    let explanation = app.triage.explanation.clone();
+    let history = app.triage.history.clone();
+    let history_loading = app.triage.history_loading;
+    let history_error = app.triage.history_error.clone();
+    card(ui, |ui| {
+        ui.horizontal(|ui| {
+            section_title(ui, "Failure recurrence");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if secondary_button(ui, "Refresh history").clicked()
+                    && let Some(explanation) = &explanation
+                {
+                    app.refresh_recurrence_history(&explanation.fingerprint, ui.ctx());
+                }
+                if let Some(explanation) = &explanation {
+                    copy_button(ui, &explanation.fingerprint, "Copy fingerprint");
+                }
+            });
+        });
+        let Some(explanation) = explanation else {
+            muted(ui, "Load the explanation to derive recurrence memory.");
+            return;
+        };
+        if history_loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                muted(ui, "Reading stored occurrences of this fingerprint...");
+            });
+        }
+        if let Some(error) = &history_error {
+            error_banner(ui, error);
+        }
+        match &explanation.recurrence {
+            Some(recurrence) => {
+                let color = match recurrence.status.as_str() {
+                    "new" => theme::BLUE,
+                    "recurring" => theme::YELLOW,
+                    "regressed" => theme::RED,
+                    _ => theme::MUTED,
+                };
+                ui.horizontal_wrapped(|ui| {
+                    status_pill(ui, &recurrence.status, color);
+                    status_pill(
+                        ui,
+                        if recurrence.currently_resolved {
+                            "currently resolved"
+                        } else {
+                            "open"
+                        },
+                        if recurrence.currently_resolved {
+                            theme::GREEN
+                        } else {
+                            theme::YELLOW
+                        },
+                    );
+                    status_pill(
+                        ui,
+                        &format!("{} occurrence(s)", recurrence.occurrence_count),
+                        theme::MUTED,
+                    );
+                });
+                kv_grid(
+                    ui,
+                    "triage-recurrence",
+                    &[
+                        ("First seen", recurrence.first_seen.clone()),
+                        ("Last seen", recurrence.last_seen.clone()),
+                        (
+                            "Resolved by",
+                            recurrence
+                                .resolved_by_run
+                                .clone()
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        (
+                            "Devices",
+                            if recurrence.devices.is_empty() {
+                                "-".to_string()
+                            } else {
+                                recurrence.devices.join(", ")
+                            },
+                        ),
+                        (
+                            "App versions",
+                            if recurrence.app_versions.is_empty() {
+                                "-".to_string()
+                            } else {
+                                recurrence.app_versions.join(", ")
+                            },
+                        ),
+                    ],
+                );
+                for line in recurrence.uncertainty.iter().take(3) {
+                    ui.label(RichText::new(line).size(9.0).color(theme::YELLOW));
+                }
+            }
+            None => {
+                warning_banner(
+                    ui,
+                    "Recurrence metadata is unavailable for this run. It may have failed too early to produce a comparable fingerprint.",
+                );
+            }
+        }
+        if let Some(history) = &history {
+            if let Some(entry) = history
+                .get("fingerprint")
+                .filter(|entry| entry.get("occurrences").is_some())
+            {
+                ui.add_space(5.0);
+                ui.label(RichText::new("Stored occurrences").size(10.0).strong());
+                if let Some(occurrences) = entry["occurrences"].as_array() {
+                    for occurrence in occurrences.iter().take(8) {
+                        let run_id = occurrence["run_id"].as_str().unwrap_or("-");
+                        let status = occurrence["run_status"].as_str().unwrap_or("-");
+                        let step = occurrence["failed_step"].as_str().unwrap_or("-");
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{run_id}  {status}  {step}"))
+                                    .size(9.5)
+                                    .monospace(),
+                            );
+                            if ghost_button(ui, "Open").clicked() {
+                                app.selected_run = Some(run_id.to_string());
+                                app.set_page(Page::Runs);
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        small(
+            ui,
+            "Recurrence is derived from stored run reports. A passing run only proves resolution when it exercised the same project, scenario and failing step.",
+        );
+    });
+}
+
+fn bundle_panel(app: &mut App, ui: &mut egui::Ui) {
+    let run_id = app.triage.run_id.clone();
+    let preview = app.triage.bundle.preview.clone();
+    let preview_loading = app.triage.bundle.preview_loading;
+    let preview_error = app.triage.bundle.preview_error.clone();
+    let result = app.triage.bundle.result.clone();
+    let creating = app.triage.bundle.creating;
+    let create_error = app.triage.bundle.create_error.clone();
+    card(ui, |ui| {
+        section_title(ui, "Diagnostic bundle");
+        muted(
+            ui,
+            "Preview what will be included, then create a redacted ZIP under the project artifacts directory.",
+        );
+        let Some(run_id) = run_id else {
+            warning_banner(ui, "Select a run before creating a bundle.");
+            return;
+        };
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if secondary_button(ui, "Preview inclusion").clicked() {
+                app.preview_bundle(&run_id, ui.ctx());
+            }
+            let create = secondary_button(ui, "Create ZIP bundle");
+            if create.clicked() && !creating {
+                let default_name = format!("{run_id}-evidence.zip");
+                let default_dir = app
+                    .project_path
+                    .as_ref()
+                    .map(|path| path.join(".artifacts").join("bundles"));
+                let mut dialog = rfd::FileDialog::new().set_file_name(&default_name);
+                if let Some(dir) = default_dir {
+                    let _ = std::fs::create_dir_all(&dir);
+                    dialog = dialog.set_directory(dir);
+                }
+                if let Some(path) = dialog.save_file() {
+                    app.create_bundle(&run_id, path, ui.ctx());
+                }
+            }
+            if creating {
+                ui.spinner();
+                muted(ui, "Building and verifying the ZIP...");
+            }
+        });
+        if preview_loading {
+            ui.spinner();
+        }
+        if let Some(error) = &preview_error {
+            error_banner(ui, error);
+        }
+        if let Some(preview) = &preview {
+            let entries = preview
+                .get("entries")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let excluded = preview
+                .get("excluded")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let total = preview["total_payload_bytes"].as_u64().unwrap_or(0);
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "Inclusion preview: {} payload(s), {} bytes; {} excluded",
+                    entries.len(),
+                    total,
+                    excluded.len()
+                ))
+                .size(10.0)
+                .strong(),
+            );
+            for entry in entries.iter().take(8) {
+                ui.label(
+                    RichText::new(format!(
+                        "  + {} ({})",
+                        entry["path"].as_str().unwrap_or("?"),
+                        entry["kind"].as_str().unwrap_or("?")
+                    ))
+                    .size(9.5)
+                    .color(theme::GREEN),
+                );
+            }
+            for item in excluded.iter().take(8) {
+                ui.label(
+                    RichText::new(format!(
+                        "  - {} — {}",
+                        item["source"].as_str().unwrap_or("?"),
+                        item["reason"].as_str().unwrap_or("excluded")
+                    ))
+                    .size(9.5)
+                    .color(theme::MUTED),
+                );
+            }
+            if let Some(warnings) = preview["warnings"].as_array() {
+                for warning in warnings.iter().filter_map(|value| value.as_str()) {
+                    ui.label(RichText::new(warning).size(9.0).color(theme::YELLOW));
+                }
+            }
+        }
+        if let Some(error) = &create_error {
+            error_banner(ui, error);
+        }
+        if let Some(result) = &result {
+            let path = result["output"].as_str().unwrap_or("the bundle");
+            ui.add_space(4.0);
+            success_banner(ui, &format!("Bundle created and checksum-verified: {path}"));
+            ui.horizontal(|ui| {
+                if ghost_button(ui, "Open bundle folder").clicked() {
+                    if let Some(parent) = std::path::Path::new(path).parent() {
+                        let _ = open::that(parent);
+                    }
+                }
+                copy_button(ui, path, "Copy path");
+            });
         }
     });
 }

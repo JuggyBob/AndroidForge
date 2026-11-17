@@ -666,6 +666,81 @@ impl App {
         });
     }
 
+    pub fn refresh_context(&mut self, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.context.error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.context.loading = true;
+        self.context.error = None;
+        let invocation = self
+            .project_invocation(["context", "--refresh-screen"])
+            .timeout(Duration::from_secs(60));
+        self.spawn_event(ctx, move || {
+            AppEvent::Context(run_result::<serde_json::Value>(&runner, invocation))
+        });
+    }
+
+    pub fn refresh_recurrence_history(&mut self, fingerprint: &str, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.triage.history_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        if fingerprint.is_empty() || !fingerprint.starts_with("sha256:") {
+            self.triage.history = None;
+            return;
+        }
+        self.triage.history_loading = true;
+        self.triage.history_error = None;
+        let invocation = self
+            .project_invocation(["report", "history", "--fingerprint", fingerprint])
+            .timeout(Duration::from_secs(30));
+        self.spawn_event(ctx, move || {
+            AppEvent::RecurrenceHistory(run_result::<serde_json::Value>(&runner, invocation))
+        });
+    }
+
+    pub fn preview_bundle(&mut self, run_id: &str, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.triage.bundle.preview_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.triage.bundle.preview_loading = true;
+        self.triage.bundle.preview_error = None;
+        self.triage.bundle.preview = None;
+        let invocation = self
+            .project_invocation(["report", "bundle", run_id, "--dry-run"])
+            .timeout(Duration::from_secs(30));
+        let run_id = run_id.to_string();
+        self.spawn_event(ctx, move || AppEvent::BundlePreview {
+            run_id,
+            result: run_result::<serde_json::Value>(&runner, invocation),
+        });
+    }
+
+    pub fn create_bundle(&mut self, run_id: &str, output: PathBuf, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.triage.bundle.create_error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        self.triage.bundle.creating = true;
+        self.triage.bundle.create_error = None;
+        let invocation = self
+            .project_invocation([
+                "report".to_string(),
+                "bundle".to_string(),
+                run_id.to_string(),
+                "--output".to_string(),
+                output.to_string_lossy().into_owned(),
+            ])
+            .timeout(Duration::from_secs(120));
+        let run_id = run_id.to_string();
+        self.spawn_event(ctx, move || AppEvent::BundleCreated {
+            run_id,
+            result: run_result::<serde_json::Value>(&runner, invocation),
+        });
+    }
+
     pub fn refresh_repair_plan(&mut self, ctx: &egui::Context) {
         let Some(runner) = self.runner.clone() else {
             self.setup.repair_error = Some("CLI is not connected.".to_string());

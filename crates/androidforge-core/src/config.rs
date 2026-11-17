@@ -263,11 +263,39 @@ impl Default for RedactionSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuildSection {
+    /// Variant used when `apk resolve` is called without --variant.
+    pub default_variant: Option<String>,
+    /// Module used when more than one module output matches.
+    pub default_module: Option<String>,
+    /// Map of variant name to project-relative explicit paths or glob patterns.
+    pub variants: BTreeMap<String, Vec<String>>,
+    /// Search conventional Gradle output locations when a variant has no explicit patterns.
+    pub conventional_fallback: bool,
+    /// Maximum number of files inspected for one resolution request.
+    pub max_candidates: usize,
+}
+
+impl Default for BuildSection {
+    fn default() -> Self {
+        Self {
+            default_variant: None,
+            default_module: None,
+            variants: BTreeMap::new(),
+            conventional_fallback: true,
+            max_candidates: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ForgeConfigFile {
     pub adapter_version: u32,
     pub min_androidforge_version: Option<String>,
     pub project: ProjectSection,
+    pub build: BuildSection,
     pub fixtures: FixturesSection,
     pub hooks: BTreeMap<String, HookConfig>,
     pub conformance: ConformanceSection,
@@ -285,6 +313,7 @@ impl Default for ForgeConfigFile {
             adapter_version: ADAPTER_VERSION,
             min_androidforge_version: None,
             project: ProjectSection::default(),
+            build: BuildSection::default(),
             fixtures: FixturesSection::default(),
             hooks: BTreeMap::new(),
             conformance: ConformanceSection::default(),
@@ -527,6 +556,40 @@ impl ForgeConfig {
                     format!("'{fingerprint}' is not a SHA-256 fingerprint"),
                 ));
             }
+        }
+        for (variant, patterns) in &file.build.variants {
+            if patterns.is_empty() {
+                issues.push(issue(
+                    Severity::Warning,
+                    "build.variants",
+                    format!("variant '{variant}' has no APK output patterns"),
+                ));
+            }
+            for pattern in patterns {
+                if std::path::Path::new(pattern).is_absolute() {
+                    issues.push(issue(
+                        Severity::Error,
+                        "build.variants",
+                        format!("variant '{variant}' pattern '{pattern}' must be project-relative"),
+                    ));
+                }
+                if pattern.contains("..") {
+                    issues.push(issue(
+                        Severity::Error,
+                        "build.variants",
+                        format!(
+                            "variant '{variant}' pattern '{pattern}' must not escape the project root"
+                        ),
+                    ));
+                }
+            }
+        }
+        if file.build.max_candidates == 0 {
+            issues.push(issue(
+                Severity::Error,
+                "build.max_candidates",
+                "max_candidates must be greater than zero".to_string(),
+            ));
         }
         if !matches!(file.ui.backend.as_str(), "uiautomator") {
             issues.push(issue(

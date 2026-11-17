@@ -7,6 +7,9 @@ use androidforge_core::diagnosis::{DiagnosticExplanation, explain_report};
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::BuildIdentity;
 use androidforge_core::output::CommandSuccess;
+use androidforge_core::recurrence::{
+    RecurrenceFilter, RecurrenceStatus, build_history, filter_history, find_fingerprint_in_project,
+};
 use androidforge_core::run::{
     RunContext, RunOptions, RunReport, RunStatus, clear_active_run, get_active_run, list_runs,
     resolve_run_dir, set_active_run,
@@ -14,9 +17,10 @@ use androidforge_core::run::{
 use androidforge_core::util::parse_duration;
 
 use crate::cli::{
-    ReportCommand, ReportCompareArgs, ReportExplainArgs, ReportFlakyArgs, ReportReconcileArgs,
-    RunCommand, RunEndArgs, RunExecArgs, RunStartArgs,
+    ReportCommand, ReportCompareArgs, ReportExplainArgs, ReportFlakyArgs, ReportHistoryArgs,
+    ReportReconcileArgs, ReportRecurrencesArgs, RunCommand, RunEndArgs, RunExecArgs, RunStartArgs,
 };
+use crate::commands::bundle;
 use crate::commands::common::success;
 use crate::context::CliContext;
 use crate::junit::import_junit;
@@ -349,6 +353,9 @@ pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<Command
         ReportCommand::Compare(args) => compare(ctx, args).await,
         ReportCommand::Flaky(args) => flaky(ctx, args).await,
         ReportCommand::Explain(args) => explain(ctx, args).await,
+        ReportCommand::History(args) => report_history(ctx, args).await,
+        ReportCommand::Recurrences(args) => report_recurrences(ctx, args).await,
+        ReportCommand::Bundle(args) => bundle::bundle_command(ctx, args).await,
         ReportCommand::Import { command } => match command {
             crate::cli::ReportImportCommand::Junit { paths } => {
                 import_junit_report(ctx, paths).await
@@ -790,6 +797,217 @@ async fn flaky(ctx: &CliContext, args: &ReportFlakyArgs) -> Result<CommandSucces
     ))
 }
 
+fn load_reports_for_memory(ctx: &CliContext, include_all: bool) -> (Vec<RunReport>, usize) {
+    let mut reports: BTreeMap<String, RunReport> = BTreeMap::new();
+    let mut unreadable = 0usize;
+    let roots = if include_all {
+        candidate_artifact_roots(ctx)
+    } else {
+        vec![ctx.paths.artifacts_dir.clone()]
+    };
+    for root in roots {
+        let runs_dir = root.join("runs");
+        let Ok(entries) = std::fs::read_dir(&runs_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path().join("report.json");
+            if !path.is_file() {
+                continue;
+            }
+            match androidforge_core::util::read_json::<RunReport>(&path) {
+                Ok(report) => {
+                    reports.entry(report.run_id.clone()).or_insert(report);
+                }
+                Err(_) => unreadable += 1,
+            }
+        }
+    }
+    (reports.into_values().collect(), unreadable)
+}
+
+fn parse_recurrence_status(value: Option<&str>) -> Result<Option<RecurrenceStatus>> {
+    match value {
+        None => Ok(None),
+        Some("new") => Ok(Some(RecurrenceStatus::New)),
+        Some("recurring") => Ok(Some(RecurrenceStatus::Recurring)),
+        Some("regressed") => Ok(Some(RecurrenceStatus::Regressed)),
+        Some("unknown") => Ok(Some(RecurrenceStatus::Unknown)),
+        Some(other) => Err(ForgeError::invalid_argument(format!(
+            "unknown recurrence status '{other}'; use new, recurring, regressed or unknown"
+        ))),
+    }
+}
+
+async fn report_history(ctx: &CliContext, args: &ReportHistoryArgs) -> Result<CommandSuccess> {
+    if !args.fingerprint.starts_with("sha256:") {
+        return Err(ForgeError::invalid_argument(
+            "fingerprints use the form sha256:<hex>; run `report explain` to obtain one",
+        ));
+    }
+    let (reports, unreadable) = load_reports_for_memory(ctx, false);
+    let history = build_history(&reports, unreadable);
+    let Some(entry) = find_fingerprint_in_project(
+        &history,
+        &args.fingerprint,
+        &ctx.paths.project_root.to_string_lossy(),
+    ) else {
+        let candidates = history
+            .fingerprints
+            .iter()
+            .take(5)
+            .map(|entry| entry.fingerprint.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            format!(
+                "fingerprint {} was not found in {} scanned local run(s)",
+                args.fingerprint, history.scanned_runs
+            ),
+        )
+        .with_context("available_fingerprints", serde_json::json!(candidates))
+        .with_suggestion(
+            "Run `androidforge report explain <run> --json` to read the stored fingerprint.",
+        )
+        .with_suggestion("Run `androidforge report recurrences --json` to list known failures."));
+    };
+    let mut entry = entry.clone();
+    entry.occurrences.reverse();
+    entry.occurrences.truncate(args.limit.max(1));
+    let human = format!(
+        "Fingerprint {}\nstatus: {}\ncategory: {}\noccurrences: {}\nfirst seen: {}\nlast seen: {}\ncurrently resolved: {}\n\n{}",
+        entry.fingerprint,
+        entry.status.as_str(),
+        entry.category,
+        entry.occurrence_count,
+        entry.first_seen,
+        entry.last_seen,
+        entry.currently_resolved,
+        entry
+            .occurrences
+            .iter()
+            .map(|occurrence| format!(
+                "  {}  {:?}  {}  {}\n",
+                occurrence.started_at,
+                occurrence.run_status,
+                occurrence.run_id,
+                occurrence.failed_step.as_deref().unwrap_or("-")
+            ))
+            .collect::<String>()
+    );
+    Ok(success(
+        "report.history",
+        serde_json::json!({
+            "scanned_runs": history.scanned_runs,
+            "unreadable_runs": history.unreadable_runs,
+            "fingerprint": entry,
+        }),
+        human,
+    ))
+}
+
+async fn report_recurrences(
+    ctx: &CliContext,
+    args: &ReportRecurrencesArgs,
+) -> Result<CommandSuccess> {
+    let status = parse_recurrence_status(args.status.as_deref())?;
+    let since_rfc3339 = match &args.since {
+        Some(value) => {
+            let duration = parse_duration(value).map_err(ForgeError::invalid_argument)?;
+            let since = chrono::Utc::now()
+                - chrono::Duration::from_std(duration).map_err(|_| {
+                    ForgeError::invalid_argument("--since is outside the supported range")
+                })?;
+            Some(since.to_rfc3339())
+        }
+        None => None,
+    };
+    let (reports, unreadable) = load_reports_for_memory(ctx, args.all_projects);
+    let history = build_history(&reports, unreadable);
+    let filtered = filter_history(
+        &history,
+        &RecurrenceFilter {
+            project_root: if args.all_projects {
+                args.project_root.clone()
+            } else {
+                Some(
+                    args.project_root
+                        .clone()
+                        .unwrap_or_else(|| ctx.paths.project_root.to_string_lossy().into_owned()),
+                )
+            },
+            package: args.package.clone(),
+            fingerprint: None,
+            device: args.device.clone(),
+            app_version: args.app_version.clone(),
+            since_rfc3339,
+            status,
+        },
+    );
+    let total = filtered.fingerprints.len();
+    let counts =
+        filtered
+            .fingerprints
+            .iter()
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, entry| {
+                *counts.entry(entry.status.as_str()).or_default() += 1;
+                counts
+            });
+    let unresolved = filtered
+        .fingerprints
+        .iter()
+        .filter(|entry| !entry.currently_resolved)
+        .count();
+    let mut entries = filtered.fingerprints;
+    entries.truncate(args.limit.max(1));
+    let human = format!(
+        "Analyzed {} local run(s) ({} failed, {} unreadable).\n{} fingerprint(s): {} new, {} recurring, {} regressed, {} unknown; {} currently unresolved.\n{}",
+        filtered.scanned_runs,
+        filtered.failed_runs,
+        filtered.unreadable_runs,
+        total,
+        counts.get("new").copied().unwrap_or(0),
+        counts.get("recurring").copied().unwrap_or(0),
+        counts.get("regressed").copied().unwrap_or(0),
+        counts.get("unknown").copied().unwrap_or(0),
+        unresolved,
+        entries
+            .iter()
+            .map(|entry| format!(
+                "  {}  {}  x{}  {}{}\n",
+                entry.status.as_str(),
+                entry.fingerprint,
+                entry.occurrence_count,
+                entry
+                    .package
+                    .as_deref()
+                    .or(Some(entry.category.as_str()))
+                    .unwrap_or("-"),
+                if entry.currently_resolved {
+                    "  (resolved)"
+                } else {
+                    ""
+                }
+            ))
+            .collect::<String>()
+    );
+    Ok(success(
+        "report.recurrences",
+        serde_json::json!({
+            "scanned_runs": filtered.scanned_runs,
+            "failed_runs": filtered.failed_runs,
+            "unreadable_runs": filtered.unreadable_runs,
+            "count": total,
+            "returned": entries.len(),
+            "unresolved": unresolved,
+            "counts": counts,
+            "fingerprints": entries,
+        }),
+        human,
+    ))
+}
+
 async fn prune(ctx: &CliContext, args: &crate::cli::ReportPruneArgs) -> Result<CommandSuccess> {
     if !ctx.yes && !ctx.dry_run {
         return Err(ForgeError::new(
@@ -1099,12 +1317,23 @@ async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSu
     };
     let report: RunReport = androidforge_core::util::read_json(&dir.join("report.json"))?;
     let explanation = explain_report(&report);
+    let recurrence = if report.status != RunStatus::Passed {
+        let (reports, unreadable) = load_reports_for_memory(ctx, false);
+        let history = build_history(&reports, unreadable);
+        find_fingerprint_in_project(&history, &explanation.fingerprint, &report.project_root)
+            .cloned()
+    } else {
+        None
+    };
     let mut result = serde_json::to_value(&explanation)?;
     if let Some(object) = result.as_object_mut() {
         object.insert(
             "run_dir".to_string(),
             serde_json::json!(dir.to_string_lossy()),
         );
+        if let Some(recurrence) = &recurrence {
+            object.insert("recurrence".to_string(), serde_json::to_value(recurrence)?);
+        }
         if args.full {
             object.insert("report".to_string(), serde_json::to_value(&report)?);
             object.insert(
@@ -1114,11 +1343,22 @@ async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSu
         }
     }
     let markdown = explain_markdown(&explanation, &dir, args.full);
+    let recurrence_line = recurrence
+        .as_ref()
+        .map(|recurrence| {
+            format!(
+                "recurrence: {} ({} occurrence(s), first {});\n",
+                recurrence.status.as_str(),
+                recurrence.occurrence_count,
+                recurrence.first_seen
+            )
+        })
+        .unwrap_or_default();
     let human = if args.markdown && !ctx.json {
         markdown.clone()
     } else {
         format!(
-            "{} [{} / {} confidence]\nrun: {}\nnext actions:\n{}\n",
+            "{} [{} / {} confidence]\nrun: {}\n{recurrence_line}next actions:\n{}\n",
             explanation.diagnosis.summary,
             explanation.diagnosis.category.as_str(),
             confidence_label(explanation.diagnosis.confidence),

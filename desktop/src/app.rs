@@ -59,6 +59,7 @@ pub struct App {
     pub setup: SetupState,
     pub update: UpdateState,
     pub triage: TriageState,
+    pub context: ContextState,
     pub compare: CompareState,
     pub compare_form: CompareForm,
     pub logcat: LogcatState,
@@ -73,6 +74,10 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::new_with_page(cc, None)
+    }
+
+    pub fn new_with_page(cc: &eframe::CreationContext<'_>, initial_page: Option<Page>) -> Self {
         let settings = cc
             .storage
             .and_then(|storage| storage.get_string(SETTINGS_KEY))
@@ -90,7 +95,7 @@ impl App {
             cli: CliState::default(),
             runner: None,
             icon,
-            page: Page::Overview,
+            page: initial_page.unwrap_or(Page::Overview),
             doctor: DataState::default(),
             devices: DataState::default(),
             sessions: DataState::default(),
@@ -118,6 +123,7 @@ impl App {
             setup: SetupState::default(),
             update: UpdateState::default(),
             triage: TriageState::default(),
+            context: ContextState::default(),
             compare: CompareState::default(),
             compare_form: CompareForm::default(),
             logcat: LogcatState::default(),
@@ -147,6 +153,9 @@ impl App {
         }
         if app.settings.update_check_on_start {
             app.check_updates(&cc.egui_ctx);
+        }
+        if let Some(page) = initial_page {
+            app.page = page;
         }
         app
     }
@@ -498,8 +507,10 @@ impl App {
         if matches!(
             self.page,
             Page::Overview
+                | Page::Context
                 | Page::Devices
                 | Page::Sessions
+                | Page::Ownership
                 | Page::Runs
                 | Page::Triage
                 | Page::Compare
@@ -521,6 +532,13 @@ impl App {
             && due(self.refresh.last_maintenance, Duration::from_secs(15))
         {
             self.refresh_maintenance(ctx);
+        }
+        if self.page == Page::Context
+            && self.context.snapshot.is_none()
+            && !self.context.loading
+            && due(self.context.updated, Duration::from_secs(10))
+        {
+            self.refresh_context(ctx);
         }
     }
 

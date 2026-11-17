@@ -31,6 +31,11 @@ The schema files:
 | `session-ensure.schema.json` | `session ensure` acquisition, readiness and lease metadata. |
 | `repair-plan.schema.json` | Read-only `doctor fix --plan` issues and repair commands. |
 | `agent-test.schema.json` | `agent test` stages, dry-run fields and final status. |
+| `action-receipt.schema.json` | `--receipt` before/after observations, diff, effect, postcondition and completeness. |
+| `recurrence.schema.json` | Recurrence fingerprints, statuses, occurrences and resolution metadata. |
+| `apk-resolution.schema.json` | `apk resolve` selection rules, candidates and rejection reasons. |
+| `apk-diff.schema.json` | Installed/candidate field comparison, overall equivalence and skip safety. |
+| `bundle.schema.json` | Diagnostic bundle manifest, checksummed payloads and exclusions. |
 
 Every schema is versioned with `schema_version = 1`, `adapter_version = 1`, fixture `version = 1`, and conformance `version = 1`. Unknown adapter fields are rejected deliberately.
 
@@ -128,6 +133,12 @@ directory.
   "command": "conformance.run",
   "project": "DiscountHunter",
   "project_root": "A:\\...\\examples\\DiscountHunter",
+  "invocation": {
+    "argv": ["androidforge", "conformance", "run", "--session", "ses-...", "--json"],
+    "cwd": "A:\\Projects\\Active\\AndroidForge",
+    "project_root": "A:\\...\\examples\\DiscountHunter",
+    "captured_at": "..."
+  },
   "status": "passed",
   "exit_code": 0,
   "started_at": "2026-11-15T12:11:42.143Z",
@@ -171,7 +182,7 @@ directory.
 }
 ```
 
-Run status values are `running`, `passed`, `failed`, `partial` and `interrupted`. Step statuses are
+Run status values are `running`, `passed`, `failed`, `partial`, `cancelled`, `interrupted`, `timed_out` and `abandoned`. `invocation` is optional: v0.6.0 records the exact CLI argv; older reports omit it and bundle generation marks reproduction as non-exact. Step statuses are
 `running`, `success`, `failed` and `skipped`.
 
 `build` is only authoritative after an install observes it. Installs persist the identity in the

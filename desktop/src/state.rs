@@ -23,8 +23,10 @@ use crate::models::{
 pub enum Page {
     Setup,
     Overview,
+    Context,
     Devices,
     Sessions,
+    Ownership,
     Runs,
     Triage,
     Compare,
@@ -34,11 +36,13 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 10] = [
+    pub const ALL: [Page; 12] = [
         Page::Setup,
         Page::Overview,
+        Page::Context,
         Page::Devices,
         Page::Sessions,
+        Page::Ownership,
         Page::Runs,
         Page::Triage,
         Page::Compare,
@@ -51,8 +55,10 @@ impl Page {
         match self {
             Page::Setup => "Setup",
             Page::Overview => "Overview",
+            Page::Context => "Context",
             Page::Devices => "Devices",
             Page::Sessions => "Sessions",
+            Page::Ownership => "Ownership",
             Page::Runs => "Runs",
             Page::Triage => "Triage",
             Page::Compare => "Compare",
@@ -492,6 +498,28 @@ pub struct TriageState {
     pub explanation: Option<DiagnosisExplanation>,
     pub explanation_loading: bool,
     pub explanation_error: Option<String>,
+    pub history: Option<serde_json::Value>,
+    pub history_loading: bool,
+    pub history_error: Option<String>,
+    pub bundle: BundleState,
+}
+
+#[derive(Default)]
+pub struct BundleState {
+    pub preview: Option<serde_json::Value>,
+    pub preview_loading: bool,
+    pub preview_error: Option<String>,
+    pub result: Option<serde_json::Value>,
+    pub creating: bool,
+    pub create_error: Option<String>,
+}
+
+#[derive(Default)]
+pub struct ContextState {
+    pub snapshot: Option<serde_json::Value>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub updated: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -780,6 +808,16 @@ pub enum AppEvent {
     Reconcile(std::result::Result<ReconcileResult, String>),
     Comparison(std::result::Result<RunComparison, String>),
     Flaky(std::result::Result<FlakyReport, String>),
+    Context(std::result::Result<serde_json::Value, String>),
+    RecurrenceHistory(std::result::Result<serde_json::Value, String>),
+    BundlePreview {
+        run_id: String,
+        result: std::result::Result<serde_json::Value, String>,
+    },
+    BundleCreated {
+        run_id: String,
+        result: std::result::Result<serde_json::Value, String>,
+    },
     Maintenance(std::result::Result<MaintenanceSummary, String>),
     MaintenancePreview {
         request: CleanupRequest,

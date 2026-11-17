@@ -254,6 +254,7 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
     options.confirmed = ctx.yes;
     options.allow_downgrade = args.downgrade;
     options.verify_installed = !args.no_verify && ctx.config.file.project.verify_installed_apk;
+    options.only_if_changed = args.only_if_changed;
     options.expected_package = args.expected_package.clone();
     options.expected_cert_sha256 = if let Some(certificate) = &args.expected_cert_sha256 {
         vec![certificate.clone()]
@@ -291,6 +292,7 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
                 "expected_package": options.expected_package,
                 "allowed_packages": options.allowed_packages,
                 "expected_cert_sha256": options.expected_cert_sha256,
+                "only_if_changed": options.only_if_changed,
             }
         });
         if options.fresh && !ctx.yes {
@@ -345,15 +347,26 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
                 Some("Installed package, APK hash and signing certificate identity"),
                 &identity,
             )?;
-            let human = format!(
-                "Installed {}\npackage: {}\nversion: {}\ninstalled APK SHA-256: {}\nsigning cert SHA-256: {}\ndebug signed: {}\n",
-                apk_display,
-                result.build.package.as_deref().unwrap_or("-"),
-                result.build.version_name.as_deref().unwrap_or("-"),
-                result.build.installed_apk_sha256.as_deref().or(result.build.apk_sha256.as_deref()).unwrap_or("-"),
-                result.build.cert_sha256.as_deref().unwrap_or("-"),
-                result.build.debug_signed.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
-            );
+            let human = if result.skipped {
+                format!(
+                    "Installation skipped: {}\npackage: {}\nversion: {}\nbase APK SHA-256: {}\n",
+                    result.reason.as_deref().unwrap_or("the installed build already matches"),
+                    result.build.package.as_deref().unwrap_or("-"),
+                    result.build.version_name.as_deref().unwrap_or("-"),
+                    result.build.apk_sha256.as_deref().unwrap_or("-"),
+                )
+            } else {
+                format!(
+                    "Installed {}\npackage: {}\nversion: {}\ninstalled APK SHA-256: {}\nsigning cert SHA-256: {}\ndebug signed: {}\n{}",
+                    apk_display,
+                    result.build.package.as_deref().unwrap_or("-"),
+                    result.build.version_name.as_deref().unwrap_or("-"),
+                    result.build.installed_apk_sha256.as_deref().or(result.build.apk_sha256.as_deref()).unwrap_or("-"),
+                    result.build.cert_sha256.as_deref().unwrap_or("-"),
+                    result.build.debug_signed.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
+                    result.reason.as_ref().map(|reason| format!("decision reason: {reason}\n")).unwrap_or_default(),
+                )
+            };
             Ok(success("app.install", serde_json::to_value(&result)?, human)
                 .with_artifacts(vec![artifact])
                 .with_optional_session(session_id(session.as_ref()))
@@ -361,6 +374,14 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
         },
     )
     .await?;
+    if outcome
+        .result
+        .get("skipped")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(outcome);
+    }
     if let Some(session) = session.as_ref()
         && let Some(build) = outcome
             .result

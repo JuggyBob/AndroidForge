@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.5.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.6.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -72,13 +72,22 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Evidence | Screenshots, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
 | Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time |
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
-| Agent context | `context`, compact observation tokens, `ui diff`, action postconditions and exact next-action argv |
-| Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints and `report explain` |
-| Orchestration | Idempotent `session ensure`, read-only `doctor fix --plan`, transparent `agent test` pipeline |
-| Desktop | Native egui/eframe cockpit: onboarding, overview, devices, sessions, runs, triage with explanations, comparison, live logcat, device preview/inspector, repair planning, maintenance and updates |
+| Agent context | `context`, compact observation tokens, `ui diff`, action receipts, action postconditions and exact next-action argv |
+| Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints, recurrence memory, `report explain/history/recurrences` and diagnostic bundles |
+| Orchestration | Idempotent `session ensure`, read-only `doctor fix --plan`, transparent `agent test`, APK variant resolution and `--only-if-changed` installs |
+| Desktop | Native egui/eframe cockpit: onboarding, context, ownership, devices, sessions, runs, triage with explanations/recurrence/bundle previews, comparison, live logcat, device preview/inspector, repair planning, maintenance and updates |
 | Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
+
+## What is new in v0.6.0
+
+- **Action receipts:** `ui tap`, `ui long-press`, `ui text` and `ui scroll` accept `--receipt` / `--receipt-full`. One command returns before/after observation tokens, a compact semantic diff, focus/package/activity transitions, a deterministic effect classification, postcondition result and explicit completeness. The action is dispatched at most once.
+- **Failure recurrence memory:** `report recurrences`, `report history --fingerprint` and recurrence data in `report explain` classify failures as `new`, `recurring`, `regressed` or `unknown`. Memory is derived from existing local run reports; a passing run proves resolution only when it exercised the same project, scenario and failing step.
+- **APK/build resolution:** optional `[build.variants]` patterns, conventional Gradle output fallback, `apk resolve`, `agent test --variant`, `apk diff installed:<package>` and `app install --only-if-changed`. Resolution never runs Gradle and never claims equality from version strings alone.
+- **Diagnostic bundles:** `report bundle` creates a redacted, checksummed ZIP with summary, explanation, reproduction argv, evidence excerpts, bounded logcat, manifest and exclusion list. Markdown and JSON forms are available; screenshots/recordings and full logs are explicit opt-ins.
+- **Desktop integration:** new Context and Ownership pages, recurrence history in Triage, and a diagnostic-bundle inclusion preview/creation workflow driven entirely by the CLI.
+- **Safer persistence:** run reports now record the exact invocation argv when available; older reports remain readable and are marked as lacking exact reproduction data.
 
 ## What is new in v0.5.0
 
@@ -103,7 +112,7 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 
 Previous desktop work from v0.3.0 is unchanged: setup, runs, triage, comparison, live logcat, device preview, semantic inspector, maintenance and update repair.
 
-Screenshots of the desktop application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/); the v0.5.0 desktop keeps the same design system with the new explanation, repair-plan and lease panels.
+Screenshots of the desktop application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/); the v0.6.0 desktop keeps the same design system with Context, Ownership, recurrence and bundle previews.
 
 ![AndroidForge desktop overview](docs/screenshots/v0.3.0/overview-1280x720.png)
 
@@ -139,7 +148,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.5.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.6.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -187,7 +196,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.5.0)
+### Agent loop quick start (v0.6.0)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -199,15 +208,21 @@ androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --t
 # Observe compact semantics and keep the token.
 androidforge ui observe --session ses-... --json
 
-# Act and verify in one command. The tap happens once.
-androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --timeout 10 --json
+# Act, verify and explain the effect in one command. The tap happens once.
+androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --receipt --json
 
 # Name the semantic change since the token.
 androidforge ui observe --session ses-... --since obs-... --json
 androidforge ui diff --session ses-... --from obs-... --json
 
-# Explain a failure from stored evidence and get exact argv.
+# Explain a failure, see whether it is new/recurring/regressed, and build evidence.
 androidforge report explain latest --json
+androidforge report recurrences --project . --json
+androidforge report bundle latest --output .\\evidence.zip --json
+
+# Resolve an existing APK without running Gradle, then install only if it changed.
+androidforge apk resolve --variant debug --json
+androidforge app install build\\app-debug.apk --only-if-changed --json
 
 # Plan repairs without changing the environment.
 androidforge doctor fix --plan --json
@@ -270,12 +285,13 @@ name = "ExampleApp"
 package = "com.example.app"
 debug_package = "com.example.app.debug"
 expected_cert_sha256 = "AA:BB:..." # optional release certificate pin
-
-[emulator]
-avd = "Pixel_8_API_35"
+default_avd = "Pixel_8_API_35"
 
 [conformance]
 flow = ".androidforge/conformance/release-smoke.toml"
+
+[build.variants]
+debug = ["app/build/outputs/apk/debug/*.apk"]
 ```
 
 Fixtures, hooks, conformance manifests and the environment contract are documented in
@@ -321,12 +337,11 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.5.0`.** The CLI has been exercised against real apps on an Android 16 emulator, and the
-`0.5.0` desktop was validated against a real emulator session and the CalcSuite project. v0.5.0 fixes
-the issues found by three independent app agents (CalcSuite, DiscountHunter and IronPulse) and re-ran
-the affected workflows: shared-host session acquisition, UIAutomator recovery, project/run scoping,
-pipeline status, observation shape, diff size, selector guidance, desktop argument handling and
-session ownership. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.6.0`.** The CLI has been exercised against real apps on an Android 16 emulator, and the
+`0.6.0` desktop was validated against a real emulator session and the CalcSuite project. v0.6.0 adds
+action receipts, failure recurrence memory, APK variant resolution/diff/only-if-changed, diagnostic
+bundles and the Context/Ownership desktop pages. See [VERIFICATION.md](VERIFICATION.md) and
+[case-studies/](case-studies/).
 
 Validated:
 
@@ -347,6 +362,9 @@ Validated:
 - v0.5.0 regression validation of the agent-reported issues: port selection on a shared host,
   UIAutomator recovery/classification, project-scoped run discovery, failed pipeline envelope status,
   observation token/actionable split, compact diffs, session owner flags, and desktop help/version.
+- v0.6.0 real-emulator validation: receipt effect/postcondition/timeout/selector-failure cases, real
+  installed APK diff and `--only-if-changed` skip/install, redacted bundle creation and verification,
+  Context/Ownership desktop pages, and Triage bundle preview.
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
@@ -405,5 +423,3 @@ Bug reports, focused pull requests and real-app reproductions are welcome. Read
 MIT. See [LICENSE](LICENSE).
 
 Copyright (c) 2026 JuggyBob.
-
-

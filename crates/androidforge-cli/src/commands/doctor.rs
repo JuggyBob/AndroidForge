@@ -1428,6 +1428,26 @@ fn schema_files() -> Vec<(&'static str, &'static str)> {
             "agent-test.schema.json",
             include_str!("../../../../schema/agent-test.schema.json"),
         ),
+        (
+            "action-receipt.schema.json",
+            include_str!("../../../../schema/action-receipt.schema.json"),
+        ),
+        (
+            "recurrence.schema.json",
+            include_str!("../../../../schema/recurrence.schema.json"),
+        ),
+        (
+            "apk-resolution.schema.json",
+            include_str!("../../../../schema/apk-resolution.schema.json"),
+        ),
+        (
+            "apk-diff.schema.json",
+            include_str!("../../../../schema/apk-diff.schema.json"),
+        ),
+        (
+            "bundle.schema.json",
+            include_str!("../../../../schema/bundle.schema.json"),
+        ),
     ]
 }
 
