@@ -1,9 +1,174 @@
 # Verification record
 
-This document records what was actually run for the `0.9.2` patch, the `0.9.1` patch, the `0.9.0`
-Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0`
-and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
-validation and packaging validation from areas that were not exercised.
+This document records what was actually run for the `0.9.3` contract and coverage release, the `0.9.2`
+patch, the `0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the
+`0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android
+validation, desktop workflow validation and packaging validation from areas that were not exercised.
+
+## v0.9.3 verification (2026-11-17)
+
+### Scope
+
+All eight pre-UI hardening items were delivered in one release:
+
+1. Formal JSON Schema validation in the workspace test suite.
+2. Exercise the 26 certification checks left `NOT RUN` by the v0.9.1/v0.9.2 record.
+3. A clean-AVD first-install, upgrade-skip, diff and brief-pipeline product pass.
+4. Physical-device validation on the Poco X4 GT / HyperOS 2.
+5. Configurable observation retention with cross-process state locking.
+6. Empty UIAutomator hierarchy treated as transient.
+7. A desktop launch/render/UI-Automation smoke gate.
+8. Exit-code documentation consistency plus honest `session stop` documentation.
+
+Item 4 could not be run: the physical device was not connected. It is recorded as **BLOCKED**, not
+as a pass. All other items were exercised.
+
+### Automated checks
+
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `cargo test --workspace` reported **305 passed, 0 failed** across **17 test executables**.
+- `cargo build --workspace --release` passed; both binaries report `0.9.3`.
+- Schema tests:
+  - all **24** `schema/*.schema.json` documents compile as Draft 2020-12;
+  - `context` validates in full, compact and brief profiles;
+  - `agent brief` validates against `agent-brief.schema.json`;
+  - `agent test --dry-run` validates in full, compact and brief profiles;
+  - representative observation, action-receipt, UI-diff, performance, diagnosis and bundle payloads
+    validate, including compact/brief projections.
+- New regression tests cover:
+  - `storage.observation_retention` typing and the `2..=1000` range;
+  - retention evicting oldest-first and never the token just written;
+  - `EXIT_CODES.md` matching every `ErrorCode` variant, exit number and recoverability flag;
+  - empty UIAutomator hierarchies being classified as transient;
+  - the schema-required empty `command_argv` in brief `agent test` stages.
+
+The schema work exposed and fixed two contract mismatches: `agent-test.run_id` was required to be a
+string although the product emits `null`, and brief stages removed the required `command_argv` field.
+The exit-code test also caught that `session stop` was described as `--yes`-guarded in the guides; the
+guides now state that ownership is the gate.
+
+### Certification coverage (26 previously `NOT RUN`)
+
+Environment: clean AVD `af_cert_clean`, `system-images;android-36;google_apis;x86_64`, Pixel 6
+profile, with CalcSuite debug installed. `PASS` means the expected contract was observed; several
+checks deliberately assert that a command fails with a specific code.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| SESS-10 | PASS | `session restart` on an AndroidForge-launched emulator returned `ready` with the same serial. An attached session correctly returned `E_UNSUPPORTED_OPERATION`; the check was rerun on a launched session. |
+| CTX-07 | PASS | Cached observation `obs-f46dfc2d0cfd`; `--refresh-screen` returned a different token `obs-41e1cfaf08fc` with `age_ms: 0`. |
+| CTX-09 | PASS | Brief `context` returned the project, no session/device and a 1,131-byte payload. |
+| OBS-33 | PASS | After re-observing the Settings search field, `ui clear` returned `cleared:true` and `after_text:"Search settings"`. |
+| OBS-35 | PASS | `ui scroll-to --text "About emulated device"` found the label with 0 swipes. The emulator's correct label is not "About phone". |
+| ACT-07 | PASS | A tap with an impossible postcondition returned `E_POSTCONDITION_TIMEOUT` after about 5.5 s, with postcondition details. |
+| FIX-07 | PASS | An impossible assert fixture returned `E_SELECTOR_NOT_FOUND`; it did not report a false success. |
+| CONF-06 | PASS | A deliberately failing conformance flow returned `E_UI_ASSERTION_FAILED`. |
+| CONF-07 | PASS | A project with no conformance flow returned `E_CONFIG_INVALID: no conformance flow was configured`. |
+| DIAG-14 | PASS | Cold performance run produced startup 1,777 ms, jank 17.39%, PSS 116,691 KiB and a `performance/report.json` artifact. |
+| DIAG-15 | PASS | Brief performance returned a one-line summary with startup, jank, PSS and CPU, plus `run_id`. |
+| DIAG-16 | PASS | Warm run reported `cold_start_requested:false`; no cold-start metric was claimed. |
+| DIAG-17 | PASS | Repeated cold run produced a new run ID and fresh startup/jank values. |
+| REP-08 | PASS | `report explain` classified an `E_OBSERVATION_NOT_FOUND` run as `observation` with a stable SHA-256 fingerprint and next actions. |
+| REP-14 | PASS | `report history` returned one occurrence for the fingerprint with no cross-project leakage. |
+| REP-15 | PASS | `report compare` selected baseline/current runs and reported compatibility notes. |
+| REP-16 | PASS | A baseline from a different scenario in the same project returned `comparable:false` with notes explaining the scenario and environment differences. A cross-project baseline was rejected with `E_INVALID_ARGUMENT`. |
+| REP-17 | PASS | Flaky analysis scanned 50 runs and classified `ui.scroll-to` from 3 failures in 4 executions; 2 flaky steps were reported. |
+| REP-18 | PASS (expected failure) | A JUnit XML with one failing case imported the run and exited 7 with `E_UI_ASSERTION_FAILED`; the merged run remained inspectable. |
+| REP-19 | PASS | `report reconcile --outcome interrupted` changed a running run to `interrupted` with a reason and previous status. |
+| REP-24 | PASS | A bundle with a screenshot included the PNG as binary media, verified checksums and warned that pixel content is not text-redacted. |
+| NEG-09 | PASS | An observation token transplanted to another device returned `E_ELEMENT_DEVICE_MISMATCH`. |
+| NEG-12 | PASS after fix | An unknown nested adapter field was initially accepted; after adding `deny_unknown_fields`, `config validate` returned `E_CONFIG_INVALID` naming the field. |
+| NEG-13 | PASS | `adapter_version = 99` returned `E_ADAPTER_INVALID` with the supported version. |
+| MATRIX-05 | PASS | A matrix containing a missing serial returned `E_MATRIX_TARGET_INVALID` and listed the connected devices. |
+| SOAK-04 | PASS | 10/10 `app force-stop` then `app launch` cycles succeeded on CalcSuite. |
+
+Three inputs needed correction during the run and are not product failures: the emulator label
+("About emulated device"), re-observing after text entry before clear, and the conformance manifest
+shape. NEG-12 was a real product gap and is fixed.
+
+### Clean-device product pass
+
+- Created a fresh API 36 AVD `af_cert_clean` (Pixel 6, `google_apis`, x86_64).
+- First `app install` of CalcSuite debug succeeded; version `3.0.3`, SHA-256
+  `6aa183acf64ef0903e88ccf57f1827fe87066715b101f06839af4f9746ee5e66`.
+- A second `app install --only-if-changed` returned `skipped:true` with reason: "candidate package,
+  version, base APK SHA-256 and split set match the installed application".
+- `apk diff installed:com.calcsuite <apk>` returned `overall:same`, `safe_to_skip_install:true` and
+  zero changed fields.
+- Brief `agent test --dry-run` planned 12 stages and ended `final_status:"dry_run"` with one next
+  action.
+
+### Observation retention and locking
+
+- Adapter `[storage] observation_retention = 3`; six sequential `ui observe` calls retained exactly
+  3 JSON and 3 XML records. The three oldest tokens were gone; the three newest, including the last
+  written, were present.
+- A second project/session with retention 3 retained its own 3 records independently.
+- Two observations on two different emulators ran concurrently against the same
+  `ANDROIDFORGE_HOME`; both succeeded with unique tokens (`obs-f9a122fdc7bc`,
+  `obs-1b9f05c71cf8`) and correct per-session counts.
+- Four simultaneous observations on **one** device were not supported by the device side: three
+  returned `E_UI_AUTOMATOR_UNAVAILABLE` and one succeeded. This is a UIAutomator concurrency
+  limitation, not a state-lock failure. The lock serializes token allocation, state writes and
+  pruning only; it does not promise parallel UI capture on one device.
+- `observation_retention = 1` made `config validate` exit 8 with `valid:false` and the issue
+  `storage.observation_retention must be between 2 and 1000`.
+- An unknown nested adapter field returned `E_CONFIG_INVALID` naming `unknown_key`.
+
+### Empty-hierarchy recovery
+
+The manager now treats a well-formed but empty UIAutomator hierarchy as a transient capture failure,
+retries through the existing recovery path, and only returns a hierarchy with nodes. The unit test
+`transient_uiautomator_failures_are_recognized` covers the new "empty hierarchy" classification and
+passes. No deterministic way to force an empty dump on the emulator was available, so this item is
+covered by the code path and unit test rather than a live forced-empty capture.
+
+### Desktop render gate
+
+- `desktop/tests/smoke.ps1` ran against the release `0.9.3` binaries: **13/13 pages passed**, 0 failed.
+- Pages: setup, overview, context, devices, sessions, matrix, ownership, runs, triage, compare,
+  logcat, inspector, maintenance.
+- Every page produced a non-blank screenshot, the expected window title and a UI Automation tree
+  (38-244 elements; runs was the largest at 244).
+- The overview Refresh button was invoked successfully without the process exiting.
+- This is launch/render/automation-tree coverage, not full interactive or pixel-regression coverage;
+  the limits are documented in `desktop/tests/README.md`.
+
+### Exit-code and guide consistency
+
+- The `EXIT_CODES.md` test checks every documented `E_*` row against `ErrorCode::ALL`, including the
+  numeric exit code and `recoverable` flag, and requires every enum variant to be documented.
+- `USER_GUIDE.md` and `AGENT_GUIDE.md` now state that `session stop` is owner-guarded and is **not**
+  `--yes`-guarded; `--yes` remains reserved for data-clearing and restore operations.
+
+### Physical device: BLOCKED
+
+- `adb devices -l` showed only `emulator-5554` and `emulator-5556`.
+- `Get-PnpDevice` showed no present Android/POCO/ADB/MTP device.
+- No physical-device result is claimed. When the Poco X4 GT / HyperOS 2 is connected, run:
+  1. `adb devices -l`, `devices list --json` and `devices health`;
+  2. `session attach --serial <SERIAL> --owner <OWNER>` and confirm readiness;
+  3. install, launch, observe, tap, text, assert, screenshot and logcat capture on the real ROM;
+  4. verify session release/stop ownership and that the device remains usable;
+  5. record model, HyperOS build, Android API, USB/Wi-Fi transport and every command result here.
+
+### Packaging and release (local, pre-publication)
+
+- Local package:
+  - CLI ZIP 5,207,701 bytes /
+    `8e7d3f20854ca9384c890812f1a0208d775730f376578dfe1b2970805fd6a979`;
+  - desktop ZIP 11,973,978 bytes /
+    `9fe6c50f2ccb865a0141b381e0a99c74ce3fa62a51f5590c8178cc668dcbead4`;
+  - installer 9,800,467 bytes /
+    `561993ab88bffe763a3f2e412a0093e23109e3f4499828e1742b6d5642b42b39`.
+- The computed hashes matched `dist/SHA256SUMS.txt`.
+- A clean portable extraction reported CLI/desktop `0.9.3`; `doctor --json` reported
+  `0.9.3 (report schema 1)`.
+- The local installer installed CLI/desktop `0.9.3` into a temporary directory and uninstalled
+  cleanly; the install directory was removed.
+- The Scoop manifest points at `v0.9.3` and carries the desktop ZIP hash above.
+- Publication details are recorded after the release workflow completes.
 
 ## v0.9.2 verification (2026-11-17)
 

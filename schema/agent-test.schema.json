@@ -41,7 +41,7 @@
     "installed_build_matches_apk": { "type": ["boolean", "null"] },
     "final_status": { "enum": ["success", "failed", "dry_run", "blocked"] },
     "failure": { "type": ["object", "null"], "additionalProperties": true },
-    "run_id": { "type": "string" },
+    "run_id": { "type": ["string", "null"] },
     "artifacts": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
     "warnings": { "type": "array", "items": { "type": "string" } },
     "next_actions": { "type": "array", "items": { "type": "object", "additionalProperties": true } },

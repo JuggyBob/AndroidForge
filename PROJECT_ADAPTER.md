@@ -44,6 +44,9 @@ profile = "compact"
 max_items = 40
 max_text_chars = 240
 
+[storage]
+observation_retention = 20
+
 [health]
 battery_warn_percent = 15
 storage_warn_bytes = 536870912
@@ -93,6 +96,10 @@ different content are reported as ambiguity rather than guessed.
 `[agent]` sets the default output profile for agent-facing commands. `profile` is `full` (default),
 `compact` or `brief`; `max_items` and `max_text_chars` bound compact/brief lists and text. CLI flags
 (`--output-profile`, `--compact`, `--brief`, `--max-items`, `--max-text-chars`) override the adapter.
+
+`[storage] observation_retention` controls how many observation records are kept per session
+(default 20, range 2-1000). Eviction is oldest-first by recorded observation time, and the record just
+written is never evicted.
 
 `[health]` configures read-only warnings for `devices health` and matrix preflight:
 

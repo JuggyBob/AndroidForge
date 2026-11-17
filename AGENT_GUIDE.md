@@ -476,7 +476,8 @@ androidforge session start --avd <AVD> --port 5556 --headless --owner <AgentName
 - `session stop`, `session release` and `session restart` verify the session's `owner` label. Pass the
   same `--owner` used at start (or export `ANDROIDFORGE_OWNER`) or use `--force` for a deliberate
   takeover. This blocks one agent from stopping another agent's emulator by ID; the owner is a
-  coordination label, not authentication.
+  coordination label, not authentication. `session stop` is not `--yes`-guarded; ownership is the
+  safety gate.
 
 If the device is owned by another session, you get `E_DEVICE_BUSY`. Do not work around that by killing
 the emulator. Inspect `session list`; use `session gc --reclaim` only if the owner is genuinely gone.

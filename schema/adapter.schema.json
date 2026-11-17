@@ -106,7 +106,15 @@
         "max_text_chars": { "type": "integer", "minimum": 16, "maximum": 10000, "default": 240 }
       },
       "additionalProperties": false
-    },    "health": {
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "observation_retention": { "type": "integer", "minimum": 2, "maximum": 1000, "default": 20 }
+      },
+      "additionalProperties": false
+    },
+    "health": {
       "type": "object",
       "properties": {
         "battery_warn_percent": { "type": "integer", "minimum": 0, "maximum": 100 },

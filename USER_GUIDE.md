@@ -103,7 +103,9 @@ foreground package/activity, display and visible text. Each node includes `click
 `actionable_total`/`actionable_truncated` and `context_total`/`context_truncated` state whether the
 compact view was capped. `--full` returns the complete parsed hierarchy plus all nodes. Observation
 tokens are session-scoped, boot-id-scoped, kept in the local AndroidForge state directory and expire
-after 24 hours or the per-session retention limit. A reboot or cross-session token returns
+after 24 hours or the per-session retention limit. The retention limit is
+`[storage] observation_retention` (default 20, range 2-1000); eviction is oldest-first and never
+removes the observation just written. A reboot or cross-session token returns
 `E_OBSERVATION_EXPIRED` or `E_OBSERVATION_SESSION_MISMATCH`.
 
 ### Action receipts and postconditions
@@ -166,6 +168,9 @@ debug = ["app/build/outputs/apk/debug/*.apk"]
 profile = "compact"
 max_items = 40
 max_text_chars = 240
+
+[storage]
+observation_retention = 20
 
 [health]
 battery_warn_percent = 15
@@ -425,6 +430,9 @@ profile = "compact"
 max_items = 40
 max_text_chars = 240
 
+[storage]
+observation_retention = 20
+
 [health]
 battery_warn_percent = 15
 storage_warn_bytes = 536870912
@@ -503,6 +511,8 @@ androidforge session stop --session ses-... --owner MyAgent --json
 
 `session stop`, `session release` and `session restart` are owner-guarded. Pass the same `--owner` used at `session start` (or export `ANDROIDFORGE_OWNER`) or use `--force` for a deliberate takeover. Without a matching owner they return `E_SESSION_OWNERSHIP_MISMATCH` with both labels and do not touch the emulator. This is a coordination guard, not authentication: anyone who can read the local session file can still use `--force`.
 
+`session stop` is **not** `--yes`-guarded; ownership is the safety gate. `--yes` is reserved for data-clearing, restore and other destructive app operations.
+
 If another session owns the device, you get `E_DEVICE_BUSY`. Do not kill the emulator. Check `session list`; use `session gc --reclaim` only when the owner is genuinely dead. `session gc --help` also has `--stop` for stale owned emulators.
 
 ## 8. APKs
@@ -540,6 +550,9 @@ debug = ["app/build/outputs/apk/debug/*.apk"]
 profile = "compact"
 max_items = 40
 max_text_chars = 240
+
+[storage]
+observation_retention = 20
 
 [health]
 battery_warn_percent = 15

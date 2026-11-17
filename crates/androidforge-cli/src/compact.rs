@@ -904,7 +904,9 @@ fn compact_agent_test(value: &mut Value, plan: OutputPlan) {
             .count();
         for stage in stages.iter_mut() {
             if brief && let Some(stage) = stage.as_object_mut() {
-                stage.remove("command_argv");
+                // Keep the schema-required field but do not repeat long argv
+                // arrays in the smallest profile.
+                stage.insert("command_argv".to_string(), json!([]));
             }
             compact_stage(stage, max_text);
         }
@@ -1695,9 +1697,10 @@ mod tests {
         assert_eq!(value["stages"].as_array().unwrap().len(), 2);
         assert_eq!(value["stages"][1]["name"], "install_apk");
         assert_eq!(value["stages"][1]["status"], "failed");
-        assert!(
-            value["stages"][1].get("command_argv").is_none(),
-            "brief stages drop argv but keep identity"
+        assert_eq!(
+            value["stages"][1]["command_argv"].as_array().unwrap().len(),
+            0,
+            "brief stages keep the schema-required argv field empty"
         );
         assert_eq!(value["stages_total"], 2);
         assert_eq!(value["stages_failed"], 1);

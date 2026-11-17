@@ -8,6 +8,48 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.9.3] - 2026-11-17
+
+Contract and coverage release. All eight pre-UI hardening items were delivered together.
+
+### Added
+
+- Formal JSON Schema validation in `cargo test --workspace`: every released schema document is
+  compiled as Draft 2020-12 and representative context, agent brief, agent test, observation,
+  action receipt, UI diff, performance, diagnosis and bundle payloads are validated.
+- `[storage] observation_retention` in the project adapter, global config, generated defaults and
+  `schema/adapter.schema.json`. Default `20`, valid range `2..=1000`.
+- Cross-process `StateLock` in `androidforge-core`; observation token allocation, writes and pruning
+  now hold it so parallel CLI processes cannot reuse tokens or race retention.
+- `desktop/tests/smoke.ps1` and `desktop/tests/README.md`: a local release gate that launches all 13
+  desktop pages, captures screenshots, checks rendering, records the Windows UI Automation tree and
+  invokes Refresh on overview.
+- `EXIT_CODES.md` consistency test that checks every documented code, exit number and recoverability
+  flag against `ErrorCode::ALL`.
+
+### Fixed
+
+- Empty UIAutomator hierarchies are now classified as transient capture failures and retried instead
+  of returning a blank successful screen.
+- Nested adapter sections and hook entries reject unknown fields instead of silently ignoring them.
+  `config validate` and `context` return `E_CONFIG_INVALID` naming the offending field.
+- `schema/agent-test.schema.json` allows `run_id: null`, matching the product before a run exists.
+- Brief `agent test` stages keep the schema-required `command_argv` field as an empty array instead of
+  removing it.
+- Observation retention is configurable and still never evicts the record just written.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.9.3`.
+- The 26 checks previously recorded as `NOT RUN` in the certification matrix were exercised against a
+  clean API 36 AVD and are recorded in `VERIFICATION.md`.
+- `session stop` is documented as owner-guarded, not `--yes`-guarded, in the user and agent guides.
+
+### Not validated
+
+- **Physical device (item 4): BLOCKED.** The Poco X4 GT / HyperOS 2 device was not connected during
+  this release. No physical-device behavior is claimed.
+
 ## [0.9.2] - 2026-11-17
 
 Patch for the six product findings from the independent v0.9.1 certification run.
@@ -546,7 +588,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.3
 [0.9.2]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.2
 [0.9.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.1
 [0.9.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.0

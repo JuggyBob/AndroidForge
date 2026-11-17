@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -936,44 +935,59 @@ fn device_lock_path(paths: &ForgePaths, serial: &str) -> Result<PathBuf> {
         .join(format!("{}.json", sanitize_serial(serial))))
 }
 
-fn with_global_lock<T>(paths: &ForgePaths, action: impl FnOnce() -> Result<T>) -> Result<T> {
-    let locks = paths.locks_dir();
-    ensure_dir(&locks)?;
-    let path = locks.join(".global.lock");
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)
-        .map_err(|error| {
-            ForgeError::new(
-                ErrorCode::Internal,
-                format!("could not open lock {}: {error}", path.display()),
-            )
-        })?;
-    let started = std::time::Instant::now();
-    loop {
-        match file.try_lock_exclusive() {
-            Ok(()) => break,
-            Err(_) if started.elapsed() < Duration::from_secs(10) => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(error) => {
-                return Err(ForgeError::new(
-                    ErrorCode::DeviceBusy,
-                    format!("could not acquire AndroidForge state lock: {error}"),
+/// Process-wide state lock. It serializes session metadata, observation-store
+/// writes and other multi-file state transitions across independent CLI
+/// processes. The lock is released when this guard is dropped.
+pub struct StateLock {
+    file: std::fs::File,
+}
+
+impl StateLock {
+    pub fn acquire(paths: &ForgePaths) -> Result<Self> {
+        let locks = paths.locks_dir();
+        ensure_dir(&locks)?;
+        let path = locks.join(".global.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|error| {
+                ForgeError::new(
+                    ErrorCode::Internal,
+                    format!("could not open lock {}: {error}", path.display()),
                 )
-                .with_suggestion("Retry after other AndroidForge commands finish."));
+            })?;
+        let started = std::time::Instant::now();
+        loop {
+            match file.try_lock_exclusive() {
+                Ok(()) => break,
+                Err(_) if started.elapsed() < Duration::from_secs(10) => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => {
+                    return Err(ForgeError::new(
+                        ErrorCode::DeviceBusy,
+                        format!("could not acquire AndroidForge state lock: {error}"),
+                    )
+                    .with_suggestion("Retry after other AndroidForge commands finish."));
+                }
             }
         }
+        Ok(Self { file })
     }
-    let result = action();
-    let _ = fs2::FileExt::unlock(&file);
-    if let Ok(mut file) = OpenOptions::new().write(true).open(&path) {
-        let _ = writeln!(file, "{}", now_rfc3339());
+}
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.file);
     }
-    result
+}
+
+fn with_global_lock<T>(paths: &ForgePaths, action: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _lock = StateLock::acquire(paths)?;
+    action()
 }
 
 fn age_secs(timestamp: &str) -> i64 {

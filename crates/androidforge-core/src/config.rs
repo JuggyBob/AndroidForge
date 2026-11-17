@@ -12,6 +12,7 @@ pub const CURRENT_TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const ADAPTER_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HookConfig {
     #[serde(rename = "type", alias = "kind")]
     pub kind: HookKind,
@@ -85,7 +86,7 @@ pub enum HookKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ProjectSection {
     pub name: Option<String>,
     pub package: Option<String>,
@@ -122,7 +123,7 @@ impl Default for ProjectSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FixturesSection {
     pub directory: String,
     pub default: Option<String>,
@@ -138,13 +139,13 @@ impl Default for FixturesSection {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ConformanceSection {
     pub flow: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct UiSection {
     pub backend: String,
     pub default_timeout_secs: u64,
@@ -168,7 +169,7 @@ impl Default for UiSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MaestroSection {
     pub enabled: bool,
     pub binary: String,
@@ -186,7 +187,7 @@ impl Default for MaestroSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DiagnosticsSection {
     pub logcat_tail_lines: usize,
     pub max_log_bytes: usize,
@@ -231,7 +232,7 @@ impl AgentProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AgentSection {
     /// Default output profile for agent-oriented commands.
     pub profile: AgentProfile,
@@ -250,8 +251,27 @@ impl Default for AgentSection {
         }
     }
 }
+
+pub const DEFAULT_OBSERVATION_RETENTION: usize = 20;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageSection {
+    /// Number of observation records retained per session. Older records are
+    /// evicted first; the record just written is never evicted.
+    pub observation_retention: usize,
+}
+
+impl Default for StorageSection {
+    fn default() -> Self {
+        Self {
+            observation_retention: DEFAULT_OBSERVATION_RETENTION,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct TimeoutsSection {
     pub command_secs: u64,
     pub adb_secs: u64,
@@ -281,7 +301,7 @@ impl Default for TimeoutsSection {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SdkSection {
     pub root: Option<PathBuf>,
     pub adb: Option<PathBuf>,
@@ -296,7 +316,7 @@ pub struct SdkSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HealthSection {
     /// Warn when the battery is below this percentage and not charging.
     pub battery_warn_percent: u32,
@@ -320,7 +340,7 @@ impl Default for HealthSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RedactionSection {
     pub enabled: bool,
     pub patterns: Vec<String>,
@@ -336,7 +356,7 @@ impl Default for RedactionSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BuildSection {
     /// Variant used when `apk resolve` is called without --variant.
     pub default_variant: Option<String>,
@@ -376,6 +396,7 @@ pub struct ForgeConfigFile {
     pub maestro: MaestroSection,
     pub diagnostics: DiagnosticsSection,
     pub agent: AgentSection,
+    pub storage: StorageSection,
     pub health: HealthSection,
     pub timeouts: TimeoutsSection,
     pub sdk: SdkSection,
@@ -396,6 +417,7 @@ impl Default for ForgeConfigFile {
             maestro: MaestroSection::default(),
             diagnostics: DiagnosticsSection::default(),
             agent: AgentSection::default(),
+            storage: StorageSection::default(),
             health: HealthSection::default(),
             timeouts: TimeoutsSection::default(),
             sdk: SdkSection::default(),
@@ -742,6 +764,13 @@ impl ForgeConfig {
                 "agent.max_text_chars must be between 16 and 10000".to_string(),
             ));
         }
+        if !(2..=1000).contains(&file.storage.observation_retention) {
+            issues.push(issue(
+                Severity::Error,
+                "storage.observation_retention",
+                "storage.observation_retention must be between 2 and 1000".to_string(),
+            ));
+        }
         if file.diagnostics.max_log_bytes < 64 * 1024 {
             issues.push(issue(
                 Severity::Warning,
@@ -959,6 +988,9 @@ retention_days = 14
 directory = ".androidforge/fixtures"
 # default = "clean-install"
 
+[storage]
+observation_retention = 20
+
 [ui]
 backend = "uiautomator"
 default_timeout_secs = 15
@@ -1018,6 +1050,9 @@ settle_interval_ms = 400
 [diagnostics]
 capture_on_failure = true
 redact = true
+
+[storage]
+observation_retention = 20
 "#
     )
 }
@@ -1082,6 +1117,22 @@ mod tests {
                 .any(|issue| issue.field == "agent.max_text_chars")
         );
     }
+    #[test]
+    fn storage_retention_is_typed_and_validated() {
+        let config = config_from(
+            "adapter_version = 1\n[project]\npackage = \"com.example.app\"\n[storage]\nobservation_retention = 7\n",
+            "",
+        );
+        assert_eq!(config.file.storage.observation_retention, 7);
+
+        let mut invalid = config.clone();
+        invalid.file.storage.observation_retention = 1;
+        assert!(!invalid.validate().valid);
+        let mut invalid = config;
+        invalid.file.storage.observation_retention = 1001;
+        assert!(!invalid.validate().valid);
+    }
+
     #[test]
     fn rejects_unknown_adapter_fields() {
         let temp = tempfile::tempdir().unwrap();

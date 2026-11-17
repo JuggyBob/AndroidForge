@@ -408,6 +408,52 @@ mod tests {
     }
 
     #[test]
+    fn exit_codes_document_matches_the_error_enum() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("EXIT_CODES.md");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let mut documented = std::collections::BTreeSet::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if !line.starts_with("| `E_") {
+                continue;
+            }
+            let parts = line.split('|').map(str::trim).collect::<Vec<_>>();
+            if parts.len() < 5 {
+                continue;
+            }
+            let code = parts[1].trim_matches('`');
+            documented.insert(code.to_string());
+            let expected = ErrorCode::from_code(code)
+                .unwrap_or_else(|| panic!("EXIT_CODES.md documents unknown error code {code}"));
+            assert_eq!(
+                parts[2],
+                expected.exit_code().to_string(),
+                "exit code drift for {code}"
+            );
+            assert_eq!(
+                parts[3],
+                if expected.default_recoverable() {
+                    "yes"
+                } else {
+                    "no"
+                },
+                "recoverability drift for {code}"
+            );
+        }
+        for code in ErrorCode::ALL {
+            assert!(
+                documented.contains(code.as_str()),
+                "EXIT_CODES.md is missing {}",
+                code.as_str()
+            );
+        }
+    }
+
+    #[test]
     fn exit_codes_are_stable() {
         assert_eq!(ErrorCode::InvalidArgument.exit_code(), 2);
         assert_eq!(ErrorCode::AdbNotFound.exit_code(), 3);

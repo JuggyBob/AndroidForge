@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.9.2`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.9.3`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -80,6 +80,17 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
+
+## What is new in v0.9.3
+
+- **Schema enforcement in tests:** `cargo test --workspace` now compiles every released JSON Schema with the `jsonschema` crate and validates real `context`, `agent brief`, `agent test`, observation, receipt, diff, performance, diagnosis and bundle payloads. The pass exposed and fixed two contract mismatches: `agent-test.run_id` is nullable before a run exists, and brief stages keep the schema-required `command_argv` field as an empty array.
+- **Strict adapter contract:** unknown fields in nested adapter sections and hook entries are rejected instead of silently ignored, matching the published schema. `config validate` and `context` now fail with `E_CONFIG_INVALID` and name the offending field.
+- **Bounded observation storage:** `[storage] observation_retention` (default 20, range 2-1000) controls how many observation records are kept per session. Token allocation, writes and pruning are serialized with a cross-process `StateLock`, so parallel commands cannot reuse a token or race retention.
+- **Empty hierarchy recovery:** a valid but empty UIAutomator hierarchy is treated as a transient capture failure and retried instead of being returned as a blank successful screen.
+- **Certification coverage:** the 26 checks that were `NOT RUN` in the v0.9.1/v0.9.2 certification record were exercised against a clean API 36 AVD, including session restart, warm/cold performance, flaky analysis, reconcile, JUnit import failure, bundle screenshot handling, mismatched adapters and a 10-cycle app soak.
+- **Desktop render gate:** `desktop/tests/smoke.ps1` launches all 13 pages, captures a screenshot per page, checks the window rendered, records the Windows UI Automation tree and invokes Refresh on overview. The local release run passed 13/13 pages.
+- **Exit-code drift test:** `EXIT_CODES.md` is now checked against `ErrorCode::ALL`; `session stop` is documented as owner-guarded rather than `--yes`-guarded.
+- **Physical device:** not validated. The Poco X4 GT / HyperOS 2 device was not connected during this release, so item 4 is recorded as **BLOCKED** in [VERIFICATION.md](VERIFICATION.md), not passed.
 
 ## What is new in v0.9.2
 
@@ -198,7 +209,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.9.2` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.9.3` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -246,7 +257,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.9.2)
+### Agent loop quick start (v0.9.3)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -408,11 +419,13 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.9.2`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD matrix. v0.9.2 closes the defects from an independent certification
-run against v0.9.1: full-observation context refs, cross-project session binding, honest hook
-verification results, bounded logcat capture and clearer receipt evidence. See
-[VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.9.3`.** The CLI has been exercised against real apps on Android 16 and Android 14
+emulators, including a two-AVD matrix. v0.9.3 hardens the contracts and closes the certification
+coverage gap: formal schema validation, strict adapter fields, bounded observation retention with
+cross-process locking, empty-hierarchy recovery and a 13-page desktop render gate. The v0.9.2
+product fixes (full-observation refs, project-bound sessions, honest hooks, bounded logcat and
+receipt evidence) remain in place. See [VERIFICATION.md](VERIFICATION.md) and
+[case-studies/](case-studies/).
 
 Validated:
 
@@ -455,12 +468,18 @@ Validated:
   context warning, hook `verified`/`verification_state` with IronPulse UI postconditions, bounded
   logcat capture that reports byte-cap completion, and receipt evidence for a satisfied postcondition
   with no semantic change.
+- v0.9.3 contract and coverage validation: all released schemas compiled and representative payloads
+  validated, nested unknown adapter fields rejected, configurable observation retention with
+  cross-process locking, empty-hierarchy retry, and the 26 previously `NOT RUN` certification checks
+  exercised on a clean API 36 AVD. The desktop smoke harness rendered all 13 pages with UI Automation
+  and invoked Refresh.
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
 Not yet validated:
 
-- Physical devices and vendor ROMs (MIUI, Samsung, etc.).
+- Physical devices and vendor ROMs (MIUI, Samsung, etc.). The Poco X4 GT / HyperOS 2 pass is
+  **BLOCKED** for v0.9.3 because the device was not connected; emulator coverage is not a substitute.
 - Maestro execution and instrumentation test APKs.
 - Snapshot load/restore and root-only time changes.
 - macOS and Linux hosts (the desktop is Windows-validated; the CLI is not validated there either).

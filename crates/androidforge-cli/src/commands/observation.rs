@@ -2,11 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[cfg(test)]
+use androidforge_core::config::DEFAULT_OBSERVATION_RETENTION;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::Device;
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::paths::ForgePaths;
-use androidforge_core::session::Session;
+use androidforge_core::session::{Session, StateLock};
 use androidforge_core::util::{
     ensure_dir, now_rfc3339, read_json, short_id, write_atomic, write_json_atomic,
 };
@@ -19,7 +21,6 @@ use crate::context::CliContext;
 use androidforge_core::retry::ReadOnlyOperation;
 
 pub const OBSERVATION_SCHEMA_VERSION: u32 = 1;
-const OBSERVATION_RETENTION: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ObservationBounds {
@@ -971,6 +972,10 @@ pub async fn collect_observation(
     let focus = adb.current_focus(&serial).await;
     let display_size = adb.display_size(&serial).await;
     let boot = boot_id_async(&adb, &serial).await;
+    // Serialize token allocation, writes and retention across independent CLI
+    // processes. The lock is held only for synchronous state-file work.
+    let _state_lock = StateLock::acquire(&ctx.paths)?;
+    let retention = ctx.config.file.storage.observation_retention;
     let token = allocate_token(&ctx.paths, &session.id);
     let observed_at = now_rfc3339();
     let (mut actionable, mut context, mut scrollable, focused) = compact_nodes(&hierarchy);
@@ -1009,12 +1014,7 @@ pub async fn collect_observation(
     ensure_dir(&raw_dir)?;
     // Make room before writing so the new record cannot be selected for
     // eviction by this observation's own retention pass.
-    prune_observations(
-        &ctx.paths,
-        &session.id,
-        OBSERVATION_RETENTION.saturating_sub(1),
-        None,
-    )?;
+    prune_observations(&ctx.paths, &session.id, retention.saturating_sub(1), None)?;
     let raw = xml_path(&ctx.paths, &session.id, &token);
     write_atomic(&raw, hierarchy.xml.as_bytes())?;
 
@@ -1074,7 +1074,7 @@ pub async fn collect_observation(
         session_id: session.id.clone(),
     };
     write_json_atomic(&observation_path(&ctx.paths, &session.id, &token), &record)?;
-    prune_observations(&ctx.paths, &session.id, OBSERVATION_RETENTION, Some(&token))?;
+    prune_observations(&ctx.paths, &session.id, retention, Some(&token))?;
     Ok(observation)
 }
 
@@ -1936,7 +1936,7 @@ mod tests {
         let session = "ses-retention";
         let base = chrono::Utc::now() - chrono::Duration::minutes(30);
         let mut tokens = Vec::new();
-        for index in 0..OBSERVATION_RETENTION {
+        for index in 0..DEFAULT_OBSERVATION_RETENTION {
             let token = format!("obs-retention-{index:02}");
             let mut record = ObservationRecord {
                 observation: observation(&token, Vec::new()),
@@ -1953,7 +1953,7 @@ mod tests {
         prune_observations(
             &paths,
             session,
-            OBSERVATION_RETENTION.saturating_sub(1),
+            DEFAULT_OBSERVATION_RETENTION.saturating_sub(1),
             None,
         )
         .unwrap();
@@ -1966,7 +1966,7 @@ mod tests {
         record.observation.session_id = session.to_string();
         record.observation.observed_at = chrono::Utc::now().to_rfc3339();
         write_json_atomic(&observation_path(&paths, session, newest), &record).unwrap();
-        prune_observations(&paths, session, OBSERVATION_RETENTION, Some(newest)).unwrap();
+        prune_observations(&paths, session, DEFAULT_OBSERVATION_RETENTION, Some(newest)).unwrap();
 
         assert!(observation_path(&paths, session, newest).is_file());
         assert!(!observation_path(&paths, session, &tokens[0]).is_file());
@@ -1976,7 +1976,7 @@ mod tests {
             .flatten()
             .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
             .count();
-        assert_eq!(remaining, OBSERVATION_RETENTION);
+        assert_eq!(remaining, DEFAULT_OBSERVATION_RETENTION);
     }
 
     #[test]

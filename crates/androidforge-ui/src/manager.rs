@@ -189,7 +189,19 @@ impl UiManager {
                                                         None,
                                                     )
                                                     .await;
-                                                return Ok(hierarchy);
+                                                if hierarchy.nodes.is_empty() {
+                                                    // A rapid screen transition can
+                                                    // produce a valid but empty
+                                                    // hierarchy. Treat it as
+                                                    // transient rather than
+                                                    // reporting a blank screen.
+                                                    last_error = Some(
+                                                        "uiautomator returned an empty hierarchy"
+                                                            .to_string(),
+                                                    );
+                                                } else {
+                                                    return Ok(hierarchy);
+                                                }
                                             }
                                             Err(error) => {
                                                 last_error = Some(error.message().to_string());
@@ -1366,6 +1378,7 @@ fn is_transient_uiautomator_failure(message: &str) -> bool {
         || lower.contains("could not get idle state")
         || lower.contains("null root node")
         || lower.contains("empty or partial xml")
+        || lower.contains("empty hierarchy")
         || (lower.contains("uiautomator")
             && (lower.contains("killed")
                 || lower.contains("timeout")
@@ -1407,6 +1420,9 @@ mod tests {
         assert!(is_transient_uiautomator_failure("ERROR: null root node"));
         assert!(is_transient_uiautomator_failure(
             "uiautomator produced empty or partial XML"
+        ));
+        assert!(is_transient_uiautomator_failure(
+            "uiautomator returned an empty hierarchy"
         ));
         assert!(!is_transient_uiautomator_failure(
             "uiautomator: executable not found"
