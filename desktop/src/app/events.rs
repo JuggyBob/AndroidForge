@@ -322,6 +322,16 @@ impl App {
                     Err(error) => self.inspector.hierarchy_error = Some(error),
                 }
             }
+            AppEvent::Performance(result) => {
+                self.inspector.performance_loading = false;
+                match result {
+                    Ok(report) => {
+                        self.inspector.performance = Some(report);
+                        self.inspector.performance_error = None;
+                    }
+                    Err(error) => self.inspector.performance_error = Some(error),
+                }
+            }
             AppEvent::CliUpdateStaged(result) => {
                 self.update.repair_busy = false;
                 match result {

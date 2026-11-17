@@ -8,6 +8,43 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.8.0] - 2026-11-17
+
+Build & Signal. Adds honest split-artifact identity, stable refs for the remaining semantic actions,
+and explicit startup/jank/memory/CPU evidence.
+
+### Added
+
+- `app install` accepts explicit `--split` APKs, split directories containing `splits/` or
+  `standalones/`, and `.apks` archives. Split sets use `adb install-multiple`; archives are extracted
+  as provided without bundletool or automatic device-specific split selection. Package and version
+  identity are checked before installation. Standalone/universal entries are not mixed into split sets,
+  and ambiguous multi-standalone archives are rejected.
+- `apk diff --split` and split-aware installed identity. Split sets are compared by sorted SHA-256;
+  `app install --only-if-changed` skips only when the base APK and complete split set match. Unknown
+  split identity never skips installation.
+- `apk inspect` and `apk resolve` report artifact kind, split count, split hashes and `.apks` archive
+  SHA-256. `apk resolve` warns that split paths are temporary extraction paths.
+- `agent test` now proves installed split hashes before claiming the build is current; an unproven or
+  changed split set requires explicit `--install` instead of being silently skipped.
+- Stable refs for `ui text`, `ui clear`, `ui scroll`, `ui wait` and `ui assert`:
+  `--ref <ref> --expect-token <observation>`. Text/clear require an editable field, scroll requires a
+  scrollable node, and wait/assert may reference context text. Identity is re-checked before dispatch;
+  stale/changed refs fail closed with no text or coordinate fallback.
+- `diagnostics performance [package] [--activity ...] [--cold] [--settle ...] [--timeout ...]` with
+  startup timing from `am start -W`, gfxinfo frame/jank statistics, meminfo PSS/RSS, and CPU from
+  `dumpsys cpuinfo` or `/proc/<pid>/stat` sampling. Cold start requires the explicit `--cold` flag.
+  Missing metrics carry unknown reasons; a `performance/report.json` artifact is written.
+- Desktop Inspector performance panel with cold-start opt-in and startup/jank/memory/CPU summaries.
+- `schema/performance.schema.json`; split fields in `apk-resolution.schema.json` and
+  `apk-diff.schema.json`.
+
+### Changed
+
+- `app install` records the supplied artifact path (APK, directory or `.apks`) as the build source
+  instead of a temporary extraction path.
+- Workspace, CLI, desktop, installer and compatibility version are `0.8.0`.
+
 ## [0.7.1] - 2026-11-17
 
 Patch to the v0.7.0 Matrix & Device Control line.
@@ -408,7 +445,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.8.0
 [0.7.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.1
 [0.7.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.0
 [0.6.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.6.0
@@ -417,3 +455,4 @@ First public alpha of the local-first AndroidForge CLI.
 [0.3.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.1.0
+

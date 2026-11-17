@@ -1,8 +1,53 @@
 # Verification record
 
-This document records what was actually run for the `0.7.1` patch, the `0.7.0` Alpha delivery, and the
-`0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation,
+This document records what was actually run for the `0.8.0` Alpha delivery, the `0.7.1` patch, and the
+`0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation,
 desktop workflow validation and packaging validation from areas that were not exercised.
+
+## v0.8.0 verification (2026-11-17)
+
+### Scope
+
+Build & Signal: split APK/`.apks` install and identity, refs for text/clear/scroll/wait/assert, and
+explicit startup/jank/memory/CPU evidence. Starting state is the published v0.7.1 commit, backed up at
+`A:\Projects\Archive\Backups\AndroidForge\20261117-102303`.
+
+### Automated checks
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` (267 passed, 0 failed, 16 test executables) and the release build passed.
+- New unit coverage: split-hash equivalence, split-vs-single difference, changed split hashes,
+  `install-multiple` argv with base-first ordering, archive entry selection/sanitisation, standalone
+  ambiguity, non-actionable presence refs, stale/identity rejection, ref argument validation,
+  am-start/gfxinfo/meminfo/cpuinfo parsing, `/proc/<pid>/stat` parsing and unknown-reason behavior.
+- CLI and desktop report `0.8.0`.
+
+### Real Android validation (Android 16 / API 36, x86_64 emulator)
+
+- Generated a signed base APK and config splits with `aapt2` and the Android debug keystore.
+- Installed a base + `config.en` split with `adb install-multiple`; `pm path` showed
+  `split_config.en.apk`.
+- Installed the same set from an `.apks` archive containing `splits/` and `standalones/`; only the
+  split was installed, and the archived standalone was ignored with an explicit warning.
+- `--only-if-changed` skipped the identical base + split set. Replacing the split with `config.fr`
+  produced `different`, installed, and `pm path` showed `split_config.fr.apk`.
+- A split declaring a different package and a split declaring a different version code were both
+  rejected before installation with `E_APK_INVALID`.
+- `agent test --variant` detected the changed installed split set, refused to skip without `--install`
+  (`proof: different`), then installed the archive with `--install`.
+- `ui wait --ref` matched context text, `ui scroll --ref` scrolled the referenced container,
+  `ui text --ref` entered text into Settings' EditText, and `ui clear --ref` cleared it.
+- Reusing the pre-entry ref after the text changed failed with `E_ELEMENT_IDENTITY_CHANGED` and no
+  fallback dispatch.
+- `diagnostics performance com.android.settings --cold --settle 2s` measured cold startup (555 ms),
+  25 frames / 7 janky frames, PSS/RSS and CPU. The `/proc/<pid>/stat` fallback was exercised because
+  `dumpsys cpuinfo` did not list the package; it reported the sampled process PID and 0.0% idle CPU.
+- The desktop performance panel was compiled and its CLI command was exercised; the panel itself was
+  launched in the desktop smoke check described below.
+
+### Packaging and release
+
+To be completed after packaging and publication.
 
 ## v0.7.1 verification (2026-11-17)
 
@@ -582,3 +627,5 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
+

@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use androidforge_app::{ApkInfo, AppStates};
+use androidforge_app::{ApkInfo, FieldStatus, compare, inspect_installed};
 use androidforge_core::diagnosis::explain_report;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::{ArtifactRef, Device};
@@ -161,13 +161,16 @@ fn ensure_argv(args: &AgentTestArgs, avd: Option<&str>, serial: Option<&str>) ->
     argv
 }
 
-fn install_argv(session: &Session, apk: &Path) -> Vec<String> {
+fn install_argv(session: &Session, apk: &Path, splits: &[PathBuf]) -> Vec<String> {
     let mut argv = vec![
         "androidforge".to_string(),
         "app".to_string(),
         "install".to_string(),
         apk.to_string_lossy().into_owned(),
     ];
+    for split in splits {
+        argv.extend(["--split".to_string(), split.to_string_lossy().into_owned()]);
+    }
     argv.extend([
         "--session".to_string(),
         session.id.clone(),
@@ -202,92 +205,6 @@ fn conformance_argv(session: &Session, flow: Option<&Path>) -> Vec<String> {
         argv.push(flow.to_string_lossy().into_owned());
     }
     argv
-}
-
-fn compare_build(
-    session: &Session,
-    apk: &ApkInfo,
-    installed: Option<&AppStates>,
-) -> (bool, String, Vec<String>) {
-    let Some(installed) = installed else {
-        return (
-            false,
-            "unknown".to_string(),
-            vec!["The installed package state could not be read.".to_string()],
-        );
-    };
-    if !installed.installed {
-        return (
-            false,
-            "not_installed".to_string(),
-            vec![format!(
-                "Package {} is not installed on the device.",
-                apk.package.as_deref().unwrap_or("-")
-            )],
-        );
-    }
-    let mut notes = Vec::new();
-    if installed.version_code.is_some()
-        && apk.version_code.is_some()
-        && installed.version_code != apk.version_code
-    {
-        notes.push(format!(
-            "Installed version code {:?} differs from APK version code {:?}.",
-            installed.version_code, apk.version_code
-        ));
-    }
-    if installed.version_name.is_some()
-        && apk.version_name.is_some()
-        && installed.version_name != apk.version_name
-    {
-        notes.push(format!(
-            "Installed version name {:?} differs from APK version name {:?}.",
-            installed.version_name, apk.version_name
-        ));
-    }
-    if !notes.is_empty() {
-        return (false, "different_version".to_string(), notes);
-    }
-    let Some(build) = &session.build else {
-        return (
-            false,
-            "no_recorded_build_identity".to_string(),
-            vec![
-                "The session has no recorded install identity, so the installed APK hash cannot be proven."
-                    .to_string(),
-            ],
-        );
-    };
-    if build.package.as_deref() != apk.package.as_deref() {
-        return (
-            false,
-            "different_package_identity".to_string(),
-            vec![format!(
-                "The recorded session build package {:?} differs from APK package {:?}.",
-                build.package, apk.package
-            )],
-        );
-    }
-    let recorded = build
-        .installed_apk_sha256
-        .as_deref()
-        .or(build.apk_sha256.as_deref());
-    match recorded {
-        Some(recorded) if recorded == apk.sha256 => (true, "sha256".to_string(), notes),
-        Some(recorded) => (
-            false,
-            "different_build".to_string(),
-            vec![format!(
-                "The recorded installed APK SHA-256 {recorded} differs from the candidate APK {}.",
-                apk.sha256
-            )],
-        ),
-        None => (
-            false,
-            "no_recorded_hash".to_string(),
-            vec!["The recorded build identity has no APK hash.".to_string()],
-        ),
-    }
 }
 
 fn explain_run(ctx: &CliContext, run_id: &str) -> Option<Value> {
@@ -900,6 +817,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
         };
         state.resolved_apk = resolved_apk;
         let apk_started = Instant::now();
+        let mut _artifact_keep = None;
         let apk = if let Some(path) = &apk_path {
             let argv = vec![
                 "androidforge".to_string(),
@@ -908,8 +826,9 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                 path.to_string_lossy().into_owned(),
                 "--json".to_string(),
             ];
-            match ctx.inspector().inspect(path, false).await {
-                Ok(apk) => {
+            match apk::load_artifact_with_splits(&ctx, path, &args.split).await {
+                Ok(artifact) => {
+                    let apk = artifact.base.clone();
                     state.stage(
                         "inspect_apk",
                         "passed",
@@ -917,6 +836,11 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                         argv,
                         json!({
                             "path": apk.path,
+                            "source": artifact.source.to_string_lossy(),
+                            "artifact_kind": artifact.kind.as_str(),
+                            "split_count": artifact.split_count(),
+                            "archive_sha256": artifact.archive_sha256,
+                            "splits": artifact.splits,
                             "package": apk.package,
                             "version_name": apk.version_name,
                             "version_code": apk.version_code,
@@ -926,6 +850,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                         }),
                     );
                     state.apk = Some(apk.clone());
+                    _artifact_keep = Some(artifact);
                     Some(apk)
                 }
                 Err(error) => {
@@ -967,7 +892,67 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                 }
             };
             let installed = app.status(&device.serial, package).await.ok();
-            let (matches, proof, notes) = compare_build(&session, apk, installed.as_ref());
+            let candidate_splits = _artifact_keep
+                .as_ref()
+                .map(|artifact| artifact.splits.as_slice())
+                .unwrap_or(&[]);
+            let (matches, proof, notes) =
+                if installed.as_ref().is_some_and(|status| !status.installed) {
+                    (
+                        false,
+                        "not_installed".to_string(),
+                        vec![format!("Package {package} is not installed on the device.")],
+                    )
+                } else {
+                    match ctx.adb() {
+                        Ok(adb) => {
+                            let inspector = ctx.inspector();
+                            match inspect_installed(&adb, &inspector, &device.serial, package).await
+                            {
+                                Ok(Some(identity)) => {
+                                    let diff = compare(apk, candidate_splits, &identity);
+                                    let mut notes = diff.warnings.clone();
+                                    if let Some(field) =
+                                        diff.fields.iter().find(|field| field.field == "split_apks")
+                                        && field.status != FieldStatus::Same
+                                    {
+                                        notes.push(format!(
+                                        "Split-set status is {:?}; installation cannot be skipped.",
+                                        field.status
+                                    ));
+                                    }
+                                    let proof = if diff.safe_to_skip_install {
+                                        "hash_and_split_set".to_string()
+                                    } else {
+                                        format!("{:?}", diff.overall).to_ascii_lowercase()
+                                    };
+                                    (diff.safe_to_skip_install, proof, notes)
+                                }
+                                Ok(None) => (
+                                    false,
+                                    "installed_apk_unavailable".to_string(),
+                                    vec![
+                                        "The installed base APK could not be pulled for hashing."
+                                            .to_string(),
+                                    ],
+                                ),
+                                Err(error) => (
+                                    false,
+                                    "installed_identity_unknown".to_string(),
+                                    vec![format!(
+                                        "Installed APK identity could not be read: {}",
+                                        error.message()
+                                    )],
+                                ),
+                            }
+                        }
+                        Err(error) => (
+                            false,
+                            "adb_unavailable".to_string(),
+                            vec![format!("ADB is unavailable: {}", error.message())],
+                        ),
+                    }
+                };
             state.installed_matches = Some(matches);
             state.stage(
                 "compare_build",
@@ -986,6 +971,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                     "matches": matches,
                     "proof": proof,
                     "notes": notes,
+                    "split_count": candidate_splits.len(),
                     "installed": installed.as_ref().map(|status| json!({
                         "installed": status.installed,
                         "version_name": status.version_name,
@@ -1015,7 +1001,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                 state.fail(
                     "install_apk",
                     install_started,
-                    install_argv(&session, &path),
+                    install_argv(&session, &path, &args.split),
                     ForgeError::new(
                         ErrorCode::InvalidArgument,
                         "the installed build cannot be proven current; installing requires --install",
@@ -1033,6 +1019,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
             }
             let install_args = AppInstallArgs {
                 apk: path.clone(),
+                split: args.split.clone(),
                 fresh: false,
                 downgrade: false,
                 no_verify: false,
@@ -1049,7 +1036,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                         "install_apk",
                         "passed",
                         install_started,
-                        install_argv(&session, &path),
+                        install_argv(&session, &path, &args.split),
                         json!({
                             "installed": true,
                             "fresh": false,
@@ -1063,7 +1050,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                     state.fail(
                         "install_apk",
                         install_started,
-                        install_argv(&session, &path),
+                        install_argv(&session, &path, &args.split),
                         error,
                     );
                     break 'pipeline;
@@ -1337,8 +1324,9 @@ async fn dry_run(
     };
     state.resolved_apk = resolved_apk;
     let apk = if let Some(path) = &apk_path {
-        match ctx.inspector().inspect(path, false).await {
-            Ok(apk) => {
+        match apk::load_artifact_with_splits(ctx, path, &args.split).await {
+            Ok(artifact) => {
+                let apk = artifact.base.clone();
                 state.stage(
                     "inspect_apk",
                     "passed",
@@ -1352,6 +1340,11 @@ async fn dry_run(
                     ],
                     json!({
                         "path": apk.path,
+                        "source": artifact.source.to_string_lossy(),
+                        "artifact_kind": artifact.kind.as_str(),
+                        "split_count": artifact.split_count(),
+                        "archive_sha256": artifact.archive_sha256,
+                        "splits": artifact.splits,
                         "package": apk.package,
                         "version_name": apk.version_name,
                         "version_code": apk.version_code,
@@ -1409,13 +1402,17 @@ async fn dry_run(
         apk_path
             .as_ref()
             .map(|path| {
-                vec![
+                let mut argv = vec![
                     "androidforge".to_string(),
                     "app".to_string(),
                     "install".to_string(),
                     path.to_string_lossy().into_owned(),
-                    "--json".to_string(),
-                ]
+                ];
+                for split in &args.split {
+                    argv.extend(["--split".to_string(), split.to_string_lossy().into_owned()]);
+                }
+                argv.push("--json".to_string());
+                argv
             })
             .unwrap_or_default(),
         json!({

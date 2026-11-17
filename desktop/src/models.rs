@@ -1040,6 +1040,86 @@ pub struct UiInspectResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PerformanceStartup {
+    #[serde(default)]
+    pub cold: bool,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub total_time_ms: Option<u64>,
+    #[serde(default)]
+    pub wait_time_ms: Option<u64>,
+    #[serde(default)]
+    pub this_time_ms: Option<u64>,
+    #[serde(default)]
+    pub unknown_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PerformanceJank {
+    #[serde(default)]
+    pub reset_before_launch: bool,
+    #[serde(default)]
+    pub total_frames: Option<u64>,
+    #[serde(default)]
+    pub janky_frames: Option<u64>,
+    #[serde(default)]
+    pub janky_percent: Option<f64>,
+    #[serde(default)]
+    pub percentile_90_ms: Option<f64>,
+    #[serde(default)]
+    pub percentile_99_ms: Option<f64>,
+    #[serde(default)]
+    pub unknown_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PerformanceMemory {
+    #[serde(default)]
+    pub total_pss_kb: Option<u64>,
+    #[serde(default)]
+    pub total_rss_kb: Option<u64>,
+    #[serde(default)]
+    pub unknown_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PerformanceCpu {
+    #[serde(default)]
+    pub process: Option<String>,
+    #[serde(default)]
+    pub total_percent: Option<f64>,
+    #[serde(default)]
+    pub user_percent: Option<f64>,
+    #[serde(default)]
+    pub kernel_percent: Option<f64>,
+    #[serde(default)]
+    pub unknown_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PerformanceReport {
+    #[serde(default)]
+    pub package: String,
+    #[serde(default)]
+    pub serial: String,
+    #[serde(default)]
+    pub cold_start_requested: bool,
+    #[serde(default)]
+    pub foreground: Option<bool>,
+    #[serde(default)]
+    pub startup: PerformanceStartup,
+    #[serde(default)]
+    pub jank: PerformanceJank,
+    #[serde(default)]
+    pub memory: PerformanceMemory,
+    #[serde(default)]
+    pub cpu: PerformanceCpu,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReconcileEntry {
     #[serde(default)]
     pub run_id: String,

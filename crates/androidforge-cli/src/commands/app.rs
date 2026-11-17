@@ -249,7 +249,13 @@ pub async fn app(ctx: &CliContext, command: &AppCommand) -> Result<CommandSucces
 pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<CommandSuccess> {
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
-    let mut options = InstallOptions::new(local_path(ctx, &args.apk));
+    let source = local_path(ctx, &args.apk);
+    let artifact =
+        crate::commands::apk::load_artifact_with_splits(ctx, &source, &args.split).await?;
+    let mut options = InstallOptions::new(artifact.base_path());
+    options.split_apks = artifact.split_paths();
+    options.artifact_kind = Some(artifact.kind.as_str().to_string());
+    options.archive_sha256 = artifact.archive_sha256.clone();
     options.fresh = args.fresh;
     options.confirmed = ctx.yes;
     options.allow_downgrade = args.downgrade;
@@ -278,14 +284,21 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
         ctx.config.file.timeouts.install_secs,
     )?;
     if ctx.dry_run {
-        let inspector = ctx.inspector();
-        let apk = inspector.inspect(&options.apk_path, false).await?;
+        let mut apk = artifact.base.clone();
+        apk.path = source.to_string_lossy().into_owned();
         let package = apk.package.clone();
+        let install_mode = if artifact.splits.is_empty() {
+            "install"
+        } else {
+            "install-multiple"
+        };
         let mut result = serde_json::json!({
             "dry_run": true,
             "serial": device.serial,
             "apk": apk,
+            "artifact": artifact.summary(),
             "install": {
+                "mode": install_mode,
                 "fresh": options.fresh,
                 "allow_downgrade": options.allow_downgrade,
                 "verify_installed": options.verify_installed,
@@ -293,37 +306,48 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
                 "allowed_packages": options.allowed_packages,
                 "expected_cert_sha256": options.expected_cert_sha256,
                 "only_if_changed": options.only_if_changed,
+                "split_count": artifact.split_count(),
+                "splits": artifact.splits,
             }
         });
         if options.fresh && !ctx.yes {
             result["install"]["requires_confirmation"] = serde_json::json!(true);
         }
-        return Ok(success(
-            "app.install",
-            result,
-            format!(
-                "Would install {} on {}{}{}\npackage: {}\nversion: {}\ncertificate: {}\n",
-                options.apk_path.display(),
-                device.serial,
-                if options.fresh {
-                    " with --fresh (data loss)"
-                } else {
-                    ""
-                },
-                if options.allow_downgrade {
-                    " allowing downgrade"
-                } else {
-                    ""
-                },
-                package.as_deref().unwrap_or("-"),
-                apk.version_name.as_deref().unwrap_or("-"),
-                apk.signature.cert_sha256.as_deref().unwrap_or("-"),
-            ),
-        )
-        .with_optional_session(session_id(session.as_ref()))
-        .with_device(device.serial.clone()));
+        let mut human = format!(
+            "Would install {} on {}{}{}\npackage: {}\nversion: {}\ncertificate: {}\nartifact: {}{}\n",
+            source.display(),
+            device.serial,
+            if options.fresh {
+                " with --fresh (data loss)"
+            } else {
+                ""
+            },
+            if options.allow_downgrade {
+                " allowing downgrade"
+            } else {
+                ""
+            },
+            package.as_deref().unwrap_or("-"),
+            apk.version_name.as_deref().unwrap_or("-"),
+            apk.signature.cert_sha256.as_deref().unwrap_or("-"),
+            artifact.kind.as_str(),
+            if artifact.split_count() > 0 {
+                format!(
+                    ", {} split(s) via adb install-multiple",
+                    artifact.split_count()
+                )
+            } else {
+                String::new()
+            },
+        );
+        for warning in &artifact.warnings {
+            human.push_str(&format!("warning: {warning}\n"));
+        }
+        return Ok(success("app.install", result, human)
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()));
     }
-    let apk_display = options.apk_path.display().to_string();
+    let apk_display = source.display().to_string();
     let outcome = execute_in_run!(
         ctx,
         "app.install",
@@ -333,15 +357,20 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
         true,
         |run| async {
             let app = ctx.app_manager()?;
-            let result = app.install(&device.serial, &options).await.map_err(|error| {
+            let mut result = app.install(&device.serial, &options).await.map_err(|error| {
                 error.with_context_string(
                     "apk_path",
                     options.apk_path.to_string_lossy().into_owned(),
                 )
             })?;
+            let artifact_kind = result.artifact_kind.clone();
+            let split_count = result.split_count;
+            result.warnings.extend(artifact.warnings.iter().cloned());
+            result.apk.path = apk_display.clone();
+            result.build.apk_path = Some(apk_display.clone());
             run.set_build(result.build.clone());
             let identity = serde_json::to_string_pretty(&result.build).unwrap_or_default();
-            let artifact = run.write_text_artifact(
+            let artifact_file = run.write_text_artifact(
                 "build/install-identity.json",
                 "build_identity",
                 Some("Installed package, APK hash and signing certificate identity"),
@@ -349,26 +378,42 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
             )?;
             let human = if result.skipped {
                 format!(
-                    "Installation skipped: {}\npackage: {}\nversion: {}\nbase APK SHA-256: {}\n",
+                    "Installation skipped: {}\npackage: {}\nversion: {}\nbase APK SHA-256: {}\nartifact: {}{}\n",
                     result.reason.as_deref().unwrap_or("the installed build already matches"),
                     result.build.package.as_deref().unwrap_or("-"),
                     result.build.version_name.as_deref().unwrap_or("-"),
                     result.build.apk_sha256.as_deref().unwrap_or("-"),
+                    artifact_kind.as_deref().unwrap_or("-"),
+                    if split_count > 0 {
+                        format!(" ({split_count} split(s) matched)")
+                    } else {
+                        String::new()
+                    },
                 )
             } else {
                 format!(
-                    "Installed {}\npackage: {}\nversion: {}\ninstalled APK SHA-256: {}\nsigning cert SHA-256: {}\ndebug signed: {}\n{}",
+                    "Installed {}\npackage: {}\nversion: {}\ninstalled APK SHA-256: {}\nsigning cert SHA-256: {}\ndebug signed: {}\nartifact: {}{}\n{}",
                     apk_display,
                     result.build.package.as_deref().unwrap_or("-"),
                     result.build.version_name.as_deref().unwrap_or("-"),
                     result.build.installed_apk_sha256.as_deref().or(result.build.apk_sha256.as_deref()).unwrap_or("-"),
                     result.build.cert_sha256.as_deref().unwrap_or("-"),
                     result.build.debug_signed.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
+                    artifact_kind.as_deref().unwrap_or("-"),
+                    if split_count > 0 {
+                        format!(" ({split_count} split(s) installed via install-multiple)")
+                    } else {
+                        String::new()
+                    },
                     result.reason.as_ref().map(|reason| format!("decision reason: {reason}\n")).unwrap_or_default(),
                 )
             };
+            let mut human = human;
+            for warning in &result.warnings {
+                human.push_str(&format!("warning: {warning}\n"));
+            }
             Ok(success("app.install", serde_json::to_value(&result)?, human)
-                .with_artifacts(vec![artifact])
+                .with_artifacts(vec![artifact_file])
                 .with_optional_session(session_id(session.as_ref()))
                 .with_device(device.serial.clone()))
         },
@@ -791,10 +836,22 @@ async fn list(ctx: &CliContext, args: &AppListArgs) -> Result<CommandSuccess> {
 }
 
 pub async fn apk_inspect(ctx: &CliContext, apk: &Path) -> Result<CommandSuccess> {
-    let info = ctx.inspector().inspect(apk, false).await?;
-    let human = format!(
-        "{}\npackage: {}\nversion: {} ({})\nminSdk: {:?} targetSdk: {:?}\nsha256: {}\nsigned: {:?} verified: {:?}\ncert SHA-256: {}\ndebug signed: {:?}\n",
-        info.path,
+    let artifact = crate::commands::apk::load_artifact_with_splits(ctx, apk, &[]).await?;
+    let info = artifact.base.clone();
+    let mut value = serde_json::to_value(&info)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "path".to_string(),
+            serde_json::Value::String(artifact.source.to_string_lossy().into_owned()),
+        );
+        object.insert(
+            "artifact".to_string(),
+            serde_json::to_value(artifact.summary())?,
+        );
+    }
+    let mut human = format!(
+        "{}\npackage: {}\nversion: {} ({})\nminSdk: {:?} targetSdk: {:?}\nsha256: {}\nsigned: {:?} verified: {:?}\ncert SHA-256: {}\ndebug signed: {:?}\nartifact: {}\nsplits: {}\n",
+        artifact.source.display(),
         info.package.as_deref().unwrap_or("-"),
         info.version_name.as_deref().unwrap_or("-"),
         info.version_code
@@ -807,8 +864,16 @@ pub async fn apk_inspect(ctx: &CliContext, apk: &Path) -> Result<CommandSuccess>
         info.signature.verified,
         info.signature.cert_sha256.as_deref().unwrap_or("-"),
         info.signature.debug_signed(),
+        artifact.kind.as_str(),
+        artifact.split_count(),
     );
-    Ok(success("apk.inspect", serde_json::to_value(&info)?, human))
+    if let Some(archive_sha256) = &artifact.archive_sha256 {
+        human.push_str(&format!("archive SHA-256: {archive_sha256}\n"));
+    }
+    for warning in &artifact.warnings {
+        human.push_str(&format!("warning: {warning}\n"));
+    }
+    Ok(success("apk.inspect", value, human))
 }
 
 pub async fn apk_verify(ctx: &CliContext, args: &ApkVerifyArgs) -> Result<CommandSuccess> {

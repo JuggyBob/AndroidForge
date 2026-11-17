@@ -309,6 +309,9 @@ pub struct AgentTestArgs {
     /// APK to inspect and optionally install before testing. Takes precedence over --variant.
     #[arg(long)]
     pub apk: Option<PathBuf>,
+    /// Additional split APKs for an explicit base APK.
+    #[arg(long = "split")]
+    pub split: Vec<PathBuf>,
     /// Resolve an APK from [build.variants] configuration without running Gradle.
     #[arg(long)]
     pub variant: Option<String>,
@@ -656,6 +659,9 @@ pub enum AppCommand {
 #[derive(Debug, Args)]
 pub struct AppInstallArgs {
     pub apk: PathBuf,
+    /// Additional split APKs that belong to the same split set.
+    #[arg(long = "split")]
+    pub split: Vec<PathBuf>,
     #[arg(long)]
     pub fresh: bool,
     #[arg(long)]
@@ -774,6 +780,9 @@ pub struct ApkDiffArgs {
     pub target: String,
     /// The other side of the comparison (APK path or `installed:<package>`).
     pub apk: String,
+    /// Additional split APKs for the candidate side.
+    #[arg(long = "split")]
+    pub split: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -1093,6 +1102,26 @@ pub enum DiagnosticsCommand {
         package: String,
     },
     Inspect(DiagnosticsInspectArgs),
+    /// Measure startup, jank, memory and CPU explicitly.
+    Performance(DiagnosticsPerformanceArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DiagnosticsPerformanceArgs {
+    /// Package to measure. Defaults to [project].package.
+    pub package: Option<String>,
+    /// Explicit launcher activity, for example com.example/.MainActivity.
+    #[arg(long)]
+    pub activity: Option<String>,
+    /// Force-stop the application before measuring. This is an explicit cold-start request.
+    #[arg(long)]
+    pub cold: bool,
+    /// Wait after launch before sampling frames, memory and CPU, for example 2s.
+    #[arg(long)]
+    pub settle: Option<String>,
+    /// Per-command timeout, for example 30s.
+    #[arg(long)]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]

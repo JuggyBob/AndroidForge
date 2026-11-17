@@ -66,7 +66,22 @@ impl NodeExpectation {
         }
     }
 
+    /// Find the node and require that it is safe to act on.
     pub fn find<'a>(&self, hierarchy: &'a UiHierarchy) -> Result<&'a UiNode> {
+        self.find_with(hierarchy, ExpectationMode::Action)
+    }
+
+    /// Find the node and prove its identity, without requiring actionability.
+    /// This is used by wait/assert, which may reference context text.
+    pub fn find_presence<'a>(&self, hierarchy: &'a UiHierarchy) -> Result<&'a UiNode> {
+        self.find_with(hierarchy, ExpectationMode::Presence)
+    }
+
+    fn find_with<'a>(
+        &self,
+        hierarchy: &'a UiHierarchy,
+        mode: ExpectationMode,
+    ) -> Result<&'a UiNode> {
         let Some(node) = hierarchy
             .nodes
             .iter()
@@ -86,23 +101,17 @@ impl NodeExpectation {
                 "A stale ref is never retried with text, resource-id or coordinates.",
             ));
         };
-        self.validate(node, hierarchy)?;
+        self.validate(node, hierarchy, mode)?;
         Ok(node)
     }
 
-    fn validate(&self, node: &UiNode, hierarchy: &UiHierarchy) -> Result<()> {
-        if node.class != self.class
-            || node.package != self.package
-            || node.resource_id != self.resource_id
-            || (!self.password && node.text != self.text)
-            || node.content_desc != self.content_desc
-            || node.bounds != self.bounds
-            || node.clickable != self.clickable
-            || node.long_clickable != self.long_clickable
-            || node.enabled != self.enabled
-            || node.scrollable != self.scrollable
-            || node.editable_like() != self.editable
-        {
+    fn validate(
+        &self,
+        node: &UiNode,
+        hierarchy: &UiHierarchy,
+        mode: ExpectationMode,
+    ) -> Result<()> {
+        if !self.matches_identity(node) {
             return Err(ForgeError::new(
                 ErrorCode::ElementIdentityChanged,
                 "the element at this path no longer matches the observed identity",
@@ -123,6 +132,9 @@ impl NodeExpectation {
             .with_suggestion(
                 "AndroidForge never falls back to text or coordinates for a changed node.",
             ));
+        }
+        if mode == ExpectationMode::Presence {
+            return Ok(());
         }
         if !node.enabled {
             return Err(ForgeError::new(
@@ -156,6 +168,38 @@ impl NodeExpectation {
         }
         Ok(())
     }
+
+    /// Full identity except the fields that legitimately change after focus or
+    /// input. Used to prove that a tap focused the referenced field before any
+    /// text is sent.
+    pub fn matches_core(&self, node: &UiNode) -> bool {
+        node.class == self.class
+            && node.package == self.package
+            && node.resource_id == self.resource_id
+            && (self.password || node.text == self.text)
+            && node.content_desc == self.content_desc
+            && node.editable_like() == self.editable
+    }
+
+    /// Complete identity recorded by the observation, including bounds and
+    /// actionability flags.
+    pub fn matches_identity(&self, node: &UiNode) -> bool {
+        self.matches_core(node)
+            && node.bounds == self.bounds
+            && node.clickable == self.clickable
+            && node.long_clickable == self.long_clickable
+            && node.enabled == self.enabled
+            && node.scrollable == self.scrollable
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectationMode {
+    /// The node must exist with the recorded identity and be actionable.
+    Action,
+    /// The node must exist with the recorded identity; actionability is not
+    /// required. Used by wait and assert.
+    Presence,
 }
 
 #[cfg(test)]
@@ -254,5 +298,32 @@ mod tests {
         let expectation = NodeExpectation::from_node(&node);
         let error = expectation.find(&hierarchy(vec![node])).unwrap_err();
         assert_eq!(error.code(), ErrorCode::ElementNotActionable);
+    }
+
+    #[test]
+    fn presence_accepts_non_actionable_context_text() {
+        let mut node = node("0/1");
+        node.clickable = false;
+        node.class = Some("android.widget.TextView".to_string());
+        let expectation = NodeExpectation::from_node(&node);
+        assert!(
+            expectation
+                .find_presence(&hierarchy(vec![node.clone()]))
+                .is_ok()
+        );
+        assert!(expectation.find(&hierarchy(vec![node])).is_err());
+    }
+
+    #[test]
+    fn core_identity_ignores_bounds_but_rejects_changed_text() {
+        let node = node("0/1");
+        let expectation = NodeExpectation::from_node(&node);
+        let mut moved = node.clone();
+        moved.bounds.left += 10;
+        assert!(expectation.matches_core(&moved));
+        assert!(!expectation.matches_identity(&moved));
+        let mut relabelled = node;
+        relabelled.text = Some("Delete".to_string());
+        assert!(!expectation.matches_core(&relabelled));
     }
 }

@@ -22,7 +22,7 @@
 | `ui.observation` | supported | adb, uiautomator | Compact semantic observations, session/boot-scoped tokens, semantic diffs and `--full` hierarchy. |
 | `ui.postconditions` | supported | adb, uiautomator | One action plus observation polling; no hidden action retries. |
 | `ui.receipts` | supported | adb, uiautomator | Before/after tokens, semantic diff, deterministic effect classification and explicit completeness. |
-| `ui.element_refs` | supported | adb, uiautomator | Opaque refs scoped to one observation token, with strict identity validation and no fallback. |
+| `ui.element_refs` | supported | adb, uiautomator | Opaque refs scoped to one observation token, with strict identity validation and no fallback for tap, long-press, text, clear, scroll, wait and assert. |
 | `diagnosis.explain` | supported | local reports | Deterministic categories, confidence, evidence, stable fingerprints and exact argv next actions. No LLM. |
 | `diagnosis.recurrence` | supported | local reports | Project-scoped new/recurring/regressed/unknown memory derived from existing run reports; no second database. |
 | `diagnostics.bundle` | supported | local reports | Redacted, size-bounded, checksummed ZIP plus Markdown/JSON evidence summaries and dry-run preview. |
@@ -41,6 +41,7 @@
 | `capture.screenshot` | supported | adb | Binary PNG via `exec-out`; no console redirection. |
 | `capture.recording` | best-effort | adb, screenrecord | Android's 180-second limit; no audio. |
 | `diagnostics.logcat` | supported | adb | Never clears the global buffer by default; bounded. |
+| `diagnostics.performance` | best-effort | adb, dumpsys, /proc | Explicit startup/jank/memory/CPU evidence; cold start requires `--cold`; unknown values carry reasons. |
 | `diagnostics.jobs` | best-effort | adb, dumpsys jobscheduler | Raw output preserved; job IDs are never hardcoded. |
 | `diagnostics.notifications` | best-effort | adb, dumpsys notification | Formatting varies by Android version. |
 | `diagnostics.doze.time` | best-effort | adb, device privileges | Time changes usually require root; AndroidForge never roots. |
@@ -98,7 +99,7 @@
 
 ### Apps and APKs
 
-- `apk inspect|verify|resolve|diff`.
+- `apk inspect|verify|resolve|diff`; split sets via repeated `--split` and `.apks`/split directories.
 - `app install|uninstall|clear-data|launch|force-stop|kill|status|info|list|file-push|file-pull|data-backup|data-restore`.
 - `permissions check|grant|revoke`.
 - `appops get|set|reset`.
@@ -123,13 +124,13 @@
   `--profile`, `--ttl`, `--install`, `--flow` and `--fixture`.
 - `agent matrix` with repeated `--avd`/`--serial`, `--flow`, `--fixture`, `--apk`, `--variant`,
   `--install`, `--fail-fast`, `--dry-run` and cleanup reporting. `--parallel` >1 is explicitly rejected.
-- `ui observe|diff` and logcat peek/tail accept `--retries`; `ui tap|long-press` accept `--ref` and
-  `--expect-token`.
+- `ui observe|diff` and logcat peek/tail accept `--retries`; `ui tap|long-press|text|clear|scroll|wait|assert`
+  accept `--ref` and `--expect-token`.
 
 ### Evidence and diagnostics
 
 - `capture screenshot`; `capture record start|stop|status`.
-- `diagnostics collect|app|logcat tail|start|stop|status|crashes|inspect`.
+- `diagnostics collect|app|logcat tail|start|stop|status|crashes|inspect|performance`.
 - `notifications list|wait|assert|channels|tap|clear`.
 - `jobs list|run|cancel|wait|assert`.
 - `alarms next|list|wait`.
@@ -163,4 +164,5 @@
 
 ## Verified versus unverified
 
-The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery introduced and exercised the agent loop: compact context, semantic observations and diffs, postconditions, session ensure, read-only repair planning, deterministic explanations and the agent pipeline. The `0.5.0` delivery fixed the issues reported by three independent app agents: shared-host port selection, UIAutomator recovery, pipeline status, project-scoped run discovery, observation shape, compact diffs, selector guidance, desktop help/version and session project binding. The `0.6.0` delivery added and exercised action receipts on a real emulator, real installed-APK diff/only-if-changed, recurrence classification, redacted bundle creation/verification and the Context/Ownership desktop pages. The `0.7.0` delivery added and exercised a two-AVD matrix (API 36 and 34), stable refs with stale rejection, device health, disconnect/recovery and read-only retry reporting, plus the Matrix and device health desktop workflows. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.
+The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery introduced and exercised the agent loop: compact context, semantic observations and diffs, postconditions, session ensure, read-only repair planning, deterministic explanations and the agent pipeline. The `0.5.0` delivery fixed the issues reported by three independent app agents: shared-host port selection, UIAutomator recovery, pipeline status, project-scoped run discovery, observation shape, compact diffs, selector guidance, desktop help/version and session project binding. The `0.6.0` delivery added and exercised action receipts on a real emulator, real installed-APK diff/only-if-changed, recurrence classification, redacted bundle creation/verification and the Context/Ownership desktop pages. The `0.7.0` delivery added and exercised a two-AVD matrix (API 36 and 34), stable refs with stale rejection, device health, disconnect/recovery and read-only retry reporting, plus the Matrix and device health desktop workflows. The `0.8.0` delivery added and exercised split/`.apks` install and hash equivalence, refs for text/clear/scroll/wait/assert with stale refusal, explicit startup/jank/memory/CPU evidence and the desktop performance panel. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.
+

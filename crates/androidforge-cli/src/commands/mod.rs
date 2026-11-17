@@ -352,6 +352,7 @@ fn diagnostics_name(command: &DiagnosticsCommand) -> &'static str {
         DiagnosticsCommand::Logcat { .. } => "logcat",
         DiagnosticsCommand::Crashes { .. } => "crashes",
         DiagnosticsCommand::Inspect(_) => "inspect",
+        DiagnosticsCommand::Performance(_) => "performance",
     }
 }
 

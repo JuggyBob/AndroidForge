@@ -135,6 +135,8 @@ impl App {
         self.inspector.display_size = None;
         self.inspector.frame_error = None;
         self.inspector.hierarchy_error = None;
+        self.inspector.performance = None;
+        self.inspector.performance_error = None;
     }
 
     pub fn start_inspector(&mut self, ctx: &egui::Context) {
@@ -155,6 +157,39 @@ impl App {
         self.request_hierarchy(ctx);
     }
 
+    pub fn inspector_measure_performance(&mut self, ctx: &egui::Context) {
+        if self.inspector.performance_loading {
+            return;
+        }
+        let Some(runner) = self.runner.clone() else {
+            self.inspector.performance_error = Some("CLI is not connected".to_string());
+            return;
+        };
+        let Some(session) = self.inspector.session_id.clone() else {
+            self.inspector.performance_error = Some("Select a session first".to_string());
+            return;
+        };
+        let cold = self.inspector.performance_cold;
+        let mut args = vec![
+            "diagnostics".to_string(),
+            "performance".to_string(),
+            "--session".to_string(),
+            session,
+        ];
+        if cold {
+            args.push("--cold".to_string());
+        }
+        let invocation = self
+            .project_invocation(args)
+            .timeout(Duration::from_secs(180));
+        self.inspector.performance_loading = true;
+        self.inspector.performance_error = None;
+        self.spawn_event(ctx, move || {
+            AppEvent::Performance(run_result::<crate::models::PerformanceReport>(
+                &runner, invocation,
+            ))
+        });
+    }
     pub(super) fn poll_inspector(&mut self, ctx: &egui::Context) {
         if self.page != Page::Inspector || !self.inspector.auto_refresh {
             return;

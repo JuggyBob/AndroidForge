@@ -2,6 +2,7 @@
 
 mod apk;
 mod appops;
+mod artifact;
 mod diff;
 mod files;
 mod install;
@@ -12,6 +13,7 @@ pub use apk::{
     ApkInfo, ApkInspector, ApkSignatureStatus, ApkVerificationReport, VerifyCheck, VerifyOptions,
 };
 pub use appops::{AppOpState, AppOps};
+pub use artifact::{ApkArtifact, ApkArtifactKind, ApkArtifactSummary, SplitApk};
 pub use diff::{
     APK_DIFF_SCHEMA_VERSION, ApkDiff, Equivalence, FieldComparison, FieldStatus,
     InstalledApkIdentity, compare, inspect_installed,

@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use crate::cli::{
     PostconditionArgs, SelectorArgs, UiCommand, UiDumpArgs, UiInspectArgs, UiKeyEventArgs,
-    UiScrollArgs, UiScrollToArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
+    UiScrollArgs, UiScrollToArgs, UiSelectorArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs,
+    UiWaitArgs,
 };
 use crate::commands::common::{require_selector, success};
 use crate::commands::observation;
@@ -144,7 +145,12 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             ));
                         };
                         let resolved = observation::resolve_element_reference(
-                            ctx, session, &device, &reference, &token,
+                            ctx,
+                            session,
+                            &device,
+                            &reference,
+                            &token,
+                            observation::ReferenceUse::Tap,
                         )
                         .await?;
                         let node_value = serde_json::to_value(&resolved.node)?;
@@ -584,7 +590,12 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             ));
                         };
                         let resolved = observation::resolve_element_reference(
-                            ctx, session, &device, &reference, &token,
+                            ctx,
+                            session,
+                            &device,
+                            &reference,
+                            &token,
+                            observation::ReferenceUse::LongPress,
                         )
                         .await?;
                         let node_value = serde_json::to_value(&resolved.node)?;
@@ -833,34 +844,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             .await
         }
         UiCommand::Text(args) => text(ctx, session.as_ref(), &device, args).await,
-        UiCommand::Clear(args) => {
-            reject_ref_for("ui clear", &args.selector)?;
-            let selector = if args.selector.has_selector() {
-                Some(require_selector(&args.selector)?)
-            } else {
-                None
-            };
-            execute_in_run!(
-                ctx,
-                "ui.clear",
-                Some("ui clear"),
-                session.as_ref(),
-                Some(&device),
-                true,
-                |_run| async {
-                    let ui = ctx.ui_manager()?;
-                    let result = ui.clear(&serial, selector.as_ref()).await?;
-                    Ok(success(
-                        "ui.clear",
-                        serde_json::to_value(&result)?,
-                        "Cleared the focused text field.\n".to_string(),
-                    )
-                    .with_optional_session(session_id(session.as_ref()))
-                    .with_device(serial.clone()))
-                },
-            )
-            .await
-        }
+        UiCommand::Clear(args) => clear(ctx, session.as_ref(), &device, args).await,
         UiCommand::Wait(args) | UiCommand::Assert(args) => {
             wait_or_assert(
                 ctx,
@@ -1087,14 +1071,121 @@ async fn dump(
     Ok(success("ui.dump", result, human).with_artifacts(vec![artifact]))
 }
 
+async fn clear(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiSelectorArgs,
+) -> Result<CommandSuccess> {
+    validate_reference_args(&args.selector)?;
+    let serial = device.serial.clone();
+    if args.selector.has_ref() {
+        let Some(session) = session else {
+            return Err(ForgeError::new(
+                androidforge_core::error::ErrorCode::SessionNotFound,
+                "element references require a session",
+            )
+            .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+        };
+        let reference = args.selector.reference.clone().unwrap_or_default();
+        let token = args.selector.expect_token.clone().unwrap_or_default();
+        let resolved = observation::resolve_element_reference(
+            ctx,
+            session,
+            device,
+            &reference,
+            &token,
+            observation::ReferenceUse::Clear,
+        )
+        .await?;
+        return execute_in_run!(
+            ctx,
+            "ui.clear",
+            Some("ui clear referenced element"),
+            Some(session),
+            Some(device),
+            true,
+            |_run| async {
+                let ui = ctx.ui_manager()?;
+                let result = ui.clear_expected(&serial, &resolved.expectation).await?;
+                let mut action = serde_json::to_value(&result)?;
+                add_reference_action_context(
+                    &mut action,
+                    &args.selector,
+                    serde_json::to_value(&resolved.node)?,
+                );
+                Ok(success(
+                    "ui.clear",
+                    action,
+                    "Cleared the referenced text field.\n".to_string(),
+                )
+                .with_session(session.id.clone())
+                .with_device(serial.clone()))
+            },
+        )
+        .await;
+    }
+    let selector = if args.selector.has_selector() {
+        Some(require_selector(&args.selector)?)
+    } else {
+        None
+    };
+    execute_in_run!(
+        ctx,
+        "ui.clear",
+        Some("ui clear"),
+        session,
+        Some(device),
+        true,
+        |_run| async {
+            let ui = ctx.ui_manager()?;
+            let result = ui.clear(&serial, selector.as_ref()).await?;
+            Ok(success(
+                "ui.clear",
+                serde_json::to_value(&result)?,
+                "Cleared the focused text field.\n".to_string(),
+            )
+            .with_optional_session(session_id(session))
+            .with_device(serial.clone()))
+        },
+    )
+    .await
+}
 async fn text(
     ctx: &CliContext,
     session: Option<&Session>,
     device: &androidforge_core::model::Device,
     args: &UiTextArgs,
 ) -> Result<CommandSuccess> {
-    reject_ref_for("ui text", &args.selector)?;
-    let selector = if args.selector.has_selector() {
+    validate_reference_args(&args.selector)?;
+    let reference = args.selector.reference.clone();
+    let token = args.selector.expect_token.clone();
+    let resolved = if let (Some(reference), Some(token)) = (reference.as_deref(), token.as_deref())
+    {
+        let Some(session) = session else {
+            return Err(ForgeError::new(
+                androidforge_core::error::ErrorCode::SessionNotFound,
+                "element references require a session",
+            )
+            .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+        };
+        Some(
+            observation::resolve_element_reference(
+                ctx,
+                session,
+                device,
+                reference,
+                token,
+                observation::ReferenceUse::Text,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let selector = if resolved.is_some() {
+        None
+    } else if args.selector.has_selector() {
         Some(require_selector(&args.selector)?)
     } else {
         None
@@ -1120,9 +1211,17 @@ async fn text(
                     )
                     .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
                 };
-                let selector_value = selector.as_ref().map(serde_json::to_value).transpose()?;
+                let selector_value = reference_selector_value(&args.selector, selector.as_ref())?;
                 let mut builder =
                     receipt::ReceiptBuilder::new("text", selector_value, session, device);
+                if let Some(resolved) = &resolved {
+                    builder.set_reference(receipt::ReceiptElementReference {
+                        reference: args.selector.reference.clone().unwrap_or_default(),
+                        expected_token: args.selector.expect_token.clone().unwrap_or_default(),
+                        resolved_node: Some(serde_json::to_value(&resolved.node)?),
+                        validation: "validated".to_string(),
+                    });
+                }
                 let before =
                     match observation::collect_observation(ctx, session, device, None, false).await
                     {
@@ -1146,16 +1245,29 @@ async fn text(
                         }
                     };
                 builder.set_before(before);
-                let result = match ui
-                    .text(
-                        &serial,
-                        &args.value,
-                        selector.as_ref(),
-                        args.clear,
-                        args.hide_keyboard,
-                    )
-                    .await
-                {
+                let result = match &resolved {
+                    Some(resolved) => {
+                        ui.text_expected(
+                            &serial,
+                            &resolved.expectation,
+                            &args.value,
+                            args.clear,
+                            args.hide_keyboard,
+                        )
+                        .await
+                    }
+                    None => {
+                        ui.text(
+                            &serial,
+                            &args.value,
+                            selector.as_ref(),
+                            args.clear,
+                            args.hide_keyboard,
+                        )
+                        .await
+                    }
+                };
+                let result = match result {
                     Ok(result) => result,
                     Err(error) => {
                         let resolved = !matches!(
@@ -1176,7 +1288,10 @@ async fn text(
                     builder,
                     true,
                     true,
-                    None,
+                    resolved
+                        .as_ref()
+                        .map(|resolved| serde_json::to_value(&resolved.node))
+                        .transpose()?,
                     action,
                     selector.as_ref(),
                     &args.postcondition,
@@ -1202,16 +1317,36 @@ async fn text(
                     .with_session(session.id.clone())
                     .with_device(serial.clone()));
             }
-            let result = ui
-                .text(
-                    &serial,
-                    &args.value,
-                    selector.as_ref(),
-                    args.clear,
-                    args.hide_keyboard,
-                )
-                .await?;
-            let action = serde_json::to_value(&result)?;
+            let result = match &resolved {
+                Some(resolved) => {
+                    ui.text_expected(
+                        &serial,
+                        &resolved.expectation,
+                        &args.value,
+                        args.clear,
+                        args.hide_keyboard,
+                    )
+                    .await?
+                }
+                None => {
+                    ui.text(
+                        &serial,
+                        &args.value,
+                        selector.as_ref(),
+                        args.clear,
+                        args.hide_keyboard,
+                    )
+                    .await?
+                }
+            };
+            let mut action = serde_json::to_value(&result)?;
+            if let Some(resolved) = &resolved {
+                add_reference_action_context(
+                    &mut action,
+                    &args.selector,
+                    serde_json::to_value(&resolved.node)?,
+                );
+            }
             let (value, suffix) = apply_postconditions(
                 ctx,
                 session,
@@ -1251,7 +1386,41 @@ async fn wait_or_assert(
     args: &UiWaitArgs,
     assertion: bool,
 ) -> Result<CommandSuccess> {
-    let selector = require_selector(&args.selector)?;
+    validate_reference_args(&args.selector)?;
+    let reference = args.selector.reference.clone();
+    let token = args.selector.expect_token.clone();
+    let resolved = if let (Some(reference), Some(token)) = (reference.as_deref(), token.as_deref())
+    {
+        let Some(session) = session else {
+            return Err(ForgeError::new(
+                androidforge_core::error::ErrorCode::SessionNotFound,
+                "element references require a session",
+            )
+            .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+        };
+        Some(
+            observation::resolve_element_reference(
+                ctx,
+                session,
+                device,
+                reference,
+                token,
+                if assertion {
+                    observation::ReferenceUse::Assert
+                } else {
+                    observation::ReferenceUse::Wait
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let selector = if resolved.is_none() {
+        Some(require_selector(&args.selector)?)
+    } else {
+        None
+    };
     let serial = device.serial.clone();
     let timeout = ctx.parse_timeout(
         args.timeout.as_deref(),
@@ -1270,9 +1439,28 @@ async fn wait_or_assert(
         true,
         |_run| async {
             let ui = ctx.ui_manager()?;
-            let result = ui
-                .wait(&serial, &selector, timeout, args.not_exists)
-                .await?;
+            let result = match &resolved {
+                Some(resolved) => {
+                    ui.wait_expected(&serial, &resolved.expectation, timeout, args.not_exists)
+                        .await?
+                }
+                None => {
+                    let selector = selector.as_ref().ok_or_else(|| {
+                        ForgeError::invalid_argument(
+                            "ui wait requires a selector or a stable element reference",
+                        )
+                    })?;
+                    ui.wait(&serial, selector, timeout, args.not_exists).await?
+                }
+            };
+            let mut value = serde_json::to_value(&result)?;
+            if let Some(resolved) = &resolved {
+                add_reference_action_context(
+                    &mut value,
+                    &args.selector,
+                    serde_json::to_value(&resolved.node)?,
+                );
+            }
             let human = format!(
                 "{}{} after {} attempt(s) in {}ms.\n",
                 if args.not_exists {
@@ -1290,7 +1478,7 @@ async fn wait_or_assert(
             );
             Ok(success(
                 if assertion { "ui.assert" } else { "ui.wait" },
-                serde_json::to_value(&result)?,
+                value,
                 human,
             )
             .with_optional_session(session.map(|session| session.id.clone()))
@@ -1339,8 +1527,35 @@ async fn scroll(
     device: &androidforge_core::model::Device,
     args: &UiScrollArgs,
 ) -> Result<CommandSuccess> {
-    reject_ref_for("ui scroll", &args.selector)?;
-    let selector = if args.selector.has_selector() {
+    validate_reference_args(&args.selector)?;
+    let reference = args.selector.reference.clone();
+    let token = args.selector.expect_token.clone();
+    let resolved = if let (Some(reference), Some(token)) = (reference.as_deref(), token.as_deref())
+    {
+        let Some(session) = session else {
+            return Err(ForgeError::new(
+                androidforge_core::error::ErrorCode::SessionNotFound,
+                "element references require a session",
+            )
+            .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
+        };
+        Some(
+            observation::resolve_element_reference(
+                ctx,
+                session,
+                device,
+                reference,
+                token,
+                observation::ReferenceUse::Scroll,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let selector = if resolved.is_some() {
+        None
+    } else if args.selector.has_selector() {
         Some(require_selector(&args.selector)?)
     } else {
         None
@@ -1365,9 +1580,17 @@ async fn scroll(
                     )
                     .with_suggestion("Pass --session <ID> or run `androidforge session ensure`."));
                 };
-                let selector_value = selector.as_ref().map(serde_json::to_value).transpose()?;
+                let selector_value = reference_selector_value(&args.selector, selector.as_ref())?;
                 let mut builder =
                     receipt::ReceiptBuilder::new("scroll", selector_value, session, device);
+                if let Some(resolved) = &resolved {
+                    builder.set_reference(receipt::ReceiptElementReference {
+                        reference: args.selector.reference.clone().unwrap_or_default(),
+                        expected_token: args.selector.expect_token.clone().unwrap_or_default(),
+                        resolved_node: Some(serde_json::to_value(&resolved.node)?),
+                        validation: "validated".to_string(),
+                    });
+                }
                 let before =
                     match observation::collect_observation(ctx, session, device, None, false).await
                     {
@@ -1391,7 +1614,14 @@ async fn scroll(
                         }
                     };
                 builder.set_before(before);
-                let result = match ui.scroll(&serial, &args.direction, selector.as_ref()).await {
+                let result = match &resolved {
+                    Some(resolved) => {
+                        ui.scroll_expected(&serial, &args.direction, &resolved.expectation)
+                            .await
+                    }
+                    None => ui.scroll(&serial, &args.direction, selector.as_ref()).await,
+                };
+                let result = match result {
                     Ok(result) => result,
                     Err(error) => {
                         let resolved = !matches!(
@@ -1412,7 +1642,10 @@ async fn scroll(
                     builder,
                     true,
                     true,
-                    None,
+                    resolved
+                        .as_ref()
+                        .map(|resolved| serde_json::to_value(&resolved.node))
+                        .transpose()?,
                     action,
                     selector.as_ref(),
                     &args.postcondition,
@@ -1435,10 +1668,24 @@ async fn scroll(
                 .with_session(session.id.clone())
                 .with_device(serial.clone()));
             }
-            let result = ui
-                .scroll(&serial, &args.direction, selector.as_ref())
-                .await?;
-            let action = serde_json::to_value(&result)?;
+            let result = match &resolved {
+                Some(resolved) => {
+                    ui.scroll_expected(&serial, &args.direction, &resolved.expectation)
+                        .await?
+                }
+                None => {
+                    ui.scroll(&serial, &args.direction, selector.as_ref())
+                        .await?
+                }
+            };
+            let mut action = serde_json::to_value(&result)?;
+            if let Some(resolved) = &resolved {
+                add_reference_action_context(
+                    &mut action,
+                    &args.selector,
+                    serde_json::to_value(&resolved.node)?,
+                );
+            }
             let (value, suffix) = apply_postconditions(
                 ctx,
                 session,
@@ -1612,10 +1859,48 @@ fn reject_ref_for(command: &str, selector: &SelectorArgs) -> Result<()> {
             "--ref is not supported for {command}"
         ))
         .with_suggestion(
-            "Use `ui tap --ref ...` or `ui long-press --ref ...`; for other actions observe again and use a selector.",
+            "Use `ui tap`, `ui long-press`, `ui text`, `ui clear`, `ui scroll`, `ui wait` or `ui assert` with --ref.",
+        )
+        .with_suggestion(
+            "For other actions, observe again and use a semantic selector.",
         ));
     }
     Ok(())
+}
+
+fn reference_selector_value(
+    selector: &SelectorArgs,
+    compiled: Option<&Selector>,
+) -> Result<Option<serde_json::Value>> {
+    if selector.has_ref() {
+        return Ok(Some(serde_json::json!({
+            "ref": selector.reference,
+            "expect_token": selector.expect_token,
+        })));
+    }
+    Ok(compiled.map(serde_json::to_value).transpose()?)
+}
+
+fn add_reference_action_context(
+    action: &mut serde_json::Value,
+    selector: &SelectorArgs,
+    resolved_node: serde_json::Value,
+) {
+    if let Some(object) = action.as_object_mut() {
+        if let Some(reference) = &selector.reference {
+            object.insert(
+                "element_ref".to_string(),
+                serde_json::Value::String(reference.clone()),
+            );
+        }
+        if let Some(token) = &selector.expect_token {
+            object.insert(
+                "observation_token".to_string(),
+                serde_json::Value::String(token.clone()),
+            );
+        }
+        object.insert("resolved_node".to_string(), resolved_node);
+    }
 }
 
 fn error_was_not_dispatched(error: &ForgeError) -> bool {
@@ -2134,4 +2419,59 @@ fn dispatch_error_receipt(
         Some(error.message().to_string()),
         full,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selector(reference: Option<&str>, token: Option<&str>, text: Option<&str>) -> SelectorArgs {
+        SelectorArgs {
+            reference: reference.map(str::to_string),
+            expect_token: token.map(str::to_string),
+            text: text.map(str::to_string),
+            ..SelectorArgs::default()
+        }
+    }
+
+    #[test]
+    fn ref_requires_an_observation_token() {
+        let selector = selector(Some("el-abcdef"), None, None);
+        let error = validate_reference_args(&selector).unwrap_err();
+        assert!(error.message().contains("--expect-token"));
+    }
+
+    #[test]
+    fn ref_rejects_selector_filters() {
+        let selector = selector(Some("el-abcdef"), Some("obs-1"), Some("Save"));
+        let error = validate_reference_args(&selector).unwrap_err();
+        assert!(error.message().contains("cannot be combined"));
+    }
+
+    #[test]
+    fn expect_token_requires_a_ref() {
+        let selector = selector(None, Some("obs-1"), None);
+        let error = validate_reference_args(&selector).unwrap_err();
+        assert!(error.message().contains("only valid together"));
+    }
+
+    #[test]
+    fn reference_selector_value_is_explicit() {
+        let selector = selector(Some("el-abcdef"), Some("obs-1"), None);
+        let value = reference_selector_value(&selector, None)
+            .unwrap()
+            .expect("reference payload");
+        assert_eq!(value["ref"], "el-abcdef");
+        assert_eq!(value["expect_token"], "obs-1");
+    }
+
+    #[test]
+    fn reference_action_context_names_the_resolved_node() {
+        let selector = selector(Some("el-abcdef"), Some("obs-1"), None);
+        let mut action = serde_json::json!({"ok": true});
+        add_reference_action_context(&mut action, &selector, serde_json::json!({"path": "0/1"}));
+        assert_eq!(action["element_ref"], "el-abcdef");
+        assert_eq!(action["observation_token"], "obs-1");
+        assert_eq!(action["resolved_node"]["path"], "0/1");
+    }
 }

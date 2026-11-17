@@ -3,6 +3,7 @@
 //! Comparison is deliberately explicit about `same`, `different` and
 //! `unknown`. Version strings alone never prove byte equality.
 
+use std::path::Path;
 use std::time::Duration;
 
 use androidforge_adb::AdbClient;
@@ -11,6 +12,7 @@ use androidforge_core::util::{normalize_fingerprint, sha256_file};
 use serde::{Deserialize, Serialize};
 
 use crate::apk::{ApkInfo, ApkInspector};
+use crate::artifact::SplitApk;
 use crate::install::installed_package;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +44,14 @@ pub enum Equivalence {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledSplit {
+    pub remote_path: String,
+    pub name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledApkIdentity {
     pub package: String,
     /// Remote APK paths reported by `pm path`; the first entry is the base APK.
@@ -50,6 +60,8 @@ pub struct InstalledApkIdentity {
     pub base_remote_path: String,
     pub base_apk: ApkInfo,
     pub split_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub splits: Vec<InstalledSplit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +76,8 @@ pub struct InstalledApkIdentity {
 pub struct ApkDiff {
     pub schema_version: u32,
     pub candidate: ApkInfo,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_splits: Vec<SplitApk>,
     pub installed: InstalledApkIdentity,
     pub fields: Vec<FieldComparison>,
     pub overall: Equivalence,
@@ -116,12 +130,30 @@ pub async fn inspect_installed(
     base_apk.path = base_remote_path.clone();
     base_apk.sha256 = sha256;
 
+    let mut splits = Vec::new();
+    for (index, remote_path) in remote_paths.iter().skip(1).enumerate() {
+        let local = temp.path().join(format!("installed-split-{index:02}.apk"));
+        adb.pull(serial, remote_path, &local).await?;
+        let size_bytes = std::fs::metadata(&local)
+            .map(|metadata| metadata.len())
+            .unwrap_or_default();
+        splits.push(InstalledSplit {
+            remote_path: remote_path.clone(),
+            name: Path::new(remote_path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| format!("split-{index}.apk")),
+            size_bytes,
+            sha256: sha256_file(&local)?,
+        });
+    }
+
     let package_info = installed_package(adb, serial, package).await?;
     let mut warnings = Vec::new();
-    if remote_paths.len() > 1 {
+    if !splits.is_empty() {
         warnings.push(format!(
-            "The installed package uses {} split APK(s); split identities are listed but not hashed.",
-            remote_paths.len()
+            "The installed package uses {} split APK(s); split hashes are included when comparing a split set.",
+            splits.len()
         ));
     }
     Ok(Some(InstalledApkIdentity {
@@ -139,11 +171,16 @@ pub async fn inspect_installed(
             .or(base_apk.version_code),
         data_dir: package_info.as_ref().and_then(|info| info.data_dir.clone()),
         base_apk,
+        splits,
         warnings,
     }))
 }
 
-pub fn compare(candidate: &ApkInfo, installed: &InstalledApkIdentity) -> ApkDiff {
+pub fn compare(
+    candidate: &ApkInfo,
+    candidate_splits: &[SplitApk],
+    installed: &InstalledApkIdentity,
+) -> ApkDiff {
     let mut fields = vec![
         compare_field(
             "package",
@@ -201,30 +238,33 @@ pub fn compare(candidate: &ApkInfo, installed: &InstalledApkIdentity) -> ApkDiff
             installed.base_apk.launchable_activity.clone(),
         ),
     ];
-    let split_status = if installed.split_count == 0 {
-        FieldStatus::Same
-    } else {
-        FieldStatus::Unknown
-    };
+    let split_status = compare_split_sets(candidate_splits, &installed.splits);
     fields.push(FieldComparison {
         field: "split_apks".to_string(),
         status: split_status,
-        candidate: Some("0 splits".to_string()),
-        installed: Some(format!(
+        candidate: Some(format!(
             "{} split(s): {}",
-            installed.split_count,
-            installed
-                .remote_paths
+            candidate_splits.len(),
+            candidate_splits
                 .iter()
-                .skip(1)
-                .cloned()
+                .map(|split| split.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
-        note: (installed.split_count > 0).then(|| {
-            "Split APK bytes are not compared; a base-only match does not prove the split set is identical."
-                .to_string()
-        }),
+        installed: Some(format!(
+            "{} split(s): {}",
+            installed.splits.len(),
+            installed
+                .splits
+                .iter()
+                .map(|split| split.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        note: Some(
+            "Split sets are compared by their sorted SHA-256 hashes; names are not identities."
+                .to_string(),
+        ),
     });
 
     let any_different = fields
@@ -247,17 +287,17 @@ pub fn compare(candidate: &ApkInfo, installed: &InstalledApkIdentity) -> ApkDiff
         && field_is(&fields, "package", FieldStatus::Same)
         && field_is(&fields, "version_code", FieldStatus::Same)
         && field_is(&fields, "apk_sha256", FieldStatus::Same)
-        && installed.split_count == 0;
+        && field_is(&fields, "split_apks", FieldStatus::Same);
     let mut warnings = installed.warnings.clone();
-    if installed.split_count > 0 {
+    if split_status != FieldStatus::Same {
         warnings.push(
-            "Split APK bytes are not compared; the installed split set may differ even when the base APK matches."
+            "The candidate and installed split sets differ or cannot be proven identical; AndroidForge will not skip installation."
                 .to_string(),
         );
     }
-    if matches!(overall, Equivalence::Same) && installed.split_count > 0 {
+    if candidate_splits.is_empty() && !installed.splits.is_empty() {
         warnings.push(
-            "The base APK matches but split APK identity is unknown; AndroidForge will not skip installation."
+            "The installed package has splits but the candidate is a single APK; installing it may replace the split installation."
                 .to_string(),
         );
     }
@@ -298,12 +338,37 @@ pub fn compare(candidate: &ApkInfo, installed: &InstalledApkIdentity) -> ApkDiff
     ApkDiff {
         schema_version: APK_DIFF_SCHEMA_VERSION,
         candidate: candidate.clone(),
+        candidate_splits: candidate_splits.to_vec(),
         installed: installed.clone(),
         fields,
         overall,
         summary,
         safe_to_skip_install,
         warnings,
+    }
+}
+
+fn compare_split_sets(candidate: &[SplitApk], installed: &[InstalledSplit]) -> FieldStatus {
+    if candidate.is_empty() && installed.is_empty() {
+        return FieldStatus::Same;
+    }
+    if candidate.len() != installed.len() {
+        return FieldStatus::Different;
+    }
+    let mut candidate_hashes = candidate
+        .iter()
+        .map(|split| split.sha256.as_str())
+        .collect::<Vec<_>>();
+    let mut installed_hashes = installed
+        .iter()
+        .map(|split| split.sha256.as_str())
+        .collect::<Vec<_>>();
+    candidate_hashes.sort_unstable();
+    installed_hashes.sort_unstable();
+    if candidate_hashes == installed_hashes {
+        FieldStatus::Same
+    } else {
+        FieldStatus::Different
     }
 }
 
@@ -365,15 +430,25 @@ mod tests {
         }
     }
 
-    fn installed(candidate: &ApkInfo, splits: usize) -> InstalledApkIdentity {
+    fn installed(candidate: &ApkInfo, split_hashes: &[&str]) -> InstalledApkIdentity {
         InstalledApkIdentity {
             package: "com.example".to_string(),
             remote_paths: std::iter::once("/data/app/base.apk".to_string())
-                .chain((0..splits).map(|index| format!("/data/app/split-{index}.apk")))
+                .chain((0..split_hashes.len()).map(|index| format!("/data/app/split-{index}.apk")))
                 .collect(),
             base_remote_path: "/data/app/base.apk".to_string(),
             base_apk: candidate.clone(),
-            split_count: splits,
+            split_count: split_hashes.len(),
+            splits: split_hashes
+                .iter()
+                .enumerate()
+                .map(|(index, hash)| InstalledSplit {
+                    remote_path: format!("/data/app/split-{index}.apk"),
+                    name: format!("split-{index}.apk"),
+                    size_bytes: 10,
+                    sha256: (*hash).to_string(),
+                })
+                .collect(),
             version_name: candidate.version_name.clone(),
             version_code: candidate.version_code,
             data_dir: None,
@@ -381,10 +456,25 @@ mod tests {
         }
     }
 
+    fn candidate_splits(hashes: &[&str]) -> Vec<SplitApk> {
+        hashes
+            .iter()
+            .enumerate()
+            .map(|(index, hash)| SplitApk {
+                path: format!("C:/build/split-{index}.apk"),
+                name: format!("split-{index}.apk"),
+                size_bytes: 10,
+                sha256: (*hash).to_string(),
+                package: Some("com.example".to_string()),
+                version_code: Some(42),
+            })
+            .collect()
+    }
+
     #[test]
     fn identical_apks_are_safe_to_skip() {
         let candidate = apk(42, "abc", Some("AA:BB"));
-        let diff = compare(&candidate, &installed(&candidate, 0));
+        let diff = compare(&candidate, &[], &installed(&candidate, &[]));
         assert_eq!(diff.overall, Equivalence::Same);
         assert!(diff.safe_to_skip_install);
     }
@@ -394,24 +484,46 @@ mod tests {
         let candidate = apk(42, "abc", Some("AA:BB"));
         let mut installed_apk = candidate.clone();
         installed_apk.sha256 = "def".to_string();
-        let diff = compare(&candidate, &installed(&installed_apk, 0));
+        let diff = compare(&candidate, &[], &installed(&installed_apk, &[]));
         assert_eq!(diff.overall, Equivalence::Different);
         assert!(!diff.safe_to_skip_install);
     }
 
     #[test]
-    fn split_installations_are_unknown() {
+    fn split_installations_are_different_when_candidate_is_single() {
         let candidate = apk(42, "abc", Some("AA:BB"));
-        let diff = compare(&candidate, &installed(&candidate, 2));
-        assert_eq!(diff.overall, Equivalence::Unknown);
+        let diff = compare(&candidate, &[], &installed(&candidate, &["s1", "s2"]));
+        assert_eq!(diff.overall, Equivalence::Different);
         assert!(!diff.safe_to_skip_install);
         assert!(!diff.warnings.is_empty());
     }
 
     #[test]
+    fn matching_split_sets_are_safe_to_skip() {
+        let candidate = apk(42, "abc", Some("AA:BB"));
+        let splits = candidate_splits(&["s1", "s2"]);
+        let diff = compare(&candidate, &splits, &installed(&candidate, &["s2", "s1"]));
+        assert_eq!(diff.overall, Equivalence::Same);
+        assert!(diff.safe_to_skip_install);
+    }
+
+    #[test]
+    fn changed_split_hashes_are_different() {
+        let candidate = apk(42, "abc", Some("AA:BB"));
+        let splits = candidate_splits(&["s1", "s2"]);
+        let diff = compare(
+            &candidate,
+            &splits,
+            &installed(&candidate, &["s1", "changed"]),
+        );
+        assert_eq!(diff.overall, Equivalence::Different);
+        assert!(!diff.safe_to_skip_install);
+    }
+
+    #[test]
     fn missing_certificate_is_unknown_but_hash_can_still_prove_same() {
         let candidate = apk(42, "abc", None);
-        let diff = compare(&candidate, &installed(&candidate, 0));
+        let diff = compare(&candidate, &[], &installed(&candidate, &[]));
         assert_eq!(diff.overall, Equivalence::Same);
         assert!(diff.safe_to_skip_install);
         assert!(

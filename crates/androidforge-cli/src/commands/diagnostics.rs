@@ -7,14 +7,15 @@ use androidforge_core::retry::ReadOnlyOperation;
 use androidforge_core::run::{RunContext, clear_active_run, set_active_run};
 use androidforge_core::util::write_atomic;
 use androidforge_diagnostics::{
-    LogcatStream, Recorder, capture_frame, capture_screenshot, collect_diagnostics,
-    collect_logcat_peek, collect_logcat_tail, detect_crashes,
+    LogcatStream, PerformanceOptions, PerformanceReport, Recorder, capture_frame,
+    capture_screenshot, collect_diagnostics, collect_logcat_peek, collect_logcat_tail,
+    collect_performance, detect_crashes,
 };
 
 use crate::cli::{
     CaptureCommand, CaptureFrameArgs, CaptureScreenshotArgs, DiagnosticsCollectArgs,
-    DiagnosticsCommand, LogcatCommand, LogcatPeekArgs, LogcatStartArgs, LogcatTailArgs,
-    RecordCommand, RecordStartArgs,
+    DiagnosticsCommand, DiagnosticsPerformanceArgs, LogcatCommand, LogcatPeekArgs, LogcatStartArgs,
+    LogcatTailArgs, RecordCommand, RecordStartArgs,
 };
 use crate::commands::common::{self, success};
 use crate::context::CliContext;
@@ -292,6 +293,7 @@ pub async fn diagnostics(ctx: &CliContext, command: &DiagnosticsCommand) -> Resu
         DiagnosticsCommand::Logcat { command } => logcat(ctx, command).await,
         DiagnosticsCommand::Crashes { package } => crashes(ctx, package).await,
         DiagnosticsCommand::Inspect(args) => inspect(ctx, args).await,
+        DiagnosticsCommand::Performance(args) => performance(ctx, args).await,
     }
 }
 
@@ -353,6 +355,202 @@ async fn collect(ctx: &CliContext, args: &DiagnosticsCollectArgs) -> Result<Comm
     .await
 }
 
+async fn performance(
+    ctx: &CliContext,
+    args: &DiagnosticsPerformanceArgs,
+) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let package = ctx.package_or_config(args.package.as_deref())?;
+    let serial = device.serial.clone();
+    let settle = ctx.parse_timeout(args.settle.as_deref(), 2)?;
+    let timeout = ctx.parse_timeout(
+        args.timeout.as_deref(),
+        ctx.config.file.timeouts.app_launch_secs,
+    )?;
+    if ctx.dry_run {
+        return Ok(success(
+            "diagnostics.performance",
+            serde_json::json!({
+                "dry_run": true,
+                "serial": serial,
+                "package": package,
+                "activity": args.activity,
+                "cold": args.cold,
+                "settle_ms": settle.as_millis() as u64,
+                "would_collect": ["startup", "jank", "memory", "cpu"],
+                "note": if args.cold {
+                    "Would force-stop the application before measuring cold startup."
+                } else {
+                    "Would measure the currently running process without force-stopping it."
+                },
+            }),
+            format!(
+                "Would measure {} on {}{} and write performance/report.json\n",
+                package,
+                serial,
+                if args.cold {
+                    " after an explicit cold-start force-stop"
+                } else {
+                    ""
+                }
+            ),
+        )
+        .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+        .with_device(serial));
+    }
+    execute_in_run!(
+        ctx,
+        "diagnostics.performance",
+        Some("diagnostics performance"),
+        session.as_ref(),
+        Some(&device),
+        true,
+        |run| async {
+            let adb = ctx.adb()?;
+            let report = collect_performance(
+                &adb,
+                &serial,
+                &PerformanceOptions {
+                    package: &package,
+                    activity: args.activity.as_deref(),
+                    cold: args.cold,
+                    settle,
+                    timeout,
+                },
+            )
+            .await?;
+            let json = serde_json::to_string_pretty(&report)?;
+            let artifact = run.write_text_artifact(
+                "performance/report.json",
+                "performance_report",
+                Some("Startup, jank, memory and CPU evidence"),
+                &json,
+            )?;
+            let mut success = success(
+                "diagnostics.performance",
+                serde_json::to_value(&report)?,
+                performance_human(&report),
+            )
+            .with_artifacts(vec![artifact])
+            .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+            .with_device(serial.clone());
+            if !report.warnings.is_empty() {
+                success.exit_code = 10;
+            }
+            Ok(success)
+        },
+    )
+    .await
+}
+
+fn performance_human(report: &PerformanceReport) -> String {
+    let startup = match report.startup.total_time_ms {
+        Some(total) => format!(
+            "startup: {total}ms total{}{}",
+            if report.startup.cold {
+                " (cold)"
+            } else {
+                " (warm)"
+            },
+            report
+                .startup
+                .wait_time_ms
+                .map(|wait| format!(", {wait}ms wait"))
+                .unwrap_or_default()
+        ),
+        None => format!(
+            "startup: unknown ({})",
+            report
+                .startup
+                .unknown_reason
+                .as_deref()
+                .unwrap_or("no measurement")
+        ),
+    };
+    let jank = match (report.jank.total_frames, report.jank.janky_frames) {
+        (Some(total), Some(janky)) => format!(
+            "jank: {janky}/{total} frame(s){} with {} reset {}",
+            report
+                .jank
+                .janky_percent
+                .map(|percent| format!(" ({percent:.2}%)"))
+                .unwrap_or_default(),
+            if report.jank.reset_before_launch {
+                "counters"
+            } else {
+                "counters not"
+            },
+            if report.jank.reset_before_launch {
+                "before launch"
+            } else {
+                "(window unknown)"
+            }
+        ),
+        _ => format!(
+            "jank: unknown ({})",
+            report
+                .jank
+                .unknown_reason
+                .as_deref()
+                .unwrap_or("no frame statistics")
+        ),
+    };
+    let memory = match (report.memory.total_pss_kb, report.memory.total_rss_kb) {
+        (Some(pss), Some(rss)) => format!("memory: {pss} KiB PSS, {rss} KiB RSS"),
+        (Some(pss), None) => format!("memory: {pss} KiB PSS"),
+        (None, Some(rss)) => format!("memory: {rss} KiB RSS"),
+        (None, None) => format!(
+            "memory: unknown ({})",
+            report
+                .memory
+                .unknown_reason
+                .as_deref()
+                .unwrap_or("no memory statistics")
+        ),
+    };
+    let cpu = match report.cpu.total_percent {
+        Some(total) => format!(
+            "cpu: {total:.1}%{}{}",
+            report
+                .cpu
+                .process
+                .as_deref()
+                .map(|process| format!(" in {process}"))
+                .unwrap_or_default(),
+            report
+                .cpu
+                .user_percent
+                .zip(report.cpu.kernel_percent)
+                .map(|(user, kernel)| format!(" ({user:.1}% user + {kernel:.1}% kernel)"))
+                .unwrap_or_default()
+        ),
+        None => format!(
+            "cpu: unknown ({})",
+            report
+                .cpu
+                .unknown_reason
+                .as_deref()
+                .unwrap_or("no CPU statistics")
+        ),
+    };
+    let mut lines = vec![
+        format!("Performance for {} on {}", report.package, report.serial),
+        startup,
+        jank,
+        memory,
+        cpu,
+    ];
+    if let Some(foreground) = report.foreground
+        && !foreground
+    {
+        lines.push("warning: the measured package is not the current focus".to_string());
+    }
+    for warning in &report.warnings {
+        lines.push(format!("warning: {warning}"));
+    }
+    lines.join("\n") + "\n"
+}
 async fn logcat(ctx: &CliContext, command: &LogcatCommand) -> Result<CommandSuccess> {
     match command {
         LogcatCommand::Tail(args) => logcat_tail(ctx, args).await,

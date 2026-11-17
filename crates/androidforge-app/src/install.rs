@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use androidforge_adb::AdbClient;
@@ -8,6 +8,7 @@ use androidforge_core::util::{normalize_fingerprint, sha256_file};
 use serde::{Deserialize, Serialize};
 
 use crate::apk::{ApkInfo, ApkInspector};
+use crate::artifact::SplitApk;
 use crate::diff::{ApkDiff, Equivalence, compare, inspect_installed};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,8 +54,14 @@ pub struct InstallOptions {
     pub confirmed: bool,
     pub allow_downgrade: bool,
     pub verify_installed: bool,
+    /// APKs that belong to the same split set as `apk_path`.
+    pub split_apks: Vec<PathBuf>,
+    /// Single, split_directory or split_archive. Reporting only.
+    pub artifact_kind: Option<String>,
+    /// SHA-256 of the source `.apks` archive when one was used.
+    pub archive_sha256: Option<String>,
     /// Skip the install when the candidate is provably byte-equivalent to the
-    /// installed base APK and the split shape is known.
+    /// installed base APK and the split set is also identical.
     pub only_if_changed: bool,
     pub expected_package: Option<String>,
     /// Packages the adapter accepts for this install. Usually the release and
@@ -74,6 +81,9 @@ impl InstallOptions {
             confirmed: false,
             allow_downgrade: false,
             verify_installed: true,
+            split_apks: Vec::new(),
+            artifact_kind: None,
+            archive_sha256: None,
             only_if_changed: false,
             expected_package: None,
             allowed_packages: Vec::new(),
@@ -94,6 +104,14 @@ pub struct InstallResult {
     pub decision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub split_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub splits: Vec<SplitApk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<ApkDiff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,6 +146,53 @@ pub async fn install(
     }
     let apk = inspector.inspect(&options.apk_path, false).await?;
     let package = apk.package_or_error()?.to_string();
+    let mut candidate_splits = Vec::new();
+    for split_path in &options.split_apks {
+        if !split_path.is_file() {
+            return Err(ForgeError::new(
+                ErrorCode::FileNotFound,
+                format!("split APK {} was not found", split_path.display()),
+            )
+            .with_suggestion("Pass every split that belongs to the candidate base APK."));
+        }
+        let info = inspector.inspect(split_path, false).await?;
+        if info.package.as_deref() != Some(package.as_str()) {
+            return Err(ForgeError::new(
+                ErrorCode::ApkInvalid,
+                format!(
+                    "split APK {} declares package {:?}, but the base APK declares {package}",
+                    split_path.display(),
+                    info.package
+                ),
+            ));
+        }
+        if let (Some(base), Some(other)) = (apk.version_code, info.version_code)
+            && base != other
+        {
+            return Err(ForgeError::new(
+                ErrorCode::ApkInvalid,
+                format!(
+                    "split APK {} declares versionCode {other}, but the base APK declares {base}",
+                    split_path.display()
+                ),
+            )
+            .with_suggestion(
+                "Build the base APK and all splits in the same build before installing them together.",
+            ));
+        }
+        candidate_splits.push(SplitApk {
+            path: split_path.to_string_lossy().into_owned(),
+            name: split_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "split.apk".to_string()),
+            size_bytes: info.size_bytes,
+            sha256: info.sha256,
+            package: info.package,
+            version_code: info.version_code,
+        });
+    }
+    candidate_splits.sort_by(|left, right| left.name.cmp(&right.name));
     if let Some(expected) = &options.expected_package
         && expected != &package
     {
@@ -203,7 +268,7 @@ pub async fn install(
             Some(existing_package) => {
                 match inspect_installed(adb, inspector, serial, &package).await {
                     Ok(Some(identity)) => {
-                        let diff = compare(&apk, &identity);
+                        let diff = compare(&apk, &candidate_splits, &identity);
                         if diff.safe_to_skip_install {
                             let build = BuildIdentity {
                                 package: Some(package.clone()),
@@ -230,7 +295,7 @@ pub async fn install(
                                 notes: diff.warnings.clone(),
                             };
                             let mut warnings = vec![
-                                "Installation was skipped because the candidate APK is byte-equivalent to the installed base APK."
+                                "Installation was skipped because the candidate base APK and split set are byte-equivalent to the installed application."
                                     .to_string(),
                             ];
                             warnings.extend(diff.warnings.clone());
@@ -239,9 +304,13 @@ pub async fn install(
                                 build,
                                 installed: existing_package.clone(),
                                 skipped: true,
+                                split_count: candidate_splits.len(),
+                                splits: candidate_splits.clone(),
+                                artifact_kind: options.artifact_kind.clone(),
+                                archive_sha256: options.archive_sha256.clone(),
                                 decision: Some("skipped".to_string()),
                                 reason: Some(
-                                    "candidate package, version and base APK SHA-256 match the installed application"
+                                    "candidate package, version, base APK SHA-256 and split set match the installed application"
                                         .to_string(),
                                 ),
                                 diff: Some(diff),
@@ -295,18 +364,19 @@ pub async fn install(
         }
     }
 
-    let mut args = vec!["install".to_string(), "-r".to_string()];
-    if options.allow_downgrade {
-        args.push("-d".to_string());
-    }
-    args.push(options.apk_path.to_string_lossy().into_owned());
+    let split_install = !candidate_splits.is_empty();
+    let args = split_install_args(
+        &options.apk_path,
+        &candidate_splits,
+        options.allow_downgrade,
+    );
     let output = adb
         .run_raw(Some(serial), &args, Some(options.timeout), None)
         .await?;
     let combined = output.combined_text();
     let succeeded = output.success && combined.contains("Success");
     if !succeeded {
-        return Err(install_failure(
+        let error = install_failure(
             adb,
             inspector,
             serial,
@@ -315,7 +385,15 @@ pub async fn install(
             existing,
             combined.trim().to_string(),
         )
-        .await);
+        .await;
+        return Err(error.with_context_string(
+            "install_mode",
+            if split_install {
+                "install-multiple"
+            } else {
+                "install"
+            },
+        ));
     }
 
     let Some(installed) = installed_package(adb, serial, &package).await? else {
@@ -406,6 +484,12 @@ pub async fn install(
         );
     }
 
+    if split_install {
+        warnings.push(format!(
+            "Installed with {} split APK(s) via adb install-multiple.",
+            candidate_splits.len()
+        ));
+    }
     let build = BuildIdentity {
         package: Some(package.clone()),
         version_name: installed
@@ -422,18 +506,46 @@ pub async fn install(
         verified: installed_cert_error.is_none(),
         notes: warnings.clone(),
     };
-
     Ok(InstallResult {
         apk,
         build,
         installed,
         skipped: false,
+        split_count: candidate_splits.len(),
+        splits: candidate_splits,
+        artifact_kind: options.artifact_kind.clone(),
+        archive_sha256: options.archive_sha256.clone(),
         decision: options.only_if_changed.then(|| "installed".to_string()),
         reason: only_if_changed_reason,
         diff: only_if_changed_diff,
         signature_diagnosis: None,
         warnings,
     })
+}
+
+/// Build the exact `adb install`/`adb install-multiple` argv. The base APK is
+/// always first, followed by every split in stable name order.
+pub fn split_install_args(
+    base_path: &Path,
+    splits: &[SplitApk],
+    allow_downgrade: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        if splits.is_empty() {
+            "install".to_string()
+        } else {
+            "install-multiple".to_string()
+        },
+        "-r".to_string(),
+    ];
+    if allow_downgrade {
+        args.push("-d".to_string());
+    }
+    args.push(base_path.to_string_lossy().into_owned());
+    for split in splits {
+        args.push(split.path.clone());
+    }
+    args
 }
 
 async fn install_failure(
@@ -735,5 +847,39 @@ mod tests {
     #[test]
     fn normalizes_certificates_from_apksigner() {
         assert!(normalize_fingerprint("61:ED:37:7E").is_none());
+    }
+
+    fn split(name: &str) -> SplitApk {
+        SplitApk {
+            path: format!("C:/build/{name}"),
+            name: name.to_string(),
+            size_bytes: 10,
+            sha256: format!("hash-{name}"),
+            package: Some("com.example".to_string()),
+            version_code: Some(42),
+        }
+    }
+
+    #[test]
+    fn single_apk_uses_plain_install() {
+        let args = split_install_args(Path::new("C:/build/app.apk"), &[], false);
+        assert_eq!(args, vec!["install", "-r", "C:/build/app.apk"]);
+    }
+
+    #[test]
+    fn split_set_uses_install_multiple_with_base_first() {
+        let splits = [split("base-arm64.apk"), split("base-mdpi.apk")];
+        let args = split_install_args(Path::new("C:/build/base.apk"), &splits, true);
+        assert_eq!(
+            args,
+            vec![
+                "install-multiple",
+                "-r",
+                "-d",
+                "C:/build/base.apk",
+                "C:/build/base-arm64.apk",
+                "C:/build/base-mdpi.apk",
+            ]
+        );
     }
 }

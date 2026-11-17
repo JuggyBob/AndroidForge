@@ -8,6 +8,7 @@ mod health;
 mod jobs;
 mod logcat;
 mod notifications;
+mod performance;
 
 pub use alarms::{AlarmInfo, Alarms, NextAlarms};
 pub use capture::{
@@ -28,3 +29,8 @@ pub use logcat::{
     LogcatStopResult, LogcatStream, collect_logcat_peek, collect_logcat_tail, detect_crashes,
 };
 pub use notifications::{NotificationInfo, NotificationList, NotificationSelector, Notifications};
+pub use performance::{
+    CpuMeasurement, JankMeasurement, MemoryMeasurement, PERFORMANCE_SCHEMA_VERSION,
+    PerformanceCommand, PerformanceOptions, PerformanceReport, StartupMeasurement,
+    collect_performance, parse_am_start, parse_cpuinfo, parse_gfxinfo, parse_meminfo,
+};

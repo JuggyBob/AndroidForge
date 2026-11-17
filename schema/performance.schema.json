@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/performance.schema.json",
+  "title": "AndroidForge performance evidence",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "package",
+    "serial",
+    "collected_at",
+    "cold_start_requested",
+    "settle_ms",
+    "startup",
+    "jank",
+    "memory",
+    "cpu",
+    "commands"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "package": { "type": "string" },
+    "serial": { "type": "string" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "cold_start_requested": { "type": "boolean" },
+    "settle_ms": { "type": "integer", "minimum": 0 },
+    "foreground": { "type": ["boolean", "null"] },
+    "activity": { "type": ["string", "null"] },
+    "startup": { "$ref": "#/$defs/startup" },
+    "jank": { "$ref": "#/$defs/jank" },
+    "memory": { "$ref": "#/$defs/memory" },
+    "cpu": { "$ref": "#/$defs/cpu" },
+    "commands": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "startup": {
+      "type": "object",
+      "required": ["requested", "cold"],
+      "properties": {
+        "requested": { "type": "boolean" },
+        "cold": { "type": "boolean" },
+        "status": { "type": ["string", "null"] },
+        "activity": { "type": ["string", "null"] },
+        "total_time_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "wait_time_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "this_time_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "raw_output": { "type": ["string", "null"] },
+        "unknown_reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "jank": {
+      "type": "object",
+      "required": ["reset_before_launch"],
+      "properties": {
+        "reset_before_launch": { "type": "boolean" },
+        "total_frames": { "type": ["integer", "null"], "minimum": 0 },
+        "janky_frames": { "type": ["integer", "null"], "minimum": 0 },
+        "janky_percent": { "type": ["number", "null"] },
+        "percentile_50_ms": { "type": ["number", "null"] },
+        "percentile_90_ms": { "type": ["number", "null"] },
+        "percentile_95_ms": { "type": ["number", "null"] },
+        "percentile_99_ms": { "type": ["number", "null"] },
+        "missed_vsync": { "type": ["integer", "null"], "minimum": 0 },
+        "unknown_reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "pid": { "type": ["integer", "null"], "minimum": 1 },
+        "total_pss_kb": { "type": ["integer", "null"], "minimum": 0 },
+        "total_rss_kb": { "type": ["integer", "null"], "minimum": 0 },
+        "java_heap_pss_kb": { "type": ["integer", "null"], "minimum": 0 },
+        "native_heap_pss_kb": { "type": ["integer", "null"], "minimum": 0 },
+        "unknown_reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "cpu": {
+      "type": "object",
+      "properties": {
+        "process": { "type": ["string", "null"] },
+        "total_percent": { "type": ["number", "null"] },
+        "user_percent": { "type": ["number", "null"] },
+        "kernel_percent": { "type": ["number", "null"] },
+        "unknown_reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "command": {
+      "type": "object",
+      "required": ["name", "command", "status"],
+      "properties": {
+        "name": { "type": "string" },
+        "command": { "type": "string" },
+        "status": { "type": "string" },
+        "excerpt": { "type": ["string", "null"] },
+        "reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}
+

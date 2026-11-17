@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.7.1`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.8.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -66,11 +66,11 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Devices | ADB discovery, `devices list/inspect/wait/health`, wireless pair/connect/disconnect, preparation and restore |
 | Emulators | AVD listing, safe port allocation, headless start, boot wait, status, stop, snapshots |
 | Sessions | Claim/attach/release/stop/restart, owner guards, heartbeats, stale-session GC |
-| APKs | `aapt2`/`apksigner` inspection, signature and package checks, install identity verification |
+| APKs | `aapt2`/`apksigner` inspection, signature and package checks, split APK/`.apks` identity and install verification |
 | Apps | Launch, status, force-stop, uninstall, clear data, file push/pull for debuggable builds |
-| UI | Hierarchy dump/find/assert/tap/text/clear/back/scroll/settle/wait, semantic selectors, stable element refs |
+| UI | Hierarchy dump/find/assert/tap/text/clear/back/scroll/settle/wait, semantic selectors, stable refs on actions and waits |
 | Evidence | Screenshots, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
-| Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time |
+| Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time, startup/jank/memory/CPU evidence |
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
 | Agent context | `context`, compact observation tokens, `ui diff`, stable refs, action receipts, postconditions and exact next-action argv |
 | Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints, recurrence memory, `report explain/history/recurrences` and diagnostic bundles |
@@ -79,6 +79,15 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
+
+## What is new in v0.8.0
+
+- **Split artifacts:** `app install` accepts a single APK, an explicit `--split` set, a split directory or an `.apks` archive. Split sets use `adb install-multiple`; archives are extracted exactly as provided without bundletool or automatic device targeting. Package and version identity are checked before any install; standalone/universal entries are never mixed into a split set.
+- **Split-aware identity:** `apk diff` compares sorted split SHA-256 values, `--only-if-changed` skips only when the base APK and the complete split set match, and unknown split identity never skips. `apk inspect`/`apk resolve` report artifact kind, split count, split hashes and archive SHA-256. `agent test --variant` compares installed split hashes before claiming the build is current.
+- **Refs for more actions:** `ui text`, `ui clear`, `ui scroll`, `ui wait` and `ui assert` accept `--ref` plus `--expect-token`. Text/clear require an editable field, scroll requires a scrollable node, and wait/assert may reference context text. Identity is re-checked before dispatch; stale or changed refs fail closed with no text or coordinate fallback.
+- **Performance evidence:** `diagnostics performance` measures startup (`am start -W`), frame jank (`gfxinfo`), memory (`meminfo`) and CPU (`cpuinfo`, with `/proc/<pid>/stat` sampling when needed). Cold startup requires the explicit `--cold` flag, every unavailable metric carries an unknown reason, and a `performance/report.json` artifact is written.
+- **Desktop:** the Inspector now has a performance panel with an explicit cold-start option and startup/jank/memory/CPU summaries.
+- **Version:** workspace, CLI, desktop, installer and compatibility version are `0.8.0`.
 
 ## What is new in v0.7.1
 
@@ -160,7 +169,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.7.1` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.8.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -208,7 +217,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.7.0)
+### Agent loop quick start (v0.8.0)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -235,11 +244,18 @@ androidforge report bundle latest --output .\\evidence.zip --json
 # Use a stable element reference, then run a sequential device matrix.
 androidforge ui observe --session ses-... --json
 androidforge ui tap --session ses-... --ref el-... --expect-token obs-... --json
+androidforge ui text "hello" --session ses-... --ref el-... --expect-token obs-... --json
+androidforge ui wait --session ses-... --ref el-... --expect-token obs-... --timeout 5s --json
 androidforge agent matrix --avd Pixel_8_API_35 --avd Pixel_8_API_36 --flow conformance --json
 
 # Resolve an existing APK without running Gradle, then install only if it changed.
 androidforge apk resolve --variant debug --json
 androidforge app install build\\app-debug.apk --only-if-changed --json
+androidforge app install build\\outputs\\bundle.apks --only-if-changed --session ses-... --json
+androidforge app install build\\base.apk --split build\\config.arm64_v8a.apk --session ses-... --json
+
+# Measure explicit cold-start, jank, memory and CPU evidence.
+androidforge diagnostics performance com.example.app --cold --settle 2s --session ses-... --json
 
 # Plan repairs without changing the environment.
 androidforge doctor fix --plan --json
@@ -354,10 +370,10 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.7.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD matrix. v0.7.0 adds sequential device matrices, stable element refs,
-wireless ADB/health and bounded read-only retries on top of v0.6.0 agent memory. See
-[VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.8.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
+emulators, including a two-AVD matrix. v0.8.0 adds split/`.apks` install identity, refs for text,
+clear, scroll, wait and assert, and explicit startup/jank/memory/CPU evidence on top of v0.7.x
+matrix and device control. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -384,6 +400,11 @@ Validated:
 - v0.7.0 real-emulator validation: two independent AVDs (API 36 and 34), aggregate pass/partial,
   duplicate and occupancy rejection, stable-ref success/stale/wrong-token, device health, device
   disconnect/recovery, read-only retry reporting and desktop Matrix/health workflows.
+- v0.8.0 real-emulator validation: split `install-multiple`, `.apks` extraction/install,
+  split hash diff and `--only-if-changed` skip/install, explicit package/version mismatch rejection,
+  ref-based text/clear/scroll/wait and stale-ref refusal, and startup/jank/memory/CPU measurement
+  with an explicit cold start. The desktop performance panel was compiled and exercised against
+  the same CLI.
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
@@ -442,3 +463,6 @@ Bug reports, focused pull requests and real-app reproductions are welcome. Read
 MIT. See [LICENSE](LICENSE).
 
 Copyright (c) 2026 JuggyBob.
+
+
+

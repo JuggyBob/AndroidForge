@@ -625,6 +625,10 @@ pub struct InspectorState {
     pub last_action: Option<String>,
     pub typed_text: String,
     pub highlight_pulse: f32,
+    pub performance: Option<crate::models::PerformanceReport>,
+    pub performance_loading: bool,
+    pub performance_error: Option<String>,
+    pub performance_cold: bool,
 }
 
 impl Default for InspectorState {
@@ -652,6 +656,10 @@ impl Default for InspectorState {
             last_action: None,
             typed_text: String::new(),
             highlight_pulse: 0.0,
+            performance: None,
+            performance_loading: false,
+            performance_error: None,
+            performance_cold: false,
         }
     }
 }
@@ -846,6 +854,7 @@ pub enum AppEvent {
     Logcat(std::result::Result<LogcatPeek, String>),
     Frame(std::result::Result<FrameResult, String>),
     Hierarchy(std::result::Result<UiInspectResult, String>),
+    Performance(std::result::Result<crate::models::PerformanceReport, String>),
     CliUpdateStaged(std::result::Result<PathBuf, String>),
     CliUpdateInstalled(std::result::Result<String, String>),
     SetupTest(std::result::Result<String, String>),

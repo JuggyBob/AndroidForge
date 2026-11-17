@@ -96,6 +96,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(8.0);
+    performance(app, ui);
+    ui.add_space(8.0);
     ui.columns(2, |columns| {
         preview(app, &mut columns[0]);
         hierarchy(app, &mut columns[1]);
@@ -561,4 +563,111 @@ fn node_label(node: &UiNode) -> String {
         text,
         if node.scrollable { "  ↕" } else { "" }
     )
+}
+
+fn performance(app: &mut App, ui: &mut egui::Ui) {
+    section_label(ui, "Performance evidence");
+    card(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let can_measure =
+                app.inspector.session_id.is_some() && !app.inspector.performance_loading;
+            if action_button(
+                ui,
+                "Measure",
+                can_measure,
+                "Run diagnostics performance for this session",
+            )
+            .clicked()
+            {
+                app.inspector_measure_performance(ui.ctx());
+            }
+            ui.checkbox(
+                &mut app.inspector.performance_cold,
+                "Cold start (force-stop)",
+            );
+            if app.inspector.performance_loading {
+                ui.spinner();
+                small(ui, "measuring startup, jank, memory and CPU");
+            }
+        });
+        if let Some(error) = &app.inspector.performance_error {
+            error_banner(ui, error);
+        }
+        let Some(report) = &app.inspector.performance else {
+            small(
+                ui,
+                "No measurement yet. A cold measurement force-stops the app but preserves its data.",
+            );
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            let startup = match report.startup.total_time_ms {
+                Some(total) => format!(
+                    "startup {} ms{}",
+                    total,
+                    if report.startup.cold {
+                        " cold"
+                    } else {
+                        " warm"
+                    }
+                ),
+                None => format!(
+                    "startup unknown: {}",
+                    report
+                        .startup
+                        .unknown_reason
+                        .as_deref()
+                        .unwrap_or("no timing")
+                ),
+            };
+            let jank = match (report.jank.total_frames, report.jank.janky_frames) {
+                (Some(total), Some(janky)) => format!("jank {janky}/{total} frames"),
+                _ => format!(
+                    "jank unknown: {}",
+                    report.jank.unknown_reason.as_deref().unwrap_or("no frames")
+                ),
+            };
+            let memory = match report.memory.total_pss_kb {
+                Some(pss) => format!("PSS {pss} KiB"),
+                None => format!(
+                    "memory unknown: {}",
+                    report
+                        .memory
+                        .unknown_reason
+                        .as_deref()
+                        .unwrap_or("no memory data")
+                ),
+            };
+            let cpu = match report.cpu.total_percent {
+                Some(total) => format!("CPU {total:.1}%"),
+                None => format!(
+                    "CPU unknown: {}",
+                    report
+                        .cpu
+                        .unknown_reason
+                        .as_deref()
+                        .unwrap_or("no CPU data")
+                ),
+            };
+            for metric in [startup, jank, memory, cpu] {
+                egui::Frame::new()
+                    .fill(theme::surface_fill(ui))
+                    .stroke(Stroke::new(1.0, theme::border_color(ui)))
+                    .corner_radius(4.0)
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(metric).size(10.0));
+                    });
+            }
+        });
+        if report.cold_start_requested {
+            small(
+                ui,
+                "Cold measurement requested: the app was force-stopped before launch.",
+            );
+        }
+        for warning in &report.warnings {
+            ui.label(RichText::new(warning).size(10.0).color(theme::YELLOW));
+        }
+    });
 }

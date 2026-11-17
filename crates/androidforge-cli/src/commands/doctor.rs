@@ -1156,10 +1156,20 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         "Local signature verification; no keystore or signing automation.",
     );
     add(
+        "apk.splits",
+        if has_adb && has_aapt2 {
+            "supported"
+        } else {
+            "unsupported"
+        },
+        &["aapt2", "adb"],
+        "Single APKs, explicit split sets, split directories and .apks; no bundletool or device targeting.",
+    );
+    add(
         "app.install",
         if has_adb { "supported" } else { "unsupported" },
         &["adb"],
-        "Signature-aware install diagnostics; never uninstalls automatically.",
+        "Signature-aware install diagnostics; split sets use install-multiple; never uninstalls automatically.",
     );
     add(
         "ui.uiautomator",
@@ -1178,6 +1188,12 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         if has_adb { "supported" } else { "unsupported" },
         &["adb", "uiautomator"],
         "One action plus observation polling; no hidden action retries.",
+    );
+    add(
+        "ui.element_refs",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb", "uiautomator"],
+        "Stable refs for tap, long-press, text, clear, scroll, wait and assert; no text/coordinate fallback.",
     );
     add(
         "diagnosis.explain",
@@ -1218,6 +1234,16 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         if has_adb { "supported" } else { "unsupported" },
         &["adb"],
         "Never clears the global buffer by default.",
+    );
+    add(
+        "diagnostics.performance",
+        if has_adb {
+            "best-effort"
+        } else {
+            "unsupported"
+        },
+        &["adb", "dumpsys gfxinfo/meminfo/cpuinfo", "/proc"],
+        "Explicit startup, jank, memory and CPU evidence; cold start requires --cold; unknown values carry reasons.",
     );
     add(
         "diagnostics.jobs",

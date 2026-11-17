@@ -536,15 +536,54 @@ pub struct ResolvedElementReference {
     pub expectation: androidforge_ui::NodeExpectation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceUse {
+    Tap,
+    LongPress,
+    Text,
+    Clear,
+    Scroll,
+    Wait,
+    Assert,
+}
+
+impl ReferenceUse {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tap => "tap",
+            Self::LongPress => "long_press",
+            Self::Text => "text",
+            Self::Clear => "clear",
+            Self::Scroll => "scroll",
+            Self::Wait => "wait",
+            Self::Assert => "assert",
+        }
+    }
+
+    fn requires_actionable(self) -> bool {
+        !matches!(self, Self::Wait | Self::Assert)
+    }
+
+    fn requires_editable(self) -> bool {
+        matches!(self, Self::Text | Self::Clear)
+    }
+
+    fn requires_scrollable(self) -> bool {
+        matches!(self, Self::Scroll)
+    }
+}
+
 /// Validate a stable element reference against its observation and the current
 /// session/device. This does not read the hierarchy; the UI manager performs a
 /// final identity check immediately before dispatch.
+#[allow(clippy::too_many_arguments)]
 pub async fn resolve_element_reference(
     ctx: &CliContext,
     session: &Session,
     device: &Device,
     reference: &str,
     token: &str,
+    usage: ReferenceUse,
 ) -> Result<ResolvedElementReference> {
     if !reference.starts_with("el-") {
         return Err(ForgeError::new(
@@ -571,21 +610,6 @@ pub async fn resolve_element_reference(
         .device(device.serial.clone()));
     }
     let Some(node) = find_reference(&observation, reference) else {
-        let exists = observation
-            .context
-            .iter()
-            .chain(observation.actionable.iter())
-            .any(|node| node.reference.as_deref() == Some(reference));
-        if exists {
-            return Err(ForgeError::new(
-                ErrorCode::ElementNotActionable,
-                "the referenced element is context text, not an actionable element",
-            )
-            .with_context_string("ref", reference)
-            .with_suggestion("Choose a ref from the observation's `actionable` list.")
-            .session(session.id.clone())
-            .device(device.serial.clone()));
-        }
         return Err(ForgeError::new(
             ErrorCode::ElementRefUnknown,
             format!("element reference '{reference}' is not part of observation {token}"),
@@ -599,18 +623,49 @@ pub async fn resolve_element_reference(
         .session(session.id.clone())
         .device(device.serial.clone()));
     };
-    if !observation
-        .actionable
-        .iter()
-        .chain(observation.scrollable.iter())
-        .any(|candidate| candidate.reference.as_deref() == Some(reference))
+    if usage.requires_actionable()
+        && !observation
+            .actionable
+            .iter()
+            .chain(observation.scrollable.iter())
+            .any(|candidate| candidate.reference.as_deref() == Some(reference))
     {
+        let context_only = observation
+            .context
+            .iter()
+            .any(|candidate| candidate.reference.as_deref() == Some(reference));
+        let message = if context_only {
+            "the referenced element is context text, not an actionable element"
+        } else {
+            "the referenced element is not in the observation's actionable set"
+        };
+        return Err(ForgeError::new(ErrorCode::ElementNotActionable, message)
+            .with_context_string("ref", reference)
+            .with_context_string("use", usage.as_str())
+            .with_suggestion("Choose a ref from the observation's `actionable` list.")
+            .with_suggestion("`ui wait` and `ui assert` may reference context text.")
+            .session(session.id.clone())
+            .device(device.serial.clone()));
+    }
+    if usage.requires_editable() && !node.editable {
         return Err(ForgeError::new(
             ErrorCode::ElementNotActionable,
-            "the referenced element is not in the observation's actionable set",
+            "the referenced element is not an editable text field",
         )
         .with_context_string("ref", reference)
-        .with_suggestion("Choose a ref from the observation's `actionable` list.")
+        .with_context_string("use", usage.as_str())
+        .with_suggestion("Choose an EditText/TextField ref from `ui observe --json`.")
+        .session(session.id.clone())
+        .device(device.serial.clone()));
+    }
+    if usage.requires_scrollable() && !node.scrollable {
+        return Err(ForgeError::new(
+            ErrorCode::ElementNotActionable,
+            "the referenced element is not scrollable",
+        )
+        .with_context_string("ref", reference)
+        .with_context_string("use", usage.as_str())
+        .with_suggestion("Choose a scrollable container ref from `ui observe --json`.")
         .session(session.id.clone())
         .device(device.serial.clone()));
     }
@@ -639,7 +694,7 @@ pub async fn resolve_element_reference(
         password: node.password,
         actionable_hint: true,
     };
-    if !node.enabled {
+    if usage.requires_actionable() && !node.enabled {
         return Err(ForgeError::new(
             ErrorCode::ElementNotActionable,
             "the referenced element was disabled when it was observed",

@@ -69,6 +69,14 @@ The new schemas cover:
   confirmation/network/permission flags. `mutations_performed` must stay empty.
 - `agent-test.schema.json` - stage list with status/duration/equivalent argv, installed-build match,
   final status (`success`, `failed`, `dry_run` or `blocked`), failure context, artifacts and report path.
+  The inspect stage includes `artifact_kind`, `split_count`, `archive_sha256` and split hashes;
+  `compare_build` proves installed split identity before skipping an install.
+- `apk-resolution.schema.json` / `apk-diff.schema.json` - artifact `single`/`split_directory`/`split_archive`
+  kind, split count/hashes, `.apks` archive SHA-256 and sorted-hash split-set equivalence.
+- `performance.schema.json` - explicit cold-start flag, startup `TotalTime`/`WaitTime`/`ThisTime`, gfxinfo
+  frame/jank percentiles, meminfo PSS/RSS/heaps, CPU percentages, command/evidence excerpts and
+  `unknown_reason` for every unavailable metric. Values are measured or explicitly unknown; nothing is
+  inferred from a version string or a missing field.
 
 Fingerprints are `sha256:` values over a versioned normalized material string. They intentionally ignore
 run ids, timestamps, temporary paths, memory addresses and dynamic numeric ids. See
@@ -269,3 +277,4 @@ sessions, largest runs and the terminal-session list. `maintenance clean` defaul
 requires `--yes` for deletion; `--sessions`, `--runs`, `--older-than` and `--keep-last` select the
 eligible set. Active sessions and running runs are always excluded. The result lists every pruned
 session and deleted run. Both payloads are described by `schema/maintenance.schema.json`.
+

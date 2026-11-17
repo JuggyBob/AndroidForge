@@ -443,17 +443,91 @@ impl UiManager {
             self.tap(serial, selector).await?;
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
+        self.text_impl(serial, text, clear, hide_keyboard, selector.is_some(), None)
+            .await
+    }
 
+    /// Enter text into the node identified by a previous observation. The tap
+    /// is dispatched only after identity validation, and the focused field's
+    /// path and core identity must still match before any text is sent.
+    pub async fn text_expected(
+        &self,
+        serial: &str,
+        expected: &crate::reference::NodeExpectation,
+        text: &str,
+        clear: bool,
+        hide_keyboard: bool,
+    ) -> Result<TextResult> {
+        let hierarchy = self.dump(serial).await?;
+        let node = expected.find(&hierarchy)?;
+        if !node.editable_like() {
+            return Err(ForgeError::new(
+                ErrorCode::ElementNotActionable,
+                "the referenced element is not an editable text field",
+            )
+            .with_context_string("path", expected.path.clone())
+            .with_suggestion("Choose an EditText/TextField ref from `ui observe --json`.")
+            .device(serial.to_string()));
+        }
+        let selection = Selection {
+            selected: node.id,
+            indices: vec![node.id],
+            hierarchy,
+        };
+        self.tap_selection(serial, selection).await?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        self.text_impl(serial, text, clear, hide_keyboard, true, Some(expected))
+            .await
+    }
+
+    /// Clear the field identified by a previous observation. Identity and
+    /// editability are validated before the field is tapped.
+    pub async fn clear_expected(
+        &self,
+        serial: &str,
+        expected: &crate::reference::NodeExpectation,
+    ) -> Result<TextResult> {
+        self.text_expected(serial, expected, "", true, false).await
+    }
+
+    async fn text_impl(
+        &self,
+        serial: &str,
+        text: &str,
+        clear: bool,
+        hide_keyboard: bool,
+        targeted: bool,
+        expected: Option<&crate::reference::NodeExpectation>,
+    ) -> Result<TextResult> {
         let mut notes = Vec::new();
-        let (hierarchy, focused_id, keyboard_visible) = self
-            .wait_for_focused_field(serial, selector.is_some())
-            .await?;
+        let (hierarchy, focused_id, keyboard_visible) =
+            self.wait_for_focused_field(serial, targeted).await?;
         let focused_node = hierarchy.nodes.get(focused_id).cloned().ok_or_else(|| {
             ForgeError::new(
                 ErrorCode::TextVerificationFailed,
                 "focused field disappeared",
             )
         })?;
+        if let Some(expected) = expected
+            && (focused_node.path != expected.path || !expected.matches_core(&focused_node))
+        {
+            return Err(ForgeError::new(
+                ErrorCode::ElementIdentityChanged,
+                "text input would go to a different field than the referenced element",
+            )
+            .with_context_string("expected_path", expected.path.clone())
+            .with_context_string("focused_path", focused_node.path.clone())
+            .with_context(
+                "focused_node",
+                serde_json::to_value(UiMatch::from_node(&hierarchy, 0, &focused_node))
+                    .unwrap_or(Value::Null),
+            )
+            .with_suggestion(
+                "The referenced field did not take focus. Observe again and choose a new ref.",
+            )
+            .with_suggestion("AndroidForge will not send text to an unverified field.")
+            .device(serial.to_string()));
+        }
         let mut before_text = focused_node.text.clone();
         if focused_node.text_is_hint() {
             if !before_text.as_deref().unwrap_or("").is_empty() {
@@ -667,6 +741,111 @@ impl UiManager {
         self.wait(serial, selector, timeout, absent).await
     }
 
+    /// Wait for the node identified by a previous observation. Identity is
+    /// re-checked on every poll; a changed node never proves absence.
+    pub async fn wait_expected(
+        &self,
+        serial: &str,
+        expected: &crate::reference::NodeExpectation,
+        timeout: Duration,
+        absent: bool,
+    ) -> Result<WaitResult> {
+        let started = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_package = None;
+        let mut last_identity_changed = false;
+        let mut last_element = None;
+        while started.elapsed() <= timeout || attempts == 0 {
+            attempts += 1;
+            let hierarchy = self.dump(serial).await?;
+            last_package = hierarchy.package_name.clone();
+            let at_path = hierarchy
+                .nodes
+                .iter()
+                .find(|node| node.path == expected.path);
+            if absent && at_path.is_none() {
+                return Ok(WaitResult {
+                    present: false,
+                    matched: true,
+                    attempts,
+                    duration_ms: elapsed_ms(started),
+                    matched_element: None,
+                    hierarchy_package: hierarchy.package_name,
+                });
+            }
+            if let Some(node) = at_path {
+                if !absent && expected.matches_identity(node) {
+                    return Ok(WaitResult {
+                        present: true,
+                        matched: true,
+                        attempts,
+                        duration_ms: elapsed_ms(started),
+                        matched_element: Some(UiMatch::from_node(&hierarchy, 0, node)),
+                        hierarchy_package: hierarchy.package_name,
+                    });
+                }
+                last_identity_changed = !expected.matches_identity(node);
+                last_element = Some(UiMatch::from_node(&hierarchy, 0, node));
+            }
+            if started.elapsed() >= timeout {
+                break;
+            }
+            tokio::time::sleep(self.poll_interval).await;
+        }
+        let mut error = if last_identity_changed {
+            ForgeError::new(
+                ErrorCode::ElementIdentityChanged,
+                "the element at the referenced path changed identity while waiting",
+            )
+            .with_context(
+                "observed",
+                serde_json::to_value(expected).unwrap_or(Value::Null),
+            )
+            .with_context(
+                "current",
+                serde_json::to_value(last_element.clone()).unwrap_or(Value::Null),
+            )
+            .with_suggestion(
+                "Run `androidforge ui observe --session <ID> --json` and choose a new ref.",
+            )
+            .with_suggestion("AndroidForge never treats a changed node as the observed node.")
+        } else if absent {
+            ForgeError::new(
+                ErrorCode::UiAssertionFailed,
+                "the referenced element still exists after waiting for its absence",
+            )
+            .with_context("ref_path", expected.path.clone())
+            .with_context(
+                "matches",
+                serde_json::to_value(last_element.clone()).unwrap_or(Value::Null),
+            )
+            .with_suggestion(
+                "Inspect the current hierarchy and check whether the element is stale.",
+            )
+        } else {
+            ForgeError::new(
+                ErrorCode::UiAssertionFailed,
+                "the referenced element did not reach its recorded identity before the timeout",
+            )
+            .with_context("ref_path", expected.path.clone())
+            .with_context(
+                "matches",
+                serde_json::to_value(last_element.clone()).unwrap_or(Value::Null),
+            )
+            .with_suggestion(
+                "Run `androidforge ui observe --session <ID> --json` and choose a new ref.",
+            )
+        };
+        error = error
+            .with_context("wait_attempts", Value::from(attempts))
+            .with_context("wait_timeout_ms", Value::from(timeout.as_millis() as u64))
+            .with_context(
+                "hierarchy_package",
+                serde_json::to_value(last_package).unwrap_or(Value::Null),
+            )
+            .device(serial.to_string());
+        Err(error)
+    }
     pub async fn settle(&self, serial: &str, timeout: Duration) -> Result<SettleResult> {
         let started = Instant::now();
         let mut attempts = 0u32;
@@ -772,6 +951,41 @@ impl UiManager {
         })
     }
 
+    /// Scroll inside the node identified by a previous observation. Unlike the
+    /// selector path, there is no fallback to an unrelated scrollable node: the
+    /// referenced node itself must be scrollable.
+    pub async fn scroll_expected(
+        &self,
+        serial: &str,
+        direction: &str,
+        expected: &crate::reference::NodeExpectation,
+    ) -> Result<ScrollResult> {
+        let hierarchy = self.dump(serial).await?;
+        let node = expected.find(&hierarchy)?;
+        if !node.scrollable {
+            return Err(ForgeError::new(
+                ErrorCode::ElementNotActionable,
+                "the referenced element is not scrollable",
+            )
+            .with_context_string("path", expected.path.clone())
+            .with_suggestion("Choose a scrollable container ref from `ui observe --json`.")
+            .device(serial.to_string()));
+        }
+        let target = node.bounds;
+        let (x1, y1, x2, y2) = scroll_points(target, direction)?;
+        self.adb
+            .input_swipe(serial, x1 as u32, y1 as u32, x2 as u32, y2 as u32, 350)
+            .await?;
+        Ok(ScrollResult {
+            direction: direction.to_string(),
+            start_x: x1,
+            start_y: y1,
+            end_x: x2,
+            end_y: y2,
+            target_bounds: target,
+            used_scrollable_node: true,
+        })
+    }
     pub async fn scroll_to(
         &self,
         serial: &str,

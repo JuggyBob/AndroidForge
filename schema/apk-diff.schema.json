@@ -7,6 +7,10 @@
   "properties": {
     "schema_version": { "const": 1 },
     "candidate": { "type": "object" },
+    "candidate_splits": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/split" }
+    },
     "installed": {
       "type": "object",
       "required": ["package", "remote_paths", "base_remote_path", "base_apk", "split_count"],
@@ -16,6 +20,20 @@
         "base_remote_path": { "type": "string" },
         "base_apk": { "type": "object" },
         "split_count": { "type": "integer", "minimum": 0 },
+        "splits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["remote_path", "name", "size_bytes", "sha256"],
+            "properties": {
+              "remote_path": { "type": "string" },
+              "name": { "type": "string" },
+              "size_bytes": { "type": "integer", "minimum": 0 },
+              "sha256": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
         "version_name": { "type": ["string", "null"] },
         "version_code": { "type": ["integer", "null"] },
         "data_dir": { "type": ["string", "null"] },
@@ -42,5 +60,22 @@
     "summary": { "type": "string" },
     "safe_to_skip_install": { "type": "boolean" },
     "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "split": {
+      "type": "object",
+      "required": ["path", "name", "size_bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "name": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string" },
+        "package": { "type": ["string", "null"] },
+        "version_code": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    }
   }
 }
+
+

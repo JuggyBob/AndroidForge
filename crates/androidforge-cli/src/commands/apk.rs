@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use androidforge_app::{ApkInfo, compare, inspect_installed};
+use androidforge_app::{
+    ApkArtifact, ApkArtifactKind, ApkInfo, SplitApk, compare, inspect_installed,
+};
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use serde::{Deserialize, Serialize};
@@ -27,6 +29,14 @@ pub struct ResolvedApk {
     pub size_bytes: u64,
     pub modified_at: String,
     pub sha256: String,
+    #[serde(default)]
+    pub artifact_kind: String,
+    #[serde(default)]
+    pub split_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub splits: Vec<SplitApk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,7 +88,7 @@ pub async fn resolve_command(ctx: &CliContext, args: &ApkResolveArgs) -> Result<
         .or_else(|| ctx.config.file.build.default_module.clone());
     let resolution = resolve_variant(ctx, &variant, module.as_deref()).await?;
     let human = format!(
-        "Resolved {} {}\npath: {}\npackage: {}\nversion: {}\nSHA-256: {}\nrule: {}\n",
+        "Resolved {} {}\npath: {}\npackage: {}\nversion: {}\nSHA-256: {}\nartifact: {}{}\nrule: {}\n",
         resolution.variant,
         resolution
             .module
@@ -89,6 +99,12 @@ pub async fn resolve_command(ctx: &CliContext, args: &ApkResolveArgs) -> Result<
         resolution.selected.package.as_deref().unwrap_or("-"),
         resolution.selected.version_name.as_deref().unwrap_or("-"),
         resolution.selected.sha256,
+        resolution.selected.artifact_kind,
+        if resolution.selected.split_count > 0 {
+            format!(" ({} split(s))", resolution.selected.split_count)
+        } else {
+            String::new()
+        },
         resolution.selected.rule,
     );
     Ok(success(
@@ -200,8 +216,9 @@ pub async fn resolve_variant(
                     format!("could not read {}: {error}", path.display()),
                 )
             })?;
-        match inspector.inspect(&path, false).await {
-            Ok(info) => {
+        match ApkArtifact::load(&inspector, &path).await {
+            Ok(artifact) => {
+                let info = artifact.base.clone();
                 let relative = path
                     .strip_prefix(root)
                     .map(|path| path.to_string_lossy().replace('\\', "/"))
@@ -212,9 +229,15 @@ pub async fn resolve_variant(
                     variant: variant.to_string(),
                     module: module.map(str::to_string),
                     rule,
-                    size_bytes: info.size_bytes,
+                    size_bytes: std::fs::metadata(&path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(info.size_bytes),
                     modified_at: system_time_rfc3339(modified),
                     sha256: info.sha256.clone(),
+                    artifact_kind: artifact.kind.as_str().to_string(),
+                    split_count: artifact.split_count(),
+                    splits: artifact.splits.clone(),
+                    archive_sha256: artifact.archive_sha256.clone(),
                     package: info.package.clone(),
                     version_name: info.version_name.clone(),
                     version_code: info.version_code,
@@ -283,6 +306,12 @@ pub async fn resolve_variant(
     let mut selected = valid.remove(0).0;
     selected.variant = variant.to_string();
     selected.module = module.map(str::to_string);
+    if selected.artifact_kind == "split_archive" && !selected.splits.is_empty() {
+        warnings.push(
+            "Resolved split paths are temporary extraction paths; pass the selected .apks path to install commands so the archive is re-opened."
+                .to_string(),
+        );
+    }
     for (candidate, _, modified) in &valid {
         rejected.push(RejectedCandidate {
             path: candidate.path.clone(),
@@ -389,8 +418,11 @@ fn collect_files(root: &Path, depth: usize, files: &mut BTreeSet<PathBuf>) -> Re
                 continue;
             }
             collect_files(&path, depth + 1, files)?;
-        } else if file_type.is_file() && name.to_ascii_lowercase().ends_with(".apk") {
-            files.insert(path);
+        } else if file_type.is_file() {
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".apk") || lower.ends_with(".apks") {
+                files.insert(path);
+            }
         }
     }
     Ok(())
@@ -476,6 +508,75 @@ fn system_time_rfc3339(time: SystemTime) -> String {
     chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339()
 }
 
+pub(crate) async fn load_artifact_with_splits(
+    ctx: &CliContext,
+    path: &Path,
+    explicit_splits: &[PathBuf],
+) -> Result<ApkArtifact> {
+    let inspector = ctx.inspector();
+    let mut artifact = ApkArtifact::load(&inspector, path).await?;
+    if explicit_splits.is_empty() {
+        return Ok(artifact);
+    }
+    let package = artifact.base.package.clone().ok_or_else(|| {
+        ForgeError::new(
+            ErrorCode::ApkInvalid,
+            format!("base APK {} does not declare a package", path.display()),
+        )
+    })?;
+    for split in explicit_splits {
+        let split = if split.is_absolute() {
+            split.clone()
+        } else {
+            ctx.paths.cwd.join(split)
+        };
+        let info = inspector.inspect(&split, false).await?;
+        if info.package.as_deref() != Some(package.as_str()) {
+            return Err(ForgeError::new(
+                ErrorCode::ApkInvalid,
+                format!(
+                    "split APK {} declares package {:?}, but the base APK declares {package}",
+                    split.display(),
+                    info.package
+                ),
+            ));
+        }
+        if let (Some(base), Some(other)) = (artifact.base.version_code, info.version_code)
+            && base != other
+        {
+            return Err(ForgeError::new(
+                ErrorCode::ApkInvalid,
+                format!(
+                    "split APK {} declares versionCode {other}, but the base APK declares {base}",
+                    split.display()
+                ),
+            )
+            .with_suggestion(
+                "Build the base APK and all splits in the same build before installing them together.",
+            ));
+        }
+        artifact.splits.push(SplitApk {
+            path: split.to_string_lossy().into_owned(),
+            name: split
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "split.apk".to_string()),
+            size_bytes: info.size_bytes,
+            sha256: info.sha256,
+            package: info.package,
+            version_code: info.version_code,
+        });
+    }
+    artifact
+        .splits
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    artifact.kind = ApkArtifactKind::SplitDirectory;
+    artifact
+        .warnings
+        .push("Explicit --split APKs were added to the candidate set.".to_string());
+    Ok(artifact)
+}
+
 pub async fn diff_command(ctx: &CliContext, args: &ApkDiffArgs) -> Result<CommandSuccess> {
     let (installed_spec, apk_spec) = if let Some(package) = args.target.strip_prefix("installed:") {
         (package.to_string(), args.apk.clone())
@@ -502,7 +603,8 @@ pub async fn diff_command(ctx: &CliContext, args: &ApkDiffArgs) -> Result<Comman
         ctx.paths.cwd.join(&apk_spec)
     };
     let inspector = ctx.inspector();
-    let candidate = inspector.inspect(&apk_path, false).await?;
+    let artifact = load_artifact_with_splits(ctx, &apk_path, &args.split).await?;
+    let candidate = artifact.base.clone();
     let adb = ctx.adb()?;
     let installed = inspect_installed(&adb, &inspector, &device.serial, &installed_spec)
         .await?
@@ -517,12 +619,27 @@ pub async fn diff_command(ctx: &CliContext, args: &ApkDiffArgs) -> Result<Comman
             .with_suggestion("Install the application or pass the correct package name.")
             .device(device.serial.clone())
         })?;
-    let diff = compare(&candidate, &installed);
+    let diff = compare(&candidate, &artifact.splits, &installed);
+    let mut value = serde_json::to_value(&diff)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "candidate_artifact".to_string(),
+            serde_json::to_value(artifact.summary())?,
+        );
+    }
     let human = format!(
-        "{}\noverall: {:?}\nsafe to skip install: {}\n",
-        diff.summary, diff.overall, diff.safe_to_skip_install
+        "{}\noverall: {:?}\nsafe to skip install: {}\nartifact: {}{}\n",
+        diff.summary,
+        diff.overall,
+        diff.safe_to_skip_install,
+        artifact.kind.as_str(),
+        if artifact.split_count() > 0 {
+            format!(" ({} split(s))", artifact.split_count())
+        } else {
+            String::new()
+        },
     );
-    Ok(success("apk.diff", serde_json::to_value(&diff)?, human)
+    Ok(success("apk.diff", value, human)
         .with_optional_session(session.map(|session| session.id))
         .with_device(device.serial))
 }

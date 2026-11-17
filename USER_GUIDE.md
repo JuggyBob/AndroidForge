@@ -29,7 +29,7 @@ cargo build --workspace --release
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
-## 2.1 Agent loop commands (v0.7.1)
+## 2.1 Agent loop commands (v0.8.0)
 
 These commands reduce repeated discovery and inspection. They keep the same JSON envelope, exit codes
 and evidence rules as the rest of the CLI.
@@ -148,7 +148,7 @@ matrix_preflight = true
 Resolution never runs Gradle. It selects the newest valid APK and reports the matched rule, mtime,
 SHA-256 and certificate. Equal timestamps with different content are an ambiguity error. An explicit
 `--apk` wins over `--variant`. `--only-if-changed` skips only when package, version code, base APK hash
-and split shape prove equivalence; unknown identity installs rather than silently skipping.
+and every split SHA-256 prove equivalence; unknown split identity installs rather than silently skipping.
 
 ### Stable element references
 
@@ -156,12 +156,18 @@ and split shape prove equivalence; unknown identity installs rather than silentl
 androidforge ui observe --session <ID> --json
 androidforge ui tap --session <ID> --ref el-... --expect-token obs-... --json
 androidforge ui long-press --session <ID> --ref el-... --expect-token obs-... --receipt --json
+androidforge ui text "hello" --session <ID> --ref el-... --expect-token obs-... --json
+androidforge ui clear --session <ID> --ref el-... --expect-token obs-... --json
+androidforge ui scroll --session <ID> --ref el-... --expect-token obs-... --direction down --json
+androidforge ui wait --session <ID> --ref el-... --expect-token obs-... --timeout 10 --json
+androidforge ui assert --session <ID> --ref el-... --expect-token obs-... --json
 ```
 
 A `ref` is an opaque handle scoped to one observation token, session and device. AndroidForge re-reads
 the hierarchy and validates the node identity immediately before dispatch. Expired tokens, removed or
 changed nodes, wrong devices and non-actionable nodes are explicit errors; there is no text or
-coordinate fallback. Re-observe after navigation.
+coordinate fallback. Text/clear require an editable field, scroll requires a scrollable node, and
+wait/assert may reference context text that is not itself actionable. Re-observe after navigation.
 
 ### Sequential device matrix
 
@@ -476,7 +482,9 @@ Inspection reports package, versions, min/target SDK, label, launchable activity
 androidforge apk resolve --variant debug --json
 androidforge apk resolve --variant freeDebug --module app --json
 androidforge apk diff installed:com.example.app .\app-debug.apk --session <ID> --json
+androidforge apk diff installed:com.example.app .\app-debug.apk --split .\config.arm64_v8a.apk --session <ID> --json
 androidforge app install .\app-debug.apk --session <ID> --only-if-changed --json
+androidforge app install .\outputs\bundle.apks --session <ID> --only-if-changed --json
 ```
 
 `apk resolve` is deterministic and read-only. It never invokes Gradle. Configure explicit outputs, or
@@ -501,18 +509,28 @@ The newest valid APK wins. Malformed APKs are rejected with reasons; equal times
 hashes return an ambiguity error; the selected rule, mtime, hash and certificate are reported. An
 explicit `--apk` always wins over `--variant`.
 
-`apk diff` reports each field as `same`, `different` or `unknown`. It pulls the installed base APK to a
-temporary directory and cleans it up. Split installations cannot be proven wholly equivalent from the
-base APK. `--only-if-changed` skips installation only when package, version code, base APK SHA-256 and
-split shape prove equivalence; otherwise it installs and records the reason. It never uninstalls, clears
-data or downgrades automatically.
+`apk diff` reports each field as `same`, `different` or `unknown`. It pulls the installed base APK and
+every installed split to a temporary directory and cleans them up. Split sets are compared by their
+sorted SHA-256 hashes, not names. `--only-if-changed` skips installation only when package, version code,
+base APK SHA-256 and the complete split set prove equivalence; otherwise it installs and records the
+reason. It never uninstalls, clears data or downgrades automatically.
 
 ### Install and build identity
 
 ```powershell
 androidforge app install .\app-debug.apk --session <ID> --json
 androidforge app install .\app-release.apk --session <ID> --expected-package com.example.app --json
+androidforge app install .\base.apk --split .\config.arm64_v8a.apk --split .\config.en.apk --session <ID> --json
+androidforge app install .\outputs\bundle.apks --session <ID> --json
 ```
+
+Split artifacts are installed exactly as provided. A directory with `splits/` uses those entries; a
+directory with one `standalones/` APK uses that standalone. An `.apks` archive selects `splits/` entries,
+or a single `universal.apk`/standalone; multiple standalones are rejected because AndroidForge will not
+guess which one targets the device. Archives are extracted with bounded entry/size limits. AndroidForge
+does not run bundletool and does not select device-specific splits. Every base/split pair must declare
+the same package and version code before installation. Split installs use `adb install-multiple` and
+record the supplied artifact path in the build identity.
 
 The result includes package, versionName, versionCode, local APK SHA-256, installed APK SHA-256, signing certificate SHA-256, debug-signed and `verified`. A mismatch between the requested and installed package, hash or version fails with `E_INSTALL_VERIFICATION_FAILED`. If `[project].expected_cert_sha256` is set and the APK uses a different signer, install fails before touching the device with `E_SIGNATURE_VERIFICATION_FAILED` and reports the actual fingerprint. Add `--expected-cert-sha256 <64-hex>` for an ad-hoc fingerprint check, or `--expected-package` for an ad-hoc package check.
 
@@ -640,6 +658,26 @@ androidforge diagnostics inspect activity --session <ID> --json
 
 `collect` captures screenshot, hierarchy, logcat, crash/ANR state, app state and dumpsys. `--full` includes every supported dump; `--log-lines` controls the tail. Crash/ANR detection is best-effort and says so.
 
+### Performance evidence
+
+```powershell
+androidforge diagnostics performance com.example.app --session <ID> --json
+androidforge diagnostics performance com.example.app --cold --settle 2s --session <ID> --json
+```
+
+`diagnostics performance` measures each dimension explicitly and writes `performance/report.json`:
+
+- startup from `am start -W` (`TotalTime`, `WaitTime`, `ThisTime`, status and activity);
+- jank from `dumpsys gfxinfo` after a pre-launch reset (frames, janky frames/percent, percentiles,
+  missed vsync);
+- memory from `dumpsys meminfo` (PSS, RSS, Java/native heap and PID);
+- CPU from `dumpsys cpuinfo`, falling back to two `/proc/<pid>/stat` samples when the package is not in
+  the dumpsys window.
+
+`--cold` is required to force-stop the app first; without it the existing process is measured as-is.
+Force-stopping preserves app data. `--settle` controls the delay before post-launch sampling (default
+2s), and `--timeout` bounds each device command. Values that the device does not report are `null` with
+an `unknown_reason`, and the command exits 10 when evidence is partial. Nothing is estimated.
 ### Notifications, jobs, alarms, system state
 
 ```powershell
@@ -835,7 +873,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.7.1` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.8.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents
@@ -850,3 +888,6 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 8. Treat `--yes`, `--fresh`, `clear-data`, snapshot load, time/network changes and raw ADB as destructive.
 9. In the desktop, check the selected project/session in every confirmation; closing the app does not
    release or stop anything. Cancelling a run preserves the emulator.
+
+
+
