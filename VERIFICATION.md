@@ -85,7 +85,22 @@ Session `ses-35e5a130201c`, owner `af091-verify`, serial `emulator-5554`, isolat
   `ui_package` fields, and launched the desktop.
 - The local installer installed CLI/desktop `0.9.1`, exposed the updated hook schema and uninstalled
   cleanly with the install directory removed.
-- Downloaded-asset and release metadata verification is recorded after publication.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.1>; title
+  `AndroidForge v0.9.1 - Agent Mode Hardening`; not a prerelease; marked latest.
+- Tag: `v0.9.1`, tag object `9bc213c7041a40e4e3b1413ece751e512814d6ba`, commit
+  `43e6b07d7ee53c0778fd89f30db03413817d7c18`; Release workflow `44122060224` and main CI
+  `44122055921` passed.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (5,196,693 bytes),
+    `cb0c730b92a795af8954d01631a8f567e045a18497c453ae1a1f3e457546f661`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,960,596 bytes),
+    `480267330c21590225367dd860c2c782ea046726c05be6ce9649f4d06bbf42f8`.
+  - `androidforge-windows-x86_64-setup.exe` (9,795,878 bytes),
+    `755cebf326210ef24210490d7da9c7b650b506d527ae61f5e3256aad3c219c87`.
+- The downloaded portable ZIP reported CLI/desktop `0.9.1`; compact profile output, the 24-schema list
+  and the new `element_reference`/`observation` diagnosis categories were available. The downloaded
+  installer installed CLI/desktop `0.9.1` and uninstalled cleanly with the install directory removed.
+- v0.6.0, v0.7.0, v0.7.1, v0.8.0 and v0.9.0 releases, tags and assets remain intact.
 
 ## v0.9.0 verification (2026-11-17)
 
