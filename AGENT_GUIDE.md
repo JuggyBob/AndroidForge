@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.9.0 agent loop
+## 0. The v0.9.1 agent loop
 
 The shortest reliable loop is:
 
@@ -12,9 +12,9 @@ androidforge agent brief --project . --json
 androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
 androidforge ui observe --session ses-... --output-profile compact --json
 androidforge ui tap --session ses-... --text "Settings" --wait-for-text "Preferences" --receipt --output-profile compact --json
-androidforge report explain latest --json
+androidforge report explain latest-failure --json
 androidforge report recurrences --project . --json
-androidforge report bundle latest --output .\\evidence.zip --json
+androidforge report bundle latest-failure --output .\\evidence.zip --json
 androidforge ui observe --session ses-... --json
 androidforge ui tap --session ses-... --ref el-... --expect-token obs-... --json
 androidforge ui text "hello" --session ses-... --ref el-... --expect-token obs-... --json
@@ -117,6 +117,7 @@ Full detail remains available by re-running without the profile or with `--outpu
 Common aliases: `ui o/d/t/w` (observe/diff/tap/wait), `app i/l` (install/launch), `diagnostics perf`,
 `report why` (explain), `agent b` (brief), `context ctx`. Selector aliases include `--id`
 (`--resource-id`), `--desc` (`--content-desc`) and `--token` (`--expect-token`).
+
 ### 0.3 Session acquisition and leases
 
 ```powershell
@@ -214,6 +215,7 @@ evidence first.
 
 ```powershell
 androidforge report explain latest --json
+androidforge report explain latest-failure --json
 androidforge report explain <RUN_ID> --json
 androidforge report explain <RUN_ID> --full --json
 androidforge report explain <RUN_ID> --markdown
@@ -222,14 +224,15 @@ androidforge report explain <RUN_ID> --markdown
 The explanation contains `diagnosis.category`, `diagnosis.code`, `diagnosis.confidence`, a summary,
 curated evidence references, alternatives, `next_actions` with exact argv, a stable `sha256:` fingerprint
 and `project_root`. Categories include environment, device, emulator, install, signature, application,
-process, task, ANR, selector, selector_ambiguous, ui_automation, timeout, assertion, permission,
-configuration, cancelled, interrupted and unknown. Confidence is `high`, `medium`, `low` or
-`insufficient_evidence`; there is no fake percentage.
+process, task, ANR, selector, selector_ambiguous, element_reference, observation, ui_automation, timeout,
+assertion, permission, configuration, cancelled, interrupted and unknown. Confidence is `high`, `medium`,
+`low` or `insufficient_evidence`; there is no fake percentage.
 
-`report explain latest` selects the newest failed/partial/cancelled/interrupted run when one exists,
-falling back to the newest run. Run lookup searches the current project, the current directory and
-ancestor artifact stores, so runs created without `--project` remain discoverable. Use
-`androidforge report list --all` to list runs across those stores.
+`latest` means the newest completed run in this project. `latest-failure` means the newest
+failed/partial/cancelled/interrupted run. Both `report explain` and `report bundle` use the same
+selection and are strictly scoped to the project's recorded `project_root`; a run from another app is
+never selected, even when it is newer. `report explain latest` on a passing run adds a `latest-failure`
+next action. Use `androidforge report list --all` to list runs across stores.
 
 Run next actions from `project_root`, or pass that path with `--project`. The same failure produces the
 same fingerprint across timestamps, run IDs, temporary paths and dynamic numeric IDs. Different
@@ -260,6 +263,7 @@ references and `currently_resolved`. `report explain` adds the same recurrence o
 
 ```powershell
 androidforge report bundle latest --output .\evidence.zip --json
+androidforge report bundle latest-failure --output .\failure-evidence.zip --json
 androidforge report bundle latest --dry-run --json
 androidforge report bundle latest --markdown --json
 androidforge report bundle latest --format json --json
@@ -342,14 +346,16 @@ androidforge ui wait --session ses-... --ref el-... --expect-token obs-... --tim
 androidforge ui assert --session ses-... --ref el-... --expect-token obs-... --json
 ```
 
-Every observed actionable/context/scrollable node has a deterministic opaque `ref` (12 hex characters by default). A ref is valid only
-with its observation token and the same session/device. Immediately before dispatch, the CLI re-reads the
-hierarchy and verifies path, class, package, resource id, text, content description, bounds, enabled and
-actionable state. It refuses with explicit errors when the token expired, the node disappeared or
-changed, the session/device is wrong, or the node is no longer actionable. Text/clear require an
-editable field, scroll requires a scrollable node, and wait/assert may target context text. **There is
-no fallback to text, resource id or coordinates.** Re-observe and choose a new ref. `--expect-token` is
-required.
+Every observed actionable/context/scrollable node has a deterministic opaque `ref` (12 hex characters by default). Refs are derived
+from node identity, so an unchanged node keeps the same ref across repeated observations. A ref is
+still accepted only with its observation token and the same session/device. Immediately before
+dispatch, the CLI re-reads the hierarchy and verifies path, class, package, resource id, text, content
+description, bounds, enabled and actionable state. It refuses with explicit errors when the token
+expired, the node disappeared or changed, the session/device is wrong, or the node is no longer
+actionable. Text/clear require an editable field, scroll requires a scrollable node, and wait/assert may
+target context text. Context text inside a clickable row carries `actionable_via: "ancestor"` and is a
+valid tap/long-press ref; dispatch goes to that ancestor. **There is no fallback to text, resource id or
+coordinates.** `--expect-token` is required.
 
 ### 0.10 Sequential device matrix
 
@@ -743,7 +749,3 @@ If a human may have the desktop open:
 
 The desktop reads the same `report.json`, `metadata.json`, `manifest.json` and artifact paths described in
 [SCHEMA.md](SCHEMA.md); it never produces a separate report format.
-
-
-
-

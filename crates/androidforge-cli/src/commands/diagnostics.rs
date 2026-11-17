@@ -427,9 +427,21 @@ async fn performance(
                 Some("Startup, jank, memory and CPU evidence"),
                 &json,
             )?;
+            let mut result = serde_json::to_value(&report)?;
+            if let Some(object) = result.as_object_mut() {
+                object.insert("run_id".to_string(), serde_json::json!(run.run_id.clone()));
+                object.insert(
+                    "run_dir".to_string(),
+                    serde_json::json!(run.dir.to_string_lossy()),
+                );
+                object.insert(
+                    "artifacts".to_string(),
+                    serde_json::to_value(vec![&artifact])?,
+                );
+            }
             let mut success = success(
                 "diagnostics.performance",
-                serde_json::to_value(&report)?,
+                result,
                 performance_human(&report),
             )
             .with_artifacts(vec![artifact])

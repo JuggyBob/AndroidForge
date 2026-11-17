@@ -24,6 +24,9 @@
         "command": { "type": "array", "items": { "type": "string" } },
         "expect_contains": { "type": "string" },
         "expect_not_contains": { "type": "string" },
+        "ui_text": { "type": "string" },
+        "ui_activity": { "type": "string" },
+        "ui_package": { "type": "string" },
         "must_change": { "type": "boolean" },
         "timeout_secs": { "type": "integer", "minimum": 1 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } }

@@ -739,7 +739,7 @@ fn agent_test_failure_uses_a_failed_envelope_status() {
 }
 
 #[test]
-fn report_explain_latest_finds_failures_across_project_boundaries() {
+fn report_latest_selection_is_scoped_to_the_project_and_consistent() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("ProjectWithAdapter");
     project_with_defaults(&project);
@@ -761,71 +761,106 @@ fn report_explain_latest_finds_failures_across_project_boundaries() {
         json["run_id"].as_str().unwrap().to_string()
     };
 
-    let failed_id = start("root-failure", None);
-    let passed_id = start("project-pass", Some(&project));
+    let project_failed_id = start("project-failure", Some(&project));
+    let project_passed_id = start("project-pass", Some(&project));
+    let other_failed_id = start("other-failure", None);
 
-    let failed_report = temp
-        .path()
-        .join(".artifacts/runs")
-        .join(&failed_id)
-        .join("report.json");
-    let mut report: Value =
-        serde_json::from_slice(&std::fs::read(&failed_report).unwrap()).unwrap();
-    report["status"] = serde_json::json!("failed");
-    report["failure"] = serde_json::json!({
-        "code": "E_SELECTOR_NOT_FOUND",
-        "message": "no UI element matched",
-        "failed_operation": "ui.tap",
-        "recoverable": true,
-        "suggestions": [],
-        "context": {"selector": {"text": "Save"}},
-        "artifacts": []
-    });
-    std::fs::write(&failed_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    let mutate = |path: &std::path::Path, status: &str, started_at: &str, failure: bool| {
+        let mut report: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        report["status"] = serde_json::json!(status);
+        report["started_at"] = serde_json::json!(started_at);
+        if failure {
+            report["failure"] = serde_json::json!({
+                "code": "E_SELECTOR_NOT_FOUND",
+                "message": "no UI element matched",
+                "failed_operation": "ui.tap",
+                "recoverable": true,
+                "suggestions": [],
+                "context": {"selector": {"text": "Save"}},
+                "artifacts": []
+            });
+        }
+        std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    };
+    mutate(
+        &project
+            .join(".artifacts/runs")
+            .join(&project_failed_id)
+            .join("report.json"),
+        "failed",
+        "2026-01-01T00:00:00Z",
+        true,
+    );
+    mutate(
+        &project
+            .join(".artifacts/runs")
+            .join(&project_passed_id)
+            .join("report.json"),
+        "passed",
+        "2026-01-02T00:00:00Z",
+        false,
+    );
+    mutate(
+        &temp
+            .path()
+            .join(".artifacts/runs")
+            .join(&other_failed_id)
+            .join("report.json"),
+        "failed",
+        "2026-01-03T00:00:00Z",
+        true,
+    );
 
-    let passed_report = project
-        .join(".artifacts/runs")
-        .join(&passed_id)
-        .join("report.json");
-    let mut report: Value =
-        serde_json::from_slice(&std::fs::read(&passed_report).unwrap()).unwrap();
-    report["status"] = serde_json::json!("passed");
-    std::fs::write(&passed_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    let run_report = |args: &[&str]| {
+        let output = binary()
+            .current_dir(temp.path())
+            .env("ANDROIDFORGE_HOME", temp.path())
+            .args(["--project", project.to_str().unwrap()])
+            .args(args)
+            .output()
+            .expect("report command");
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
 
-    let latest = binary()
-        .current_dir(temp.path())
-        .env("ANDROIDFORGE_HOME", temp.path())
-        .args([
-            "--project",
-            project.to_str().unwrap(),
-            "report",
-            "explain",
-            "latest",
-            "--json",
-        ])
-        .output()
-        .expect("explain latest");
-    assert!(latest.status.success(), "{latest:?}");
-    let latest_json: Value = serde_json::from_slice(&latest.stdout).unwrap();
-    assert_eq!(latest_json["result"]["run_id"], failed_id);
-    assert_eq!(latest_json["result"]["diagnosis"]["category"], "selector");
+    let latest = run_report(&["report", "explain", "latest", "--json"]);
+    assert_eq!(latest["result"]["run_id"], project_passed_id);
+    assert_eq!(latest["result"]["status"], "passed");
+    assert!(
+        latest["result"]["next_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| {
+                action["command"]["argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|arg| arg == "latest-failure")
+            })
+    );
 
-    let by_id = binary()
-        .current_dir(temp.path())
-        .env("ANDROIDFORGE_HOME", temp.path())
-        .args([
-            "--project",
-            project.to_str().unwrap(),
-            "report",
-            "explain",
-            &failed_id,
-            "--json",
-        ])
-        .output()
-        .expect("explain by id");
-    assert!(by_id.status.success(), "{by_id:?}");
-    let by_id_json: Value = serde_json::from_slice(&by_id.stdout).unwrap();
-    assert_eq!(by_id_json["result"]["run_id"], failed_id);
+    let latest_failure = run_report(&["report", "explain", "latest-failure", "--json"]);
+    assert_eq!(latest_failure["result"]["run_id"], project_failed_id);
+    assert_eq!(
+        latest_failure["result"]["diagnosis"]["category"],
+        "selector"
+    );
+
+    let bundle_output = temp.path().join("latest-failure.zip");
+    let bundle = run_report(&[
+        "report",
+        "bundle",
+        "latest-failure",
+        "--output",
+        bundle_output.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(bundle["result"]["manifest"]["run_id"], project_failed_id);
+    assert!(bundle_output.is_file());
+
+    let by_id = run_report(&["report", "explain", &project_failed_id, "--json"]);
+    assert_eq!(by_id["result"]["run_id"], project_failed_id);
 }
 
 fn write_memory_report(

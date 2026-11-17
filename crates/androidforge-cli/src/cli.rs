@@ -1622,6 +1622,8 @@ pub struct ReportCompareArgs {
 
 #[derive(Debug, Args)]
 pub struct ReportExplainArgs {
+    /// Run id, `latest` for the newest completed run, or `latest-failure` for
+    /// the newest failed/partial run in this project.
     pub run: String,
     /// Include expanded evidence and metadata.
     #[arg(long)]
@@ -1675,7 +1677,8 @@ pub struct ReportRecurrencesArgs {
 
 #[derive(Debug, Args)]
 pub struct ReportBundleArgs {
-    /// Run id or `latest`.
+    /// Run id, `latest` for the newest completed run, or `latest-failure` for
+    /// the newest failed/partial run in this project.
     pub run: String,
     /// Output path for a ZIP, JSON manifest or Markdown file. ZIP defaults to .artifacts/bundles/<run>-evidence.zip.
     #[arg(long)]

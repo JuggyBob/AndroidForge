@@ -9,6 +9,7 @@ use androidforge_core::run::RunContext;
 use androidforge_core::session::Session;
 use androidforge_core::util::now_rfc3339;
 use androidforge_process::{CommandSpec, Runner};
+use androidforge_ui::UiManager;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,11 +431,86 @@ async fn verification_once(
             .await?;
         return Ok(output.combined_text());
     }
+    if verify.ui_text.is_some() || verify.ui_activity.is_some() || verify.ui_package.is_some() {
+        let ui = UiManager::new(
+            adb.clone(),
+            Duration::from_secs(config.file.ui.default_timeout_secs.max(1)),
+            Duration::from_millis(config.file.ui.poll_interval_ms.max(50)),
+            Duration::from_millis(config.file.ui.settle_interval_ms.max(50)),
+            config.file.ui.tap_clickable_ancestor,
+            config.file.ui.text_verify,
+        );
+        let hierarchy = ui.dump(&serial).await?;
+        let focus = adb.current_focus(&serial).await;
+        let matches_text = verify.ui_text.as_deref().is_none_or(|expected| {
+            hierarchy.nodes.iter().any(|node| {
+                node.visible()
+                    && (node.text.as_deref() == Some(expected)
+                        || node.content_desc.as_deref() == Some(expected))
+            })
+        });
+        if !matches_text {
+            return Err(ForgeError::new(
+                ErrorCode::HookVerificationFailed,
+                format!(
+                    "the hook completed but '{}' is not visible on the current screen",
+                    verify.ui_text.as_deref().unwrap_or_default()
+                ),
+            )
+            .with_suggestion(
+                "Fix the hook route or point it at the screen that actually contains this label.",
+            ));
+        }
+        let matches_activity = verify.ui_activity.as_deref().is_none_or(|expected| {
+            focus
+                .as_ref()
+                .and_then(|focus| focus.activity.as_deref())
+                .is_some_and(|activity| activity == expected || activity.ends_with(expected))
+        });
+        if !matches_activity {
+            return Err(ForgeError::new(
+                ErrorCode::HookVerificationFailed,
+                format!(
+                    "the hook completed but the foreground activity is '{}', expected '{}'",
+                    focus
+                        .as_ref()
+                        .and_then(|focus| focus.activity.as_deref())
+                        .unwrap_or("<unknown>"),
+                    verify.ui_activity.as_deref().unwrap_or_default()
+                ),
+            )
+            .with_suggestion("Fix the hook intent so it reaches the expected activity."));
+        }
+        let matches_package = verify.ui_package.as_deref().is_none_or(|expected| {
+            focus.as_ref().map(|focus| focus.package.as_str()) == Some(expected)
+        });
+        if !matches_package {
+            return Err(ForgeError::new(
+                ErrorCode::HookVerificationFailed,
+                format!(
+                    "the hook completed but the foreground package is '{}', expected '{}'",
+                    focus
+                        .as_ref()
+                        .map(|focus| focus.package.as_str())
+                        .unwrap_or("<unknown>"),
+                    verify.ui_package.as_deref().unwrap_or_default()
+                ),
+            )
+            .with_suggestion("Fix the hook intent so it returns to the expected app."));
+        }
+        let state = serde_json::json!({
+            "ui_text": verify.ui_text,
+            "ui_activity": focus.as_ref().and_then(|focus| focus.activity.clone()),
+            "ui_package": focus.as_ref().map(|focus| focus.package.clone()),
+            "node_count": hierarchy.nodes.len(),
+        });
+        return Ok(serde_json::to_string_pretty(&state)?);
+    }
     Err(ForgeError::new(
         ErrorCode::HookNotFound,
-        "hook verification has neither shell nor command",
+        "hook verification has neither shell, command nor UI expectation",
     )
-    .with_suggestion("Set verify.shell or verify.command in the hook."))
+    .with_suggestion("Set verify.shell, verify.command, verify.ui_text, verify.ui_activity or verify.ui_package in the hook."))
 }
 
 async fn run_verification(
@@ -504,7 +580,7 @@ async fn run_verification(
     .with_context("verification", detail)
     .with_artifacts(vec![artifact])
     .with_suggestion(
-        "Fix the hook trigger or the verification command; `adb` exit 0 alone does not prove app behavior.",
+        "Fix the hook trigger or the verification expectation; `adb` exit 0 alone does not prove app behavior.",
     )
     .session(session.id.clone()))
 }

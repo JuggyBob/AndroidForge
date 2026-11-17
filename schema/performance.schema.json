@@ -21,6 +21,23 @@
     "package": { "type": "string" },
     "serial": { "type": "string" },
     "collected_at": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string" },
+    "run_dir": { "type": "string" },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "properties": {
+          "kind": { "type": "string" },
+          "path": { "type": "string" },
+          "sha256": { "type": ["string", "null"] },
+          "size_bytes": { "type": ["integer", "null"] },
+          "description": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
     "cold_start_requested": { "type": "boolean" },
     "settle_ms": { "type": "integer", "minimum": 0 },
     "foreground": { "type": ["boolean", "null"] },

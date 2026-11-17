@@ -165,8 +165,14 @@ pub fn build_history(reports: &[RunReport], unreadable_runs: usize) -> Recurrenc
     for (_, report) in &ordered {
         let explanation = explain_report(report);
         let failed_step = failing_step(report);
+        // Observation-store failures describe a tool/state error, not a
+        // scenario outcome. A later passing run does not prove that the store
+        // defect is fixed, so it must never auto-resolve this fingerprint.
         let comparable = scenario_is_comparable(report, failed_step.as_ref())
-            && explanation.diagnosis.category != DiagnosisCategory::Unknown;
+            && !matches!(
+                explanation.diagnosis.category,
+                DiagnosisCategory::Unknown | DiagnosisCategory::Observation
+            );
         let failed_step_name = failed_step.as_ref().map(|step| step.name.clone());
         let occurrence = occurrence_from(report, &explanation, failed_step);
         groups
@@ -737,6 +743,43 @@ mod tests {
         let history = build_history(&reports, 0);
         assert!(!history.fingerprints[0].currently_resolved);
         assert_eq!(history.fingerprints[0].status, RecurrenceStatus::New);
+    }
+
+    #[test]
+    fn observation_store_errors_are_not_auto_resolved_by_a_passing_run() {
+        let mut failed = report(
+            "run-1",
+            "2026-01-01T00:00:00Z",
+            RunStatus::Failed,
+            "conformance:release_smoke",
+            StepStatus::Failed,
+            1,
+        );
+        let code = ErrorCode::ObservationNotFound;
+        if let Some(failure) = failed.failure.as_mut() {
+            failure.code = code;
+            failure.message = "observation 'obs-1' was not found".to_string();
+        }
+        if let Some(step) = failed.steps.first_mut()
+            && let Some(failure) = step.failure.as_mut()
+        {
+            failure.code = code;
+            failure.message = "observation 'obs-1' was not found".to_string();
+        }
+        let success = report(
+            "run-2",
+            "2026-01-02T00:00:00Z",
+            RunStatus::Passed,
+            "conformance:release_smoke",
+            StepStatus::Success,
+            1,
+        );
+        let history = build_history(&[failed, success], 0);
+        assert_eq!(history.fingerprints.len(), 1);
+        let entry = &history.fingerprints[0];
+        assert_eq!(entry.category, "observation");
+        assert!(!entry.currently_resolved);
+        assert_eq!(entry.status, RecurrenceStatus::Unknown);
     }
 
     #[test]

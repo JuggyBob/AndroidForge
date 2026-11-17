@@ -58,12 +58,20 @@ action = "am start -W -n com.aistudio.fitness.ironpulse/com.example.MainActivity
 timeout_secs = 30
 idempotent = true
 
+# A shell intent can exit 0 while the app stays on another screen. This
+# postcondition proves the Home streak surface was actually reached.
+[hooks.focus-streak.verify]
+ui_text = "CURRENT STREAK"
+
 [hooks.open-profile]
 type = "shell"
 description = "Open the profile tab, the same path as the profile widget"
 action = "am start -W -n com.aistudio.fitness.ironpulse/com.example.MainActivity -a com.example.widget.OPEN_PROFILE"
 timeout_secs = 30
 idempotent = true
+
+[hooks.open-profile.verify]
+ui_text = "Appearance"
 
 [hooks.open-notification-settings]
 type = "shell"

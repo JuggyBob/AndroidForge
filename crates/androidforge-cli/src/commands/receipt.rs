@@ -475,6 +475,7 @@ mod tests {
     ) -> ObservationNode {
         ObservationNode {
             reference: None,
+            actionable_via: None,
             role: Some("button".to_string()),
             path: path.to_string(),
             depth: 2,

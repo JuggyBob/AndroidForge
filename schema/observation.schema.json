@@ -79,6 +79,7 @@
       "required": ["path", "depth", "bounds", "clickable", "enabled"],
       "properties": {
         "ref": { "type": "string", "pattern": "^el-[0-9a-f]{12,64}$" },
+        "actionable_via": { "enum": ["ancestor"] },
         "role": { "type": "string" },
         "path": { "type": "string" },
         "depth": { "type": "integer", "minimum": 0 },

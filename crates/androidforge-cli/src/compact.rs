@@ -302,9 +302,17 @@ fn summary_for(success: &CommandSuccess, max_text: usize) -> String {
             .unwrap_or_else(|| "startup unknown".to_string());
         let jank = result
             .get("jank")
-            .and_then(|jank| jank.get("janky_percent"))
-            .and_then(Value::as_f64)
-            .map(|value| format!("jank {value:.1}%"))
+            .and_then(|jank| {
+                let percent = jank.get("janky_percent").and_then(Value::as_f64)?;
+                let total = jank.get("total_frames").and_then(Value::as_u64);
+                let janky = jank.get("janky_frames").and_then(Value::as_u64);
+                Some(match (janky, total) {
+                    (Some(janky), Some(total)) => {
+                        format!("jank {percent:.1}% ({janky}/{total} frames)")
+                    }
+                    _ => format!("jank {percent:.1}%"),
+                })
+            })
             .unwrap_or_else(|| "jank unknown".to_string());
         let pss = result
             .get("memory")
@@ -889,28 +897,25 @@ fn compact_agent_test(value: &mut Value, plan: OutputPlan) {
         );
     }
     if let Some(stages) = object.get_mut("stages").and_then(Value::as_array_mut) {
+        let total = stages.len();
+        let failed = stages
+            .iter()
+            .filter(|stage| stage.get("status").and_then(Value::as_str) == Some("failed"))
+            .count();
+        for stage in stages.iter_mut() {
+            if brief && let Some(stage) = stage.as_object_mut() {
+                stage.remove("command_argv");
+            }
+            compact_stage(stage, max_text);
+        }
         if brief {
-            let total = stages.len();
-            let failed = stages
-                .iter()
-                .filter(|stage| stage.get("status").and_then(Value::as_str) == Some("failed"))
-                .count();
-            stages.clear();
             object.insert("stages_total".to_string(), json!(total));
             object.insert("stages_failed".to_string(), json!(failed));
-        } else {
-            for stage in stages {
-                compact_stage(stage, max_text);
-            }
         }
     }
     object.remove("artifacts");
     if let Some(actions) = object.get_mut("next_actions").and_then(Value::as_array_mut) {
-        if brief {
-            actions.clear();
-        } else {
-            actions.truncate(3);
-        }
+        actions.truncate(if brief { 2 } else { 3 });
     }
     if let Some(warnings) = object.get_mut("warnings").and_then(Value::as_array_mut) {
         warnings.truncate(3);
@@ -1687,11 +1692,18 @@ mod tests {
             "next_actions": [{"command": {"argv": ["androidforge", "agent", "test"]}}]
         });
         compact_agent_test(&mut value, plan(OutputProfile::Brief));
-        assert_eq!(value["stages"].as_array().unwrap().len(), 0);
+        assert_eq!(value["stages"].as_array().unwrap().len(), 2);
+        assert_eq!(value["stages"][1]["name"], "install_apk");
+        assert_eq!(value["stages"][1]["status"], "failed");
+        assert!(
+            value["stages"][1].get("command_argv").is_none(),
+            "brief stages drop argv but keep identity"
+        );
         assert_eq!(value["stages_total"], 2);
         assert_eq!(value["stages_failed"], 1);
         assert_eq!(value["failure"]["stage"], "install_apk");
         assert_eq!(value["final_status"], "failed");
+        assert_eq!(value["next_actions"].as_array().unwrap().len(), 1);
         assert!(value.get("artifacts").is_none());
         assert!(value.get("project").is_some());
     }

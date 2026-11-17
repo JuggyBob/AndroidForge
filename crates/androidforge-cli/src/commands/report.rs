@@ -1101,35 +1101,73 @@ fn candidate_artifact_roots(ctx: &CliContext) -> Vec<PathBuf> {
     roots
 }
 
-fn resolve_latest_explain_dir(ctx: &CliContext) -> Result<PathBuf> {
+fn same_project_scope(left: &str, right: &str) -> bool {
+    let normalize = |value: &str| {
+        let normalized = value.replace('\\', "/");
+        let trimmed = normalized.trim_end_matches('/');
+        if cfg!(windows) {
+            trimmed.to_ascii_lowercase()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    normalize(left) == normalize(right)
+}
+
+/// Resolve `latest` and `latest-failure` consistently for reports and bundles.
+/// Only runs whose recorded `project_root` matches the selected project are
+/// eligible, so one app can never receive another app's evidence.
+pub(crate) fn resolve_latest_run_dir(ctx: &CliContext, failures_only: bool) -> Result<PathBuf> {
+    let project_root = ctx.paths.project_root.to_string_lossy().into_owned();
     let mut runs: Vec<(androidforge_core::run::RunSummary, PathBuf)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for root in candidate_artifact_roots(ctx) {
         let Ok(summaries) = list_runs(&root) else {
             continue;
         };
         for summary in summaries {
+            if !summary.status.is_terminal() || !seen.insert(summary.run_id.clone()) {
+                continue;
+            }
             let path = root.join(&summary.path);
-            if !path.is_dir() {
+            let report_path = path.join("report.json");
+            let Ok(report) = androidforge_core::util::read_json::<RunReport>(&report_path) else {
+                continue;
+            };
+            if !same_project_scope(&report.project_root, &project_root) {
                 continue;
             }
             runs.push((summary, path));
         }
     }
     if runs.is_empty() {
-        return resolve_run_dir(&ctx.paths.artifacts_dir, "latest");
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            format!("no completed AndroidForge runs exist for project {project_root}"),
+        )
+        .with_suggestion("Run a command that creates a run report for this project first.")
+        .with_suggestion("Pass --project <dir> to select another project."));
     }
     runs.sort_by(|(left, _), (right, _)| {
         left.started_at
             .cmp(&right.started_at)
             .then_with(|| left.run_id.cmp(&right.run_id))
     });
-    let preferred = runs
-        .iter()
-        .rev()
-        .find(|(summary, _)| summary.status != RunStatus::Passed)
-        .or_else(|| runs.last())
-        .expect("runs is non-empty");
-    Ok(preferred.1.clone())
+    let selected = if failures_only {
+        runs.iter()
+            .rev()
+            .find(|(summary, _)| summary.status != RunStatus::Passed)
+            .ok_or_else(|| {
+                ForgeError::new(
+                    ErrorCode::InvalidArgument,
+                    format!("no failed AndroidForge runs exist for project {project_root}"),
+                )
+                .with_suggestion("Use `latest` to inspect the newest completed run.")
+            })?
+    } else {
+        runs.last().expect("runs is non-empty")
+    };
+    Ok(selected.1.clone())
 }
 
 fn resolve_report_dir(ctx: &CliContext, spec: &str) -> Result<PathBuf> {
@@ -1310,10 +1348,10 @@ fn summary_json(report: &RunReport, dir: &std::path::Path) -> serde_json::Value 
 }
 
 async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSuccess> {
-    let dir = if args.run == "latest" {
-        resolve_latest_explain_dir(ctx)?
-    } else {
-        resolve_report_dir(ctx, &args.run)?
+    let dir = match args.run.as_str() {
+        "latest" => resolve_latest_run_dir(ctx, false)?,
+        "latest-failure" => resolve_latest_run_dir(ctx, true)?,
+        _ => resolve_report_dir(ctx, &args.run)?,
     };
     let report: RunReport = androidforge_core::util::read_json(&dir.join("report.json"))?;
     let explanation = explain_report(&report);
@@ -1326,6 +1364,32 @@ async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSu
         None
     };
     let mut result = serde_json::to_value(&explanation)?;
+    if args.run == "latest"
+        && report.status == RunStatus::Passed
+        && let Some(actions) = result
+            .get_mut("next_actions")
+            .and_then(serde_json::Value::as_array_mut)
+    {
+        actions.insert(
+            0,
+            serde_json::json!({
+                "reason": "The newest completed run passed. Use latest-failure to inspect the newest failed run.",
+                "priority": "high",
+                "command": {
+                    "argv": [
+                        "androidforge",
+                        "report",
+                        "explain",
+                        "latest-failure",
+                        "--project",
+                        ctx.paths.project_root.to_string_lossy(),
+                        "--json"
+                    ]
+                },
+                "destructive": false
+            }),
+        );
+    }
     if let Some(object) = result.as_object_mut() {
         object.insert(
             "run_dir".to_string(),

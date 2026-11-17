@@ -56,15 +56,20 @@ The new schemas cover:
   `ref`/`role` node handles,
   freshness, display, foreground, focus, interactive `actionable` nodes, non-interactive `context`
   text, scrollables, visible text, per-node `clickable`/`enabled`/`editable`, hierarchy metadata and raw
-  XML path. `nodes` appears only with `--full`. Refs are valid only with the same observation token,
-  session and device; they are never permanent node identities. `actionable_total`/`actionable_truncated` and
+  XML path. `nodes` appears only with `--full`. Refs are derived from node identity, stay stable while
+  that identity is unchanged, and are accepted only together with the same observation token, session
+  and device. Context nodes that are actionable through a clickable ancestor carry
+  `actionable_via: "ancestor"`. `actionable_total`/`actionable_truncated` and
   `context_total`/`context_truncated` make the compact caps explicit.
 - `ui-diff.schema.json` - from/to tokens plus compact added, removed, modified, focus, package and
   activity changes, totals and truncation flag. `--full` raises the list cap from 12 to 100. Pure layout
   movement is deliberately not reported as a modification.
 - `diagnosis.schema.json` - category, code, confidence, summary, alternatives, evidence references,
-  argv next actions, versioned fingerprint, project root and artifacts. Categories include `ui_automation`
-  for UIAutomator helper failures. `report` and `evidence_excerpts` appear with `--full`.
+  argv next actions, versioned fingerprint, project root and artifacts. Categories include
+  `element_reference` for ref identity/actionability failures and `observation` for missing, expired or
+  session-mismatched observation tokens, plus `ui_automation` for UIAutomator helper failures.
+  `report explain latest` and `report bundle latest` are project-scoped; `latest-failure` selects the
+  newest failed/partial/cancelled/interrupted run. `report` and `evidence_excerpts` appear with `--full`.
 - `session-ensure.schema.json` - `session_id`, acquisition mode, readiness, lease metadata, recovery and
   warnings. Expiry is advisory (`needs_reconciliation`) and does not imply device termination.
 - `repair-plan.schema.json` - read-only flag, issue severities, detection details and repair actions with
@@ -77,8 +82,9 @@ The new schemas cover:
   kind, split count/hashes, `.apks` archive SHA-256 and sorted-hash split-set equivalence.
 - `performance.schema.json` - explicit cold-start flag, startup `TotalTime`/`WaitTime`/`ThisTime`, gfxinfo
   frame/jank percentiles, meminfo PSS/RSS/heaps, CPU percentages, command/evidence excerpts and
-  `unknown_reason` for every unavailable metric. Values are measured or explicitly unknown; nothing is
-  inferred from a version string or a missing field.
+  `unknown_reason` for every unavailable metric. Results also carry `run_id`, `run_dir` and artifact
+  paths. Values are measured or explicitly unknown; nothing is inferred from a version string or a
+  missing field.
 - `agent-brief.schema.json` - the compact project/session/device/app/screen/last-run snapshot returned
   by `agent brief`, with `next_actions` and warnings.
 

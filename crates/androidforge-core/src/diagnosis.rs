@@ -27,6 +27,8 @@ pub enum DiagnosisCategory {
     Anr,
     Selector,
     SelectorAmbiguous,
+    ElementReference,
+    Observation,
     UiAutomation,
     Timeout,
     Assertion,
@@ -51,6 +53,8 @@ impl DiagnosisCategory {
             Self::Anr => "anr",
             Self::Selector => "selector",
             Self::SelectorAmbiguous => "selector_ambiguous",
+            Self::ElementReference => "element_reference",
+            Self::Observation => "observation",
             Self::UiAutomation => "ui_automation",
             Self::Timeout => "timeout",
             Self::Assertion => "assertion",
@@ -247,6 +251,14 @@ fn category_for_code(code: ErrorCode) -> Option<DiagnosisCategory> {
         }
         ErrorCode::SelectorNotFound => Some(C::Selector),
         ErrorCode::SelectorAmbiguous => Some(C::SelectorAmbiguous),
+        ErrorCode::ElementRefUnknown
+        | ErrorCode::ElementRefStale
+        | ErrorCode::ElementIdentityChanged
+        | ErrorCode::ElementNotActionable
+        | ErrorCode::ElementDeviceMismatch => Some(C::ElementReference),
+        ErrorCode::ObservationNotFound
+        | ErrorCode::ObservationExpired
+        | ErrorCode::ObservationSessionMismatch => Some(C::Observation),
         ErrorCode::UiAssertionFailed | ErrorCode::TextVerificationFailed => Some(C::Assertion),
         ErrorCode::UiHierarchyInvalid => Some(C::Application),
         ErrorCode::UiAutomatorUnavailable => Some(C::UiAutomation),
@@ -260,9 +272,6 @@ fn category_for_code(code: ErrorCode) -> Option<DiagnosisCategory> {
         | ErrorCode::InvalidCommand => Some(C::Configuration),
         ErrorCode::Interrupted => Some(C::Interrupted),
         ErrorCode::PostconditionTimeout => Some(C::Assertion),
-        ErrorCode::ObservationNotFound
-        | ErrorCode::ObservationExpired
-        | ErrorCode::ObservationSessionMismatch => Some(C::Configuration),
         _ => None,
     }
 }
@@ -519,6 +528,53 @@ fn next_actions(
                     ));
                 }
             }
+        }
+        DiagnosisCategory::ElementReference => {
+            let mut observe = argv(&["androidforge", "ui", "observe"]);
+            observe.extend(session.clone());
+            observe.push("--json".to_string());
+            actions.push(action(
+                "Re-observe and choose a ref from the current `actionable` list, or a context ref marked `actionable_via: ancestor`.",
+                "high",
+                observe,
+            ));
+            actions.push(action(
+                "Inspect the stored failure to see the exact ref and observed identity that were rejected.",
+                "normal",
+                [
+                    "androidforge",
+                    "report",
+                    "show",
+                    report.run_id.as_str(),
+                    "--json",
+                ],
+            ));
+            actions.push(action(
+                "The action was refused before dispatch; never retry it with raw text or coordinates.",
+                "normal",
+                ["androidforge", "context", "--json"],
+            ));
+        }
+        DiagnosisCategory::Observation => {
+            let mut observe = argv(&["androidforge", "ui", "observe"]);
+            observe.extend(session.clone());
+            observe.push("--json".to_string());
+            actions.push(action(
+                "Create a fresh observation token; the referenced token is missing, expired or belongs to another session.",
+                "high",
+                observe,
+            ));
+            actions.push(action(
+                "Inspect the stored failure for the requested token and session identity.",
+                "normal",
+                [
+                    "androidforge",
+                    "report",
+                    "show",
+                    report.run_id.as_str(),
+                    "--json",
+                ],
+            ));
         }
         DiagnosisCategory::UiAutomation => {
             let mut observe = argv(&["androidforge", "ui", "observe"]);
@@ -1114,6 +1170,64 @@ mod tests {
                 .iter()
                 .any(|action| { action.command.argv.iter().any(|arg| arg == "observe") })
         );
+    }
+
+    #[test]
+    fn element_reference_errors_are_classified_with_targeted_actions() {
+        for (code, message) in [
+            (ErrorCode::ElementRefStale, "target path no longer exists"),
+            (
+                ErrorCode::ElementIdentityChanged,
+                "the element at this path changed identity",
+            ),
+            (
+                ErrorCode::ElementNotActionable,
+                "the referenced element has no actionable semantics",
+            ),
+        ] {
+            let explanation = explain_report(&report_with(code, message));
+            assert_eq!(
+                explanation.diagnosis.category,
+                DiagnosisCategory::ElementReference,
+                "{code:?}"
+            );
+            assert_eq!(explanation.diagnosis.confidence, Confidence::High);
+            assert!(
+                explanation
+                    .next_actions
+                    .iter()
+                    .any(|action| { action.command.argv.iter().any(|arg| arg == "observe") })
+            );
+        }
+    }
+
+    #[test]
+    fn observation_store_errors_are_not_configuration_failures() {
+        for code in [
+            ErrorCode::ObservationNotFound,
+            ErrorCode::ObservationExpired,
+            ErrorCode::ObservationSessionMismatch,
+        ] {
+            let explanation = explain_report(&report_with(code, "observation token is missing"));
+            assert_eq!(
+                explanation.diagnosis.category,
+                DiagnosisCategory::Observation,
+                "{code:?}"
+            );
+            assert_eq!(explanation.diagnosis.confidence, Confidence::High);
+            assert!(
+                explanation
+                    .next_actions
+                    .iter()
+                    .any(|action| { action.command.argv.iter().any(|arg| arg == "observe") })
+            );
+            assert!(
+                !explanation
+                    .next_actions
+                    .iter()
+                    .any(|action| { action.command.argv.iter().any(|arg| arg == "config") })
+            );
+        }
     }
 
     #[test]

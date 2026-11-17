@@ -8,6 +8,46 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.9.1] - 2026-11-17
+
+Stability patch for the issues found by the CalcSuite, DiscountHunter and IronPulse v0.9.0
+validations.
+
+### Fixed
+
+- Observation retention now orders by recorded `observed_at` (then mtime) instead of random token
+  filenames, prunes before writing, and never evicts the observation just written. A store that
+  cannot evict fails explicitly instead of returning an unusable token.
+- Refs no longer include the observation token. Unchanged nodes keep the same ref across repeated
+  observations; changed identity still produces a different ref.
+- `ui tap`/`ui long-press --ref` accept context text inside a clickable ancestor and dispatch on that
+  ancestor. Observations expose `actionable_via: "ancestor"` for those nodes.
+- `--clickable` matches a clickable ancestor again instead of requiring the node itself to be
+  clickable.
+- `E_SELECTOR_NOT_FOUND` prioritizes the requested label and reports `visible_labels_total` and
+  `visible_labels_truncated`.
+- `report explain` classifies `E_ELEMENT_REF_*`, `E_ELEMENT_IDENTITY_CHANGED`,
+  `E_ELEMENT_NOT_ACTIONABLE`, `E_ELEMENT_DEVICE_MISMATCH` as `element_reference` and
+  `E_OBSERVATION_*` as `observation`, with targeted next actions. Observation-store failures are not
+  auto-resolved by an unrelated passing run.
+- `report explain` and `report bundle` use one project-scoped selector: `latest` is the newest
+  completed run and `latest-failure` is the newest failed/partial run. Runs from other projects are
+  never selected.
+- Brief `agent test` keeps compact stage entries and `next_actions`.
+- The bundle `manifest.json` records `checksums_verified:true` after successful verification.
+- `diagnostics performance` returns `run_id`, `run_dir` and artifact paths; the brief summary includes
+  the jank frame sample.
+- Hook verification supports `ui_text`, `ui_activity` and `ui_package` postconditions. The IronPulse
+  example hooks use them.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.9.1`.
+- `schema/observation.schema.json`, `schema/diagnosis.schema.json`, `schema/hook.schema.json` and
+  `schema/performance.schema.json` document the new fields.
+- `report explain latest` on a passing run adds a `latest-failure` next action.
+- Docs and examples use `latest-failure` when the intent is the newest failure.
+
 ## [0.9.0] - 2026-11-17
 
 Agent Mode. Adds compact/brief output profiles, a start-of-turn brief, shorter handles and command
@@ -478,7 +518,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.1
 [0.9.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.0
 [0.8.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.8.0
 [0.7.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.1

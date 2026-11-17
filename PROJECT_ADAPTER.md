@@ -203,11 +203,23 @@ app can receive without weakening its manifest. This does not work for release b
 Hook verification supports:
 
 - `shell` or `command` to read app state;
+- `ui_text`, `ui_activity` and/or `ui_package` to prove the hook reached the expected screen. This
+  catches shell intents that exit 0 while the app stays on the previous route;
 - `must_change` to require output different from the pre-hook baseline;
 - `expect_contains` / `expect_not_contains`;
 - `timeout_secs` and `env`.
 
-The verification command is polled until it passes or times out. A failed postcondition returns
+```toml
+[hooks.focus-streak]
+type = "shell"
+action = "am start -W -n com.example.app/.MainActivity -a com.example.widget.OPEN_STREAK"
+timeout_secs = 30
+
+[hooks.focus-streak.verify]
+ui_text = "CURRENT STREAK"
+```
+
+The UI expectation is polled until it passes or times out. A failed postcondition returns
 `E_HOOK_VERIFICATION_FAILED` and prevents the conformance from treating the hook as proof.
 
 ## Conformance

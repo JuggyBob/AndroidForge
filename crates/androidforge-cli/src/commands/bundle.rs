@@ -79,7 +79,11 @@ struct Payload {
 
 pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result<CommandSuccess> {
     let format = bundle_format(args)?;
-    let dir = resolve_run(ctx, &args.run)?;
+    let dir = match args.run.as_str() {
+        "latest" => crate::commands::report::resolve_latest_run_dir(ctx, false)?,
+        "latest-failure" => crate::commands::report::resolve_latest_run_dir(ctx, true)?,
+        _ => resolve_run(ctx, &args.run)?,
+    };
     let report: RunReport = read_json(&dir.join("report.json"))?;
     let explanation = explain_report(&report);
     let (butter_reports, unreadable) = load_reports(ctx);
@@ -508,7 +512,11 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
                     "This indicates a bug or filesystem corruption; the run directory was not modified.",
                 ));
             }
+            // The manifest is not part of its own checksum set, so rebuild it
+            // after verification. The ZIP written to disk must not claim
+            // `checksums_verified:false` after a successful verification.
             manifest.checksums_verified = true;
+            let bytes = build_zip(&payloads, &manifest)?;
             ensure_dir(output.parent().unwrap_or(Path::new(".")))?;
             write_atomic(&output, &bytes)?;
             // Reopen the written file and verify it again so a short write or
@@ -1126,6 +1134,36 @@ mod tests {
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("manifest.json").is_ok());
         assert!(archive.by_name("summary.json").is_ok());
+    }
+
+    #[test]
+    fn rebuilt_manifest_records_successful_verification() {
+        let payloads = vec![payload("summary.json", b"{\"ok\":true}\n")];
+        let mut manifest = manifest();
+        manifest.entries = payloads
+            .iter()
+            .map(|payload| BundleEntry {
+                path: payload.path.clone(),
+                kind: payload.kind.clone(),
+                size_bytes: payload.bytes.len() as u64,
+                sha256: sha256_hex(&payload.bytes),
+                source: None,
+            })
+            .collect();
+        manifest.total_payload_bytes = payloads[0].bytes.len() as u64;
+        let bytes = build_zip(&payloads, &manifest).unwrap();
+        assert!(verify_zip(&bytes, &manifest).unwrap());
+        manifest.checksums_verified = true;
+        let bytes = build_zip(&payloads, &manifest).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut text = String::new();
+        archive
+            .by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        let bundled: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(bundled["checksums_verified"], true);
     }
 
     #[test]

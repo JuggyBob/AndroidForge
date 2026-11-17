@@ -1,8 +1,91 @@
 # Verification record
 
-This document records what was actually run for the `0.9.0` Alpha delivery, the `0.8.0` delivery, the
-`0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation,
-desktop workflow validation and packaging validation from areas that were not exercised.
+This document records what was actually run for the `0.9.1` patch, the `0.9.0` Alpha delivery, the
+`0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records.
+It separates automated checks, real Android validation, desktop workflow validation and packaging
+validation from areas that were not exercised.
+
+## v0.9.1 verification (2026-11-17)
+
+### Scope
+
+Stability patch for the CalcSuite, DiscountHunter and IronPulse v0.9.0 findings: observation
+retention, ref stability, context refs through clickable ancestors, `--clickable` matching, selector
+label diagnostics, reference/observation diagnosis, project-scoped `latest`/`latest-failure`, bundle
+manifest verification, performance run identity and hook UI postconditions.
+
+### Automated checks
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` and the release build passed.
+- `cargo test --workspace` reported 297 passed, 0 failed across 16 test executables.
+- New regression tests cover retention beyond 20 observations, ref stability for unchanged nodes and
+  change detection for modified identity, `actionable_via: ancestor` in compact observations,
+  clickable-ancestor selector matching, requested-label prioritization plus
+  `visible_labels_total`/`visible_labels_truncated`, `element_reference`/`observation` diagnosis,
+  recurrence non-resolution for observation-store errors, project-scoped `latest`/`latest-failure`,
+  verified internal bundle manifests, performance identity and brief `agent test` stages/actions.
+
+### Real Android validation (Android 16 / API 36, x86_64 emulator)
+
+Session `ses-35e5a130201c`, owner `af091-verify`, serial `emulator-5554`, isolated
+`ANDROIDFORGE_HOME=C:\Users\Ivan\AppData\Local\Temp\opencode\af091-verify-home`.
+
+- **Ref stability:** two observations with no action between returned different tokens
+  (`obs-3724a83323d2`, `obs-bb27f33b569d`) but the same ref for every common compact node (18/18
+  stable, including 2/2 actionable). A changed label produced a different ref in the unit test.
+- **Observation retention:** 25 observations in one session kept the store at 20, the final token
+  existed on disk and a subsequent `ui wait --ref el-3025ed29b16d --expect-token obs-20e3b6aac162`
+  matched. Five additional rapid observations persisted 5/5 at the cap.
+- **Context ref through a clickable ancestor:** the Settings `Search Settings` context node reported
+  `actionable_via: "ancestor"`; `ui tap --ref el-c9c1d37149aa --expect-token obs-...` succeeded with
+  `used_clickable_ancestor:true`, tap `(540,243)`, receipt `effect:package_changed`.
+- **`--clickable`:** `ui find --text "Search Settings" --clickable` returned one match with
+  `clickable:false` and `parent_clickable:true`; `ui tap --text "Search Settings" --clickable`
+  succeeded with `used_clickable_ancestor:true`.
+- **Selector labels:** a non-matching `--text "Apps" --class EditText --clickable` error put `Apps`
+  first in `visible_labels`, with `visible_labels_total:34` and `visible_labels_truncated:false`.
+  The unit case with 51 labels returns 40 labels and sets `visible_labels_truncated:true`.
+- **Reference diagnosis:** stale-ref run `20261117-155740-a0ff02a4_ui-tap-referenced-element` was
+  classified `element_reference`/`high` with code `E_ELEMENT_REF_STALE` and observe/show/context next
+  actions.
+- **Observation diagnosis:** missing-token run `20261117-155756-740e5b5e_ui-tap-referenced-element`
+  was classified `observation`/`high` with code `E_OBSERVATION_NOT_FOUND`.
+- **Report and bundle selection:** after a newer passed run
+  (`20261117-160117-1a3c57f8_verify-pass`), `report explain latest` selected it, returned
+  `status:passed` and added a `latest-failure` next action; `report bundle latest` selected the same
+  run. `report explain latest-failure` and `report bundle latest-failure` both selected the same
+  newest failure (`20261117-155840-f24894e2_ui-tap`). `report latest` with `--project` did not select
+  runs from other projects.
+- **Bundle manifest:** the latest-failure bundle reported `verified:true`; the `manifest.json` inside
+  the ZIP had `checksums_verified:true` and the same `run_id` as the CLI result.
+- **Performance identity:** full run `20261117-155716-ca3532cc_diagnostics-performance` returned the
+  same `run_id` in the envelope and result, an existing `run_dir`, and one artifact. Brief output
+  reported `com.android.settings: startup 441ms, jank 11.1% (3/27 frames), PSS 62434 KiB, CPU 0.0%`
+  in 1,252 bytes.
+- **Hook UI postcondition:** `hook run open-settings-ok` reached Settings and passed with
+  `verification.passed:true`, `attempts:1`, activity `com.android.settings.homepage.SettingsHomepageActivity`,
+  package `com.android.settings` and text `Search Settings`. A hook that declared
+  `ui_text = "AF_V091_NO_SUCH_SCREEN"` failed with `E_HOOK_VERIFICATION_FAILED` after 2 attempts and
+  reported the missing text.
+- **Brief `agent test`:** a 12-stage dry run returned 12 compact stage entries and one
+  `result.next_actions` entry in 2,843 bytes.
+
+### Packaging and release
+
+- Local package:
+  - CLI ZIP 5,198,141 bytes /
+    `07cabe07968f86e6fa07747dd418e69aac08755f0a6f599859f12d5833dcb312`;
+  - desktop ZIP 11,961,092 bytes /
+    `37fa7dd157f182dc43854018c956ad3b67b83c0cf850b6a9b4a1f6f54f9534cd`;
+  - installer 9,796,713 bytes /
+    `63b2003261799408f2020f1793b61ef43101c4a5f4bceecc026c3270a9444f1a`.
+- A clean extraction reported CLI/desktop `0.9.1`, listed 24 schemas, exposed the new
+  `element_reference`/`observation` diagnosis categories and the hook `ui_text`/`ui_activity`/
+  `ui_package` fields, and launched the desktop.
+- The local installer installed CLI/desktop `0.9.1`, exposed the updated hook schema and uninstalled
+  cleanly with the install directory removed.
+- Downloaded-asset and release metadata verification is recorded after publication.
 
 ## v0.9.0 verification (2026-11-17)
 

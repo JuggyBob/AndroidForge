@@ -42,9 +42,14 @@ impl From<Rect> for ObservationBounds {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ObservationNode {
-    /// Opaque handle valid only within this observation token.
+    /// Stable handles are derived from node identity. They remain valid for
+    /// actions only together with the observation token that produced them.
     #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
+    /// Present on context nodes that can be acted on through a clickable
+    /// ancestor. Such refs are accepted by `ui tap` and `ui long-press`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actionable_via: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub path: String,
@@ -125,6 +130,7 @@ impl ObservationNode {
         let password = node.password;
         Self {
             reference: None,
+            actionable_via: None,
             role: Some(role_for(node)),
             path: node.path.clone(),
             depth: node.depth,
@@ -419,25 +425,90 @@ fn xml_path(paths: &ForgePaths, session_id: &str, token: &str) -> PathBuf {
     observations_dir(paths, session_id).join(format!("{}.xml", sanitize_component(token)))
 }
 
-fn prune_observations(paths: &ForgePaths, session_id: &str) {
+/// Evict the oldest observations until at most `target` remain.
+///
+/// Ordering is by the stored `observed_at` value, then file modification time
+/// and finally the token. Random token filenames are never used as the primary
+/// order. `keep_token` is always preserved so a just-written observation can
+/// never be evicted by its own retention pass.
+fn prune_observations(
+    paths: &ForgePaths,
+    session_id: &str,
+    target: usize,
+    keep_token: Option<&str>,
+) -> Result<()> {
     let dir = observations_dir(paths, session_id);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                format!(
+                    "could not inspect the observation store {}: {error}",
+                    dir.display()
+                ),
+            )
+            .with_suggestion(
+                "Check that the AndroidForge state directory is writable, then observe again.",
+            ));
+        }
     };
+    let keep_file = keep_token.map(|token| format!("{}.json", sanitize_component(token)));
     let mut json_files = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter(|path| {
+            keep_file
+                .as_deref()
+                .is_none_or(|keep| path.file_name().and_then(|name| name.to_str()) != Some(keep))
+        })
+        .map(|path| {
+            let observed_at = read_json::<ObservationRecord>(&path)
+                .ok()
+                .map(|record| record.observation.observed_at)
+                .unwrap_or_default();
+            let modified = std::fs::metadata(&path)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            let token = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (observed_at, modified, token, path)
+        })
         .collect::<Vec<_>>();
-    if json_files.len() <= OBSERVATION_RETENTION {
-        return;
+    let total = json_files.len() + usize::from(keep_token.is_some());
+    if total <= target {
+        return Ok(());
     }
-    json_files.sort();
-    let remove_count = json_files.len() - OBSERVATION_RETENTION;
-    for path in json_files.into_iter().take(remove_count) {
-        let _ = std::fs::remove_file(&path);
+    let remove_count = total - target;
+    json_files.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    for (.., path) in json_files.into_iter().take(remove_count) {
+        std::fs::remove_file(&path).map_err(|error| {
+            ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                format!(
+                    "could not evict old observation {}: {error}",
+                    path.display()
+                ),
+            )
+            .with_suggestion(
+                "Free space or fix permissions in the AndroidForge state directory, then observe again.",
+            )
+        })?;
         let _ = std::fs::remove_file(path.with_extension("xml"));
     }
+    Ok(())
 }
 
 async fn boot_id_async(adb: &androidforge_adb::AdbClient, serial: &str) -> Option<String> {
@@ -465,13 +536,15 @@ fn display_orientation(rotation: Option<i32>) -> String {
     }
 }
 
-fn reference_for(token: &str, node: &ObservationNode, length: usize) -> String {
+fn reference_for(node: &ObservationNode, length: usize) -> String {
     let bounds = format!(
         "{},{},{},{}",
         node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom
     );
+    // The observation token is deliberately not part of the ref material:
+    // unchanged nodes must keep the same ref across repeated observations.
     let material = format!(
-        "v1|{token}|{}|{}|{}|{}|{}|{}|{bounds}|{}",
+        "v2|{}|{}|{}|{}|{}|{}|{bounds}|{}",
         node.path,
         node.class.as_deref().unwrap_or(""),
         node.package.as_deref().unwrap_or(""),
@@ -485,7 +558,6 @@ fn reference_for(token: &str, node: &ObservationNode, length: usize) -> String {
 }
 
 fn assign_references(observation: &mut Observation) {
-    let token = observation.token.clone();
     let mut references = BTreeMap::new();
     let mut used = BTreeSet::new();
     for node in observation
@@ -501,13 +573,13 @@ fn assign_references(observation: &mut Observation) {
         }
         let mut length = 12;
         let reference = loop {
-            let candidate = reference_for(&token, node, length);
+            let candidate = reference_for(node, length);
             if used.insert(candidate.clone()) {
                 break candidate;
             }
             length += 4;
             if length > 32 {
-                break reference_for(&token, node, 64);
+                break reference_for(node, 64);
             }
         };
         references.insert(node.path.clone(), reference);
@@ -643,27 +715,56 @@ pub async fn resolve_element_reference(
         .session(session.id.clone())
         .device(device.serial.clone()));
     };
-    if usage.requires_actionable()
-        && !observation
-            .actionable
-            .iter()
-            .chain(observation.scrollable.iter())
-            .any(|candidate| candidate.reference.as_deref() == Some(reference))
-    {
+    let self_actionable = observation
+        .actionable
+        .iter()
+        .chain(observation.scrollable.iter())
+        .any(|candidate| candidate.reference.as_deref() == Some(reference));
+    // A context label inside a clickable row is a legitimate tap target: the
+    // UI manager already resolves and dispatches on the nearest clickable
+    // ancestor. Keep this fail-closed by requiring an ancestor that was
+    // observed as clickable; there is no coordinate fallback.
+    let clickable_ancestor = !self_actionable && node.actionable_via.as_deref() == Some("ancestor");
+    if clickable_ancestor && !ctx.config.file.ui.tap_clickable_ancestor {
+        return Err(ForgeError::new(
+            ErrorCode::ElementNotActionable,
+            "the referenced context element is actionable only through a clickable ancestor, but ancestor dispatch is disabled",
+        )
+        .with_context_string("ref", reference)
+        .with_context_string("setting", "ui.tap_clickable_ancestor")
+        .with_suggestion(
+            "Enable ui.tap_clickable_ancestor in the project adapter, or target the clickable ancestor ref.",
+        )
+        .session(session.id.clone())
+        .device(device.serial.clone()));
+    }
+    if usage.requires_actionable() && !self_actionable && !clickable_ancestor {
         let context_only = observation
             .context
             .iter()
             .any(|candidate| candidate.reference.as_deref() == Some(reference));
         let message = if context_only {
-            "the referenced element is context text, not an actionable element"
+            "the referenced element is context text with no clickable ancestor"
         } else {
             "the referenced element is not in the observation's actionable set"
         };
         return Err(ForgeError::new(ErrorCode::ElementNotActionable, message)
             .with_context_string("ref", reference)
             .with_context_string("use", usage.as_str())
+            .with_context(
+                "actionable_via",
+                observation
+                    .context
+                    .iter()
+                    .find(|candidate| candidate.reference.as_deref() == Some(reference))
+                    .and_then(|candidate| candidate.actionable_via.clone())
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null),
+            )
             .with_suggestion("Choose a ref from the observation's `actionable` list.")
-            .with_suggestion("`ui wait` and `ui assert` may reference context text.")
+            .with_suggestion(
+                "`ui wait` and `ui assert` may reference context text without an ancestor.",
+            )
             .session(session.id.clone())
             .device(device.serial.clone()));
     }
@@ -712,7 +813,7 @@ pub async fn resolve_element_reference(
         scrollable: node.scrollable,
         editable: node.editable,
         password: node.password,
-        actionable_hint: true,
+        actionable_hint: self_actionable,
     };
     if usage.requires_actionable() && !node.enabled {
         return Err(ForgeError::new(
@@ -746,7 +847,7 @@ fn compact_nodes(
         if !node.visible() && !node.focused {
             continue;
         }
-        let compact = ObservationNode::from_node(node);
+        let mut compact = ObservationNode::from_node(node);
         if compact.focused {
             focused = Some(compact.clone());
         }
@@ -812,6 +913,12 @@ fn compact_nodes(
                 actionable.push(compact);
             }
         } else if has_label && !compact.is_layout_container() && compact.meaningful() {
+            // Context text inside a clickable row is a valid tap target through
+            // that ancestor, even when the ancestor itself is a layout
+            // container and therefore not listed as actionable.
+            if hierarchy.clickable_ancestor(node).is_some() {
+                compact.actionable_via = Some("ancestor".to_string());
+            }
             context.push(compact);
         }
     }
@@ -882,6 +989,14 @@ pub async fn collect_observation(
 
     let raw_dir = observations_dir(&ctx.paths, &session.id);
     ensure_dir(&raw_dir)?;
+    // Make room before writing so the new record cannot be selected for
+    // eviction by this observation's own retention pass.
+    prune_observations(
+        &ctx.paths,
+        &session.id,
+        OBSERVATION_RETENTION.saturating_sub(1),
+        None,
+    )?;
     let raw = xml_path(&ctx.paths, &session.id, &token);
     write_atomic(&raw, hierarchy.xml.as_bytes())?;
 
@@ -941,7 +1056,7 @@ pub async fn collect_observation(
         session_id: session.id.clone(),
     };
     write_json_atomic(&observation_path(&ctx.paths, &session.id, &token), &record)?;
-    prune_observations(&ctx.paths, &session.id);
+    prune_observations(&ctx.paths, &session.id, OBSERVATION_RETENTION, Some(&token))?;
     Ok(observation)
 }
 
@@ -1077,14 +1192,23 @@ pub async fn verify_boot_id(
 pub fn latest_observation(paths: &ForgePaths, session_id: &str) -> Option<Observation> {
     let dir = observations_dir(paths, session_id);
     let entries = std::fs::read_dir(dir).ok()?;
-    let mut files = entries
+    let mut records = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|path| {
+            let record = read_json::<ObservationRecord>(&path).ok()?;
+            let modified = std::fs::metadata(&path)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            Some((record.observation.observed_at.clone(), modified, record))
+        })
         .collect::<Vec<_>>();
-    files.sort();
-    let path = files.last()?;
-    let record: ObservationRecord = read_json(path).ok()?;
+    records.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let record = records.pop()?.2;
     let mut observation = record.observation;
     observation.age_ms = chrono::DateTime::parse_from_rfc3339(&observation.observed_at)
         .ok()
@@ -1471,6 +1595,12 @@ pub async fn diff_command(
 mod tests {
     use super::*;
 
+    fn is_ancestor_path(ancestor: &str, path: &str) -> bool {
+        path.len() > ancestor.len()
+            && path.starts_with(ancestor)
+            && path.as_bytes().get(ancestor.len()) == Some(&b'.')
+    }
+
     fn bounds(left: i32, top: i32, right: i32, bottom: i32) -> ObservationBounds {
         ObservationBounds {
             left,
@@ -1483,6 +1613,7 @@ mod tests {
     fn node(path: &str, text: &str, rect: ObservationBounds) -> ObservationNode {
         ObservationNode {
             reference: None,
+            actionable_via: None,
             role: Some("button".to_string()),
             path: path.to_string(),
             depth: 2,
@@ -1762,10 +1893,95 @@ mod tests {
         second.id = "obs-ref-2".to_string();
         second.token = "obs-ref-2".to_string();
         assign_references(&mut second);
+        assert_eq!(
+            first.actionable[0].reference, second.actionable[0].reference,
+            "an unchanged node keeps the same ref across observations"
+        );
+
+        // A changed identity is a different target and must not inherit the
+        // previous ref.
+        let mut relabelled = first.clone();
+        relabelled.id = "obs-ref-3".to_string();
+        relabelled.token = "obs-ref-3".to_string();
+        relabelled.actionable[0].text = Some("Delete".to_string());
+        assign_references(&mut relabelled);
         assert_ne!(
             first.actionable[0].reference,
-            second.actionable[0].reference
+            relabelled.actionable[0].reference
         );
+    }
+
+    #[test]
+    fn retention_evicts_oldest_and_never_the_token_just_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(temp.path());
+        let session = "ses-retention";
+        let base = chrono::Utc::now() - chrono::Duration::minutes(30);
+        let mut tokens = Vec::new();
+        for index in 0..OBSERVATION_RETENTION {
+            let token = format!("obs-retention-{index:02}");
+            let mut record = ObservationRecord {
+                observation: observation(&token, Vec::new()),
+                boot_id: None,
+                session_id: session.to_string(),
+            };
+            record.observation.session_id = session.to_string();
+            record.observation.observed_at =
+                (base + chrono::Duration::minutes(index as i64)).to_rfc3339();
+            write_json_atomic(&observation_path(&paths, session, &token), &record).unwrap();
+            tokens.push(token);
+        }
+        // Pre-write eviction leaves room for exactly one new observation.
+        prune_observations(
+            &paths,
+            session,
+            OBSERVATION_RETENTION.saturating_sub(1),
+            None,
+        )
+        .unwrap();
+        let newest = "obs-newest";
+        let mut record = ObservationRecord {
+            observation: observation(newest, Vec::new()),
+            boot_id: None,
+            session_id: session.to_string(),
+        };
+        record.observation.session_id = session.to_string();
+        record.observation.observed_at = chrono::Utc::now().to_rfc3339();
+        write_json_atomic(&observation_path(&paths, session, newest), &record).unwrap();
+        prune_observations(&paths, session, OBSERVATION_RETENTION, Some(newest)).unwrap();
+
+        assert!(observation_path(&paths, session, newest).is_file());
+        assert!(!observation_path(&paths, session, &tokens[0]).is_file());
+        assert!(observation_path(&paths, session, &tokens[1]).is_file());
+        let remaining = std::fs::read_dir(observations_dir(&paths, session))
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .count();
+        assert_eq!(remaining, OBSERVATION_RETENTION);
+    }
+
+    #[test]
+    fn context_text_inside_a_clickable_layout_is_marked_actionable_via_ancestor() {
+        let hierarchy = UiHierarchy::parse(
+            r#"<hierarchy rotation="0">
+  <node index="0" text="" resource-id="com.example:id/key_row" class="android.widget.LinearLayout" package="com.example" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[0,0][100,100]">
+    <node index="0" text="7" resource-id="" class="android.widget.TextView" package="com.example" clickable="false" enabled="true" focused="false" scrollable="false" bounds="[10,10][90,90]" />
+  </node>
+</hierarchy>"#,
+        )
+        .unwrap();
+        let (actionable, context, _, _) = compact_nodes(&hierarchy);
+        assert!(
+            actionable.is_empty(),
+            "the clickable layout is filtered as a layout container"
+        );
+        let key = context
+            .iter()
+            .find(|node| node.text.as_deref() == Some("7"))
+            .expect("key label");
+        assert_eq!(key.actionable_via.as_deref(), Some("ancestor"));
+        assert!(is_ancestor_path("0", &key.path));
     }
 
     #[test]

@@ -83,6 +83,8 @@
             "anr",
             "selector",
             "selector_ambiguous",
+            "element_reference",
+            "observation",
             "ui_automation",
             "timeout",
             "assertion",

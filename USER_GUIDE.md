@@ -29,7 +29,7 @@ cargo build --workspace --release
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
 
-## 2.1 Agent loop commands (v0.9.0)
+## 2.1 Agent loop commands (v0.9.1)
 
 These commands reduce repeated discovery and inspection. They keep the same JSON envelope, exit codes
 and evidence rules as the rest of the CLI.
@@ -131,6 +131,7 @@ androidforge report recurrences --project . --json
 androidforge report recurrences --project . --since 30d --package com.example.app --status regressed --json
 androidforge report history --fingerprint sha256:<VALUE> --json
 androidforge report bundle latest --output .\evidence.zip --json
+androidforge report bundle latest-failure --output .\failure-evidence.zip --json
 androidforge report bundle latest --dry-run --json
 androidforge report bundle latest --markdown --json
 ```
@@ -191,11 +192,13 @@ androidforge ui wait --session <ID> --ref el-... --expect-token obs-... --timeou
 androidforge ui assert --session <ID> --ref el-... --expect-token obs-... --json
 ```
 
-A `ref` is an opaque handle (12 hex characters) scoped to one observation token, session and device. AndroidForge re-reads
+A `ref` is a stable handle (12 hex characters) derived from node identity and scoped to one observation token, session and device. AndroidForge re-reads
 the hierarchy and validates the node identity immediately before dispatch. Expired tokens, removed or
 changed nodes, wrong devices and non-actionable nodes are explicit errors; there is no text or
 coordinate fallback. Text/clear require an editable field, scroll requires a scrollable node, and
-wait/assert may reference context text that is not itself actionable. Re-observe after navigation.
+wait/assert may reference context text that is not itself actionable. Context text inside a clickable
+row is marked `actionable_via: "ancestor"` and can be tapped or long-pressed through that ancestor.
+Observe again after navigation; unchanged nodes keep the same ref.
 
 ### Sequential device matrix
 
@@ -245,15 +248,17 @@ application state are never retried.
 
 ```powershell
 androidforge report explain latest --json
+androidforge report explain latest-failure --json
 androidforge report explain <RUN_ID> --full --json
 androidforge report explain <RUN_ID> --markdown
 ```
 
 Explanations are deterministic and offline. They include category, stable error code, confidence,
 curated evidence, alternatives, exact `argv` next actions, a stable fingerprint and the project root.
-`report explain latest` prefers the newest failed/partial/cancelled/interrupted run when one exists.
-Run lookup searches the project, current directory and ancestor artifact stores; `report list --all`
-lists them together. Run commands from `project_root` or pass `--project`.
+`latest` is the newest completed run in this project; `latest-failure` is the newest failed, partial,
+cancelled, interrupted or abandoned run. `report bundle` uses the same selection. Both are strictly
+scoped to the project's recorded root, so a newer run from another app is never selected.
+`report list --all` lists runs across stores; run commands from `project_root` or pass `--project`.
 
 ### Read-only repair planning
 
@@ -911,7 +916,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.9.0` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.9.1` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents
@@ -926,8 +931,3 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 8. Treat `--yes`, `--fresh`, `clear-data`, snapshot load, time/network changes and raw ADB as destructive.
 9. In the desktop, check the selected project/session in every confirmation; closing the app does not
    release or stop anything. Cancelling a run preserves the emulator.
-
-
-
-
-

@@ -56,6 +56,16 @@ pub struct HookVerification {
     pub expect_contains: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect_not_contains: Option<String>,
+    /// Require this exact text or content description to be visible after the
+    /// hook. This proves the UI route, not just the adb exit code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_text: Option<String>,
+    /// Require the foreground activity to equal this value or end with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_activity: Option<String>,
+    /// Require the foreground package to equal this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_package: Option<String>,
     /// Require the verification output to differ from the pre-hook baseline.
     pub must_change: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

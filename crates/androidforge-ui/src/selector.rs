@@ -59,7 +59,7 @@ impl Selector {
         Ok(())
     }
 
-    pub fn matches(&self, node: &UiNode) -> bool {
+    pub fn matches(&self, hierarchy: &UiHierarchy, node: &UiNode) -> bool {
         if let Some(text) = &self.text
             && node.text.as_deref() != Some(text.as_str())
         {
@@ -98,10 +98,15 @@ impl Selector {
         {
             return false;
         }
-        if let Some(clickable) = self.clickable
-            && node.clickable != clickable
-        {
-            return false;
+        if let Some(clickable) = self.clickable {
+            // A clickable ancestor makes a label actionable for tap purposes.
+            // This is the same rule the UI manager applies when dispatching, so
+            // `--clickable` must not reject an element it would otherwise tap.
+            let is_clickable =
+                node.clickable || (clickable && hierarchy.clickable_ancestor(node).is_some());
+            if is_clickable != clickable {
+                return false;
+            }
         }
         if let Some(enabled) = self.enabled
             && node.enabled != enabled
@@ -243,7 +248,7 @@ pub fn find(hierarchy: &UiHierarchy, selector: &Selector) -> Result<Vec<UiMatch>
         .nodes
         .iter()
         .enumerate()
-        .filter(|(_, node)| selector.matches(node))
+        .filter(|(_, node)| selector.matches(hierarchy, node))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     Ok(indices
@@ -261,7 +266,7 @@ pub fn select(hierarchy: UiHierarchy, selector: &Selector) -> Result<Selection> 
         .nodes
         .iter()
         .enumerate()
-        .filter(|(_, node)| selector.matches(node))
+        .filter(|(_, node)| selector.matches(&hierarchy, node))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     if indices.is_empty() {
@@ -380,7 +385,31 @@ pub fn selector_not_found(hierarchy: &UiHierarchy, selector: &Selector) -> Forge
         .collect::<Vec<_>>();
     labels.sort();
     labels.dedup();
-    labels.truncate(40);
+    // Put the requested label (or labels containing it) first so a bounded
+    // diagnostic list cannot hide the very label the caller asked about.
+    let requested = selector
+        .text
+        .as_deref()
+        .or(selector.content_desc.as_deref())
+        .or(selector.resource_id.as_deref())
+        .or(selector.text_contains.as_deref())
+        .or(selector.content_desc_contains.as_deref())
+        .filter(|value| !value.is_empty());
+    if let Some(requested) = requested {
+        labels.sort_by_key(|label| {
+            if label == requested {
+                0
+            } else if label.contains(requested) {
+                1
+            } else {
+                2
+            }
+        });
+    }
+    let label_total = labels.len();
+    let label_limit = 40;
+    labels.truncate(label_limit);
+    let labels_truncated = label_total > label_limit;
     ForgeError::new(
         ErrorCode::SelectorNotFound,
         "no UI element matched the requested selector",
@@ -394,6 +423,8 @@ pub fn selector_not_found(hierarchy: &UiHierarchy, selector: &Selector) -> Forge
         "visible_labels",
         serde_json::to_value(labels).unwrap_or(Value::Null),
     )
+    .with_context("visible_labels_total", label_total)
+    .with_context("visible_labels_truncated", labels_truncated)
     .with_suggestion("Run `androidforge ui dump` and inspect the current hierarchy.")
     .with_suggestion("Use --contains for partial text matching if the label is dynamic.")
     .with_suggestion("Use `androidforge ui wait` if the screen may still be loading.")
@@ -485,5 +516,51 @@ mod tests {
         let error = select(hierarchy, &selector).unwrap_err();
         assert_eq!(error.code(), ErrorCode::SelectorNotFound);
         assert!(error.body().context.contains_key("focused_nodes"));
+    }
+
+    #[test]
+    fn clickable_flag_accepts_a_clickable_ancestor() {
+        let hierarchy = UiHierarchy::parse(
+            r#"<hierarchy rotation="0">
+  <node index="0" text="" resource-id="com.example:id/nav_settings" class="android.view.View" package="com.example" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[0,0][500,200]">
+    <node index="0" text="Settings" resource-id="" class="android.widget.TextView" package="com.example" clickable="false" enabled="true" focused="false" scrollable="false" bounds="[10,10][200,100]" />
+  </node>
+</hierarchy>"#,
+        )
+        .unwrap();
+        let selector = Selector {
+            text: Some("Settings".to_string()),
+            clickable: Some(true),
+            ..Selector::default()
+        };
+        let matches = find(&hierarchy, &selector).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert!(!matches[0].clickable);
+        assert_eq!(matches[0].parent_clickable, Some(true));
+        assert!(select(hierarchy, &selector).is_ok());
+    }
+
+    #[test]
+    fn missing_selector_prioritizes_the_requested_label_and_reports_truncation() {
+        let mut xml = String::from("<hierarchy rotation=\"0\">\n");
+        for index in 0..50 {
+            xml.push_str(&format!(
+                "<node index=\"{index}\" text=\"Item {index:02}\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.example\" clickable=\"false\" enabled=\"true\" focused=\"false\" scrollable=\"false\" bounds=\"[0,{index}][100,{}]\" />\n",
+                index + 1
+            ));
+        }
+        xml.push_str("<node index=\"50\" text=\"Settings\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.example\" clickable=\"false\" enabled=\"true\" focused=\"false\" scrollable=\"false\" bounds=\"[0,60][100,70]\" />\n</hierarchy>");
+        let hierarchy = UiHierarchy::parse(&xml).unwrap();
+        let selector = Selector {
+            text: Some("Settings".to_string()),
+            ..Selector::default()
+        };
+        let error = selector_not_found(&hierarchy, &selector);
+        assert_eq!(error.code(), ErrorCode::SelectorNotFound);
+        let labels = error.body().context["visible_labels"].as_array().unwrap();
+        assert_eq!(labels[0], "Settings");
+        assert_eq!(labels.len(), 40);
+        assert_eq!(error.body().context["visible_labels_total"], 51);
+        assert_eq!(error.body().context["visible_labels_truncated"], true);
     }
 }

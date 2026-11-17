@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.9.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.9.1`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
 > [Project status](#project-status) before relying on it.
@@ -80,6 +80,17 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
+
+## What is new in v0.9.1
+
+- **Long-session reliability:** observation retention now evicts by recorded time, never deletes the observation just written, and fails explicitly if the store cannot evict. Refs are derived from node identity instead of the observation token, so unchanged nodes keep the same ref across repeated observations.
+- **Reference actions:** `ui tap`/`ui long-press` accept refs to context text inside a clickable ancestor and dispatch on that ancestor, matching `--text` behavior. Observations mark these nodes with `actionable_via: "ancestor"`.
+- **Selector diagnostics:** `--clickable` again matches a clickable ancestor, and `E_SELECTOR_NOT_FOUND` puts the requested label first and reports `visible_labels_total`/`visible_labels_truncated`.
+- **Failure taxonomy:** `element_reference` and `observation` are first-class diagnosis categories with targeted next actions; observation-store errors are no longer auto-resolved by an unrelated passing run.
+- **Consistent report selection:** `report explain` and `report bundle` share strict project scoping. `latest` is the newest completed run and `latest-failure` is the newest failed run.
+- **Evidence integrity:** bundle `manifest.json` records `checksums_verified:true` after a successful verification; performance results carry `run_id`, `run_dir` and artifact paths, and the brief summary includes the jank frame sample.
+- **Hook route proof:** hook verification supports `ui_text`, `ui_activity` and `ui_package`, so an ADB exit 0 cannot claim success when the app never reached the expected screen. The IronPulse example hooks use this.
+- **Brief agent test:** brief output keeps compact stage entries and `next_actions`.
 
 ## What is new in v0.9.0
 
@@ -178,7 +189,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.9.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.9.1` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -226,7 +237,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.9.0)
+### Agent loop quick start (v0.9.1)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -246,9 +257,9 @@ androidforge ui observe --session ses-... --since obs-... --json
 androidforge ui diff --session ses-... --from obs-... --json
 
 # Explain a failure, see whether it is new/recurring/regressed, and build evidence.
-androidforge report explain latest --json
+androidforge report explain latest-failure --json
 androidforge report recurrences --project . --json
-androidforge report bundle latest --output .\\evidence.zip --json
+androidforge report bundle latest-failure --output .\\evidence.zip --json
 
 # Use a stable element reference, then run a sequential device matrix.
 androidforge ui observe --session ses-... --json
@@ -388,10 +399,12 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.9.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD matrix. v0.9.0 adds agent output profiles, `agent brief`, shorter
-refs/tokens, command aliases and measured output reduction on top of v0.8.0 split-artifact identity,
-refs and performance evidence. See [VERIFICATION.md](VERIFICATION.md) and [case-studies/](case-studies/).
+**Alpha `v0.9.1`.** The CLI has been exercised against real apps on Android 16 and Android 14
+emulators, including a two-AVD matrix. v0.9.1 hardens the v0.9.0 Agent Mode: durable observations,
+identity-stable refs, context refs through clickable ancestors, `--clickable` ancestor matching,
+clearer failure taxonomy, project-scoped `latest`/`latest-failure`, verified bundle manifests,
+performance run identity and hook UI postconditions. See [VERIFICATION.md](VERIFICATION.md) and
+[case-studies/](case-studies/).
 
 Validated:
 
@@ -426,6 +439,10 @@ Validated:
 - v0.9.0 real-emulator validation: full/compact/brief observations, compact action receipts,
   brief `agent test`/`report explain`/performance, short refs/tokens, aliases and config/env profile
   selection. Measured reductions are recorded in [VERIFICATION.md](VERIFICATION.md).
+- v0.9.1 real-emulator validation: durable observation retention beyond 20 captures, ref stability
+  across repeated observations, context refs through clickable ancestors, `--clickable` ancestor
+  matching, truncated-label diagnostics, project-scoped `latest`/`latest-failure`, verified bundle
+  manifests, performance run identity and hook UI postconditions.
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
@@ -484,9 +501,3 @@ Bug reports, focused pull requests and real-app reproductions are welcome. Read
 MIT. See [LICENSE](LICENSE).
 
 Copyright (c) 2026 JuggyBob.
-
-
-
-
-
-
