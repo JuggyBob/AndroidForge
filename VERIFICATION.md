@@ -86,8 +86,27 @@ Environment: Android 16 / API 36 `emulator-5554` and Android 14 / API 34 `emulat
 - The portable ZIP was extracted into a clean directory; CLI and desktop reported `0.7.0`; Matrix/health/ref
   help loaded; the desktop launched directly on Matrix with title `AndroidForge`.
 - The installer installed CLI/desktop `0.7.0` and uninstalled cleanly with the install directory removed.
-- All three local asset SHA-256 values matched `SHA256SUMS.txt`. CI-published hashes are recorded after
-  publication.
+- All three local asset SHA-256 values matched `SHA256SUMS.txt`. CI published independent builds; those
+  hashes and download checks are recorded below.
+
+### Published release
+
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.0>
+- Title: `AndroidForge v0.7.0 - Matrix & Device Control`; not a prerelease.
+- Tag: `v0.7.0`, tag object `902d009307f019caeec3cc138a7413e41d66f16a`, commit
+  `6f85a833aa5e669e623e46c5037afe13b30a2cf0`.
+- CI Release workflow `44049055468` passed.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (4,944,437 bytes),
+    `5376cbf2dd0972208e9e52d22a15ea698f93ad4d5a0e562eeb51273816a6f438`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,672,427 bytes),
+    `d9580719aeadc1f5cd2e5ec60b0818ab400196485651a77660c83cf654b91e12`.
+  - `androidforge-windows-x86_64-setup.exe` (9,602,042 bytes),
+    `4940b5239822fb58de8a91cb1e7fef4057d1dd205ec63d5170d4a50f4c08cdfb`.
+- The downloaded portable ZIP reported CLI/desktop `0.7.0`; matrix/health help loaded; the desktop
+  launched directly on Matrix with title `AndroidForge`.
+- The downloaded installer installed CLI/desktop `0.7.0` and uninstalled cleanly.
+- v0.6.0 release assets and tag were left intact.
 
 ### Not exercised
 
