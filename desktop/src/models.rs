@@ -951,6 +951,8 @@ pub struct LogcatPeek {
     pub captured_at: String,
     #[serde(default)]
     pub notes: Vec<String>,
+    #[serde(default)]
+    pub retry: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

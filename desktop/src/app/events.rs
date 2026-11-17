@@ -262,6 +262,7 @@ impl App {
                 self.logcat.last_capture = Some(Instant::now());
                 match result {
                     Ok(peek) => {
+                        self.logcat.retry = peek.retry.clone();
                         self.merge_logcat(peek);
                         self.logcat.error = None;
                     }
@@ -592,6 +593,14 @@ impl App {
             self.logcat.lines.pop_front();
         }
         self.logcat.notes = peek.notes;
+        if let Some(retry) = &self.logcat.retry
+            && retry["retries_used"].as_u64().unwrap_or(0) > 0
+        {
+            self.logcat.notes.push(format!(
+                "logcat read required {} retry attempt(s)",
+                retry["retries_used"].as_u64().unwrap_or(0)
+            ));
+        }
         if peek.truncated {
             self.logcat
                 .notes

@@ -1,8 +1,24 @@
 # Verification record
 
-This document records what was actually run for the `0.7.0` Alpha delivery, followed by the `0.6.0`,
-`0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop
-workflow validation and packaging validation from areas that were not exercised.
+This document records what was actually run for the `0.7.1` patch, the `0.7.0` Alpha delivery, and the
+`0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android validation,
+desktop workflow validation and packaging validation from areas that were not exercised.
+
+## v0.7.1 verification (2026-11-17)
+
+Patch to v0.7.0: desktop Logcat requests `--retries 2` and shows the CLI retry attempt report in its
+notes. This closes the v0.7.0 desktop retry-presentation gap discovered during the final audit without
+moving or rewriting the v0.7.0 tag.
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace` (242 passed, 0 failed) and `cargo build --workspace --release` passed.
+- CLI and desktop report `0.7.1`.
+- Local package: CLI ZIP 4,946,160 bytes / `b647a3d522cea55c614663ded1acf005a8a609999c8356cb93ad2c93a33bab10`;
+  desktop ZIP 11,673,504 bytes / `254ccb27375ef3daf436fb3d9e3650f76a52435d49b5ea94e5aa57bd92458aa9`;
+  installer 9,603,589 bytes / `91cd1c52b1c204d245ca19d5ef9576398eba3e7cf9ec9984f4fb97f7f8cb58a0`.
+- Clean extraction launched CLI/desktop `0.7.1`; the installer installed and uninstalled cleanly.
+- Published-asset download and checksum verification results are recorded after publication.
+- v0.7.0 release assets and tag remain intact.
 
 ## v0.7.0 verification (2026-11-17)
 

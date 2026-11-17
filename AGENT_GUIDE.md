@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.7.0 agent loop
+## 0. The v0.7.1 agent loop
 
 The shortest reliable loop is:
 

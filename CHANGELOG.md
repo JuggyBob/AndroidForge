@@ -8,6 +8,19 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.7.1] - 2026-11-17
+
+Patch to the v0.7.0 Matrix & Device Control line.
+
+### Added
+
+- Desktop Logcat now requests bounded read-only retries and surfaces the CLI retry report in its notes
+  (attempt count and transient-failure indication), completing the v0.7.0 desktop retry presentation.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.7.1`.
+
 ## [0.7.0] - 2026-11-17
 
 Seventh alpha, extending AndroidForge from reliable single-device orchestration to controlled
@@ -395,7 +408,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.1
 [0.7.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.7.0
 [0.6.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.6.0
 [0.5.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.5.0

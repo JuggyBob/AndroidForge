@@ -105,6 +105,8 @@ impl App {
             self.settings.logcat_lines.max(100).to_string(),
             "--level".to_string(),
             self.logcat.level.clone(),
+            "--retries".to_string(),
+            "2".to_string(),
         ];
         if !self.logcat.package.trim().is_empty() {
             args.push("--package".to_string());
