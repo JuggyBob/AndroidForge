@@ -51,7 +51,25 @@ explicit startup/jank/memory/CPU evidence. Starting state is the published v0.7.
 
 ### Packaging and release
 
-To be completed after publication of the corrected v0.8.0 build.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.8.0>; title
+  `AndroidForge v0.8.0 - Build & Signal`; not a prerelease; marked latest.
+- Tag: `v0.8.0`, tag object `c50432dc95d04738a9c4d160336b7f77613d651b`, commit
+  `cd4f01cabb5febc5b1c89f1a23c5bc30dd75d140`; CI Release workflow `44066143323` passed.
+- The release was corrected before final verification to register `performance.schema.json` in
+  `schema list|show` and to include the recurrence-fixture path fix. The corrected assets were rebuilt
+  from the final tag; the v0.7.x releases and tags were not touched.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (5,093,519 bytes),
+    `4d82fa11cb23caa9e49064954a46d0a8ab23979b53760a4b9190620856728e89`.
+  - `androidforge-desktop-windows-x86_64.zip` (11,854,152 bytes),
+    `b32eea6a6d66e72a7b9c15c65fdc2bab9e76aae9e9e3e19f57b7e0cbec5d0757`.
+  - `androidforge-windows-x86_64-setup.exe` (9,724,357 bytes),
+    `03c6712c4adcf224cfd3dea06975108ac67d7eb127d1092b0e99ba46fec48e3b`.
+- Downloaded portable ZIP reported CLI/desktop `0.8.0`; `schema show performance.schema.json` returned
+  `success`; the Inspector performance panel rendered. The downloaded installer installed CLI/desktop
+  `0.8.0`, reported the performance schema, and uninstalled cleanly with the install directory removed.
+- v0.6.0, v0.7.0 and v0.7.1 releases, tags and assets remain intact.
+
 ## v0.7.1 verification (2026-11-17)
 
 Patch to v0.7.0: desktop Logcat requests `--retries 2` and shows the CLI retry attempt report in its
