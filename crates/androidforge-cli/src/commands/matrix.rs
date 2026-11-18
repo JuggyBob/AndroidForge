@@ -22,6 +22,10 @@ use crate::commands::common::success;
 use crate::commands::{apk, session};
 use crate::context::CliContext;
 
+fn default_matrix_parallel() -> usize {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum MatrixTargetSpec {
@@ -117,6 +121,8 @@ struct MatrixReport {
     failed: usize,
     skipped: usize,
     cleanup_policy: ValidationCleanupPolicy,
+    #[serde(default = "default_matrix_parallel")]
+    parallel: usize,
     target_results: Vec<MatrixTargetResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -131,17 +137,9 @@ struct ValidationCleanupPolicy {
 
 pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess> {
     let ctx = CliContext::new(cli)?;
-    if args.parallel != 1 {
-        return Err(ForgeError::new(
-            ErrorCode::UnsupportedOperation,
-            format!(
-                "parallel matrix execution (--parallel {}) is not validated",
-                args.parallel
-            ),
-        )
-        .with_suggestion("Use --parallel 1 for reliable sequential execution.")
-        .with_suggestion(
-            "Parallel mode is intentionally withheld until independent-device isolation is proven.",
+    if args.parallel == 0 || args.parallel > 32 {
+        return Err(ForgeError::invalid_argument(
+            "--parallel must be between 1 and 32",
         ));
     }
     if args.avd.is_empty() && args.serial.is_empty() {
@@ -244,7 +242,7 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             "fixture": args.fixture,
             "build": build,
             "owner": owner,
-            "parallel": 1,
+            "parallel": args.parallel,
             "fail_fast": args.fail_fast,
             "timeout_seconds": child_timeout.as_secs(),
             "cleanup_policy": {
@@ -275,6 +273,24 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
                 args.flow
             ),
         ));
+    }
+
+    if args.parallel > 1 {
+        return parallel_matrix(
+            &ctx,
+            args,
+            &plan,
+            &build,
+            &matrix_id,
+            &matrix_dir,
+            &owner,
+            child_timeout,
+            apk_path.as_deref(),
+            &started_at,
+            started,
+            warnings,
+        )
+        .await;
     }
 
     ensure_dir(&matrix_dir)?;
@@ -352,6 +368,8 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             port: None,
             headless: true,
             snapshot_save: false,
+            wait: false,
+            timeout: "10m".to_string(),
             prepare: false,
         };
         let acquisition = match session::ensure(&ctx, &ensure_args).await {
@@ -600,6 +618,7 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             note: "Only sessions acquired by this matrix with the matrix owner are released."
                 .to_string(),
         },
+        parallel: 1,
         target_results,
         warnings: warnings.clone(),
     };
@@ -633,6 +652,344 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
         };
     }
     Ok(response)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn parallel_matrix(
+    ctx: &CliContext,
+    args: &AgentMatrixArgs,
+    plan: &[MatrixPlanTarget],
+    build: &Value,
+    matrix_id: &str,
+    matrix_dir: &Path,
+    owner: &str,
+    child_timeout: std::time::Duration,
+    apk_path: Option<&Path>,
+    started_at: &str,
+    started: Instant,
+    mut warnings: Vec<String>,
+) -> Result<CommandSuccess> {
+    ensure_dir(matrix_dir)?;
+    warnings.push(
+        "parallel matrix uses one independent child matrix process per target; --fail-fast is best-effort and already-running targets finish."
+            .to_string(),
+    );
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(
+        args.parallel.min(plan.len().max(1)),
+    ));
+    let mut set = tokio::task::JoinSet::new();
+    for (index, target) in plan.iter().cloned().enumerate() {
+        let argv = matrix_child_argv(ctx, args, &target, owner, apk_path, child_timeout);
+        let cwd = ctx.paths.cwd.clone();
+        let target_dir = matrix_dir.join("targets");
+        let semaphore = semaphore.clone();
+        set.spawn(async move {
+            let _permit = semaphore.acquire_owned().await;
+            run_parallel_target(index, target, argv, cwd, target_dir, child_timeout).await
+        });
+    }
+    let mut target_results = Vec::new();
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok((index, target, result, envelope)) => {
+                write_json_atomic(
+                    &matrix_dir.join("targets").join(format!(
+                        "{:02}-{}.json",
+                        index + 1,
+                        slugify(target.target.label(), 40)
+                    )),
+                    &json!({"target": target.target, "argv": matrix_child_argv(ctx, args, &target, owner, apk_path, child_timeout), "envelope": envelope}),
+                )?;
+                target_results.push((index, result));
+            }
+            Err(error) => {
+                warnings.push(format!("parallel worker failed: {error}"));
+            }
+        }
+    }
+    target_results.sort_by_key(|(index, _)| *index);
+    let target_results = target_results
+        .into_iter()
+        .map(|(_, result)| result)
+        .collect::<Vec<_>>();
+    let passed = target_results
+        .iter()
+        .filter(|target| target.status == "passed")
+        .count();
+    let failed = target_results
+        .iter()
+        .filter(|target| target.status == "failed")
+        .count();
+    let skipped = target_results
+        .iter()
+        .filter(|target| target.status == "skipped")
+        .count();
+    let aggregate_status = if failed == 0 && skipped == 0 {
+        "passed"
+    } else if passed > 0 {
+        "partial"
+    } else {
+        "failed"
+    };
+    let report = MatrixReport {
+        schema_version: 1,
+        matrix_run_id: matrix_id.to_string(),
+        project: ctx.config.project_name(),
+        project_root: ctx.paths.project_root.to_string_lossy().into_owned(),
+        flow: args.flow.clone(),
+        fixture: args.fixture.clone(),
+        build: build.clone(),
+        targets_requested: plan.len(),
+        started_at: started_at.to_string(),
+        ended_at: now_rfc3339(),
+        duration_ms: started.elapsed().as_millis() as u64,
+        aggregate_status: aggregate_status.to_string(),
+        passed,
+        failed,
+        skipped,
+        cleanup_policy: ValidationCleanupPolicy {
+            sessions: if args.keep_sessions {
+                "kept matrix-created sessions".to_string()
+            } else {
+                "released sessions created by this matrix; existing sessions untouched".to_string()
+            },
+            emulators: "not stopped by default".to_string(),
+            note: "Parallel workers use independent devices; only sessions acquired by each worker are released."
+                .to_string(),
+        },
+        parallel: args.parallel,
+        target_results,
+        warnings: warnings.clone(),
+    };
+    let report_path = matrix_dir.join("matrix.json");
+    write_json_atomic(&report_path, &report)?;
+    let mut response = success(
+        "agent.matrix",
+        serde_json::to_value(&report)?,
+        format!(
+            "Parallel matrix {}: {} passed, {} failed, {} skipped across {} target(s), {} worker(s).\nReport: {}\n",
+            aggregate_status,
+            passed,
+            failed,
+            skipped,
+            plan.len(),
+            args.parallel,
+            report_path.display()
+        ),
+    );
+    response.run_id = Some(matrix_id.to_string());
+    response.artifacts = vec![
+        ArtifactRef::new("matrix_report", report_path.to_string_lossy().into_owned())
+            .with_description("Parallel matrix report"),
+    ];
+    if aggregate_status != "passed" {
+        response.status = "failed";
+        response.exit_code = if aggregate_status == "partial" {
+            ErrorCode::PartialFailure.exit_code()
+        } else {
+            ErrorCode::CommandFailed.exit_code()
+        };
+    }
+    Ok(response)
+}
+
+fn matrix_child_argv(
+    ctx: &CliContext,
+    args: &AgentMatrixArgs,
+    target: &MatrixPlanTarget,
+    owner: &str,
+    apk_path: Option<&Path>,
+    timeout: std::time::Duration,
+) -> Vec<String> {
+    let mut argv = vec![
+        "--json".to_string(),
+        "--project".to_string(),
+        ctx.paths.project_root.to_string_lossy().into_owned(),
+        "agent".to_string(),
+        "matrix".to_string(),
+        "--parallel".to_string(),
+        "1".to_string(),
+        "--owner".to_string(),
+        owner.to_string(),
+        "--timeout".to_string(),
+        format!("{}s", timeout.as_secs().max(1)),
+    ];
+    match &target.target {
+        MatrixTargetSpec::Avd { name } => {
+            argv.push("--avd".to_string());
+            argv.push(name.clone());
+        }
+        MatrixTargetSpec::Serial { serial } => {
+            argv.push("--serial".to_string());
+            argv.push(serial.clone());
+        }
+    }
+    if let Some(profile) = &args.profile {
+        argv.extend(["--profile".to_string(), profile.clone()]);
+    }
+    if let Some(ttl) = &args.ttl {
+        argv.extend(["--ttl".to_string(), ttl.clone()]);
+    }
+    if args.keep_sessions {
+        argv.push("--keep-sessions".to_string());
+    }
+    if args.install {
+        argv.push("--install".to_string());
+    }
+    if let Some(apk) = apk_path {
+        argv.extend(["--apk".to_string(), apk.to_string_lossy().into_owned()]);
+    } else if let Some(variant) = &args.variant {
+        argv.extend(["--variant".to_string(), variant.clone()]);
+    }
+    if let Some(flow) = &args.flow {
+        argv.extend(["--flow".to_string(), flow.clone()]);
+    }
+    if let Some(fixture) = &args.fixture {
+        argv.extend(["--fixture".to_string(), fixture.clone()]);
+    }
+    argv
+}
+
+async fn run_parallel_target(
+    index: usize,
+    target: MatrixPlanTarget,
+    argv: Vec<String>,
+    cwd: PathBuf,
+    target_dir: PathBuf,
+    timeout: std::time::Duration,
+) -> (usize, MatrixPlanTarget, MatrixTargetResult, Value) {
+    let started_at = now_rfc3339();
+    let started = Instant::now();
+    let mut result = MatrixTargetResult {
+        target: target.target.clone(),
+        status: "failed".to_string(),
+        started_at: started_at.clone(),
+        ended_at: started_at,
+        duration_ms: 0,
+        session_id: None,
+        acquisition_mode: None,
+        serial: None,
+        api_level: target.api_level,
+        model: target.model.clone(),
+        health: None,
+        health_warnings: Vec::new(),
+        run_id: None,
+        artifact_directory: None,
+        failure_code: None,
+        failure_message: None,
+        cleanup: "not_applicable".to_string(),
+        child_status: None,
+        child_exit_code: None,
+        child_report: None,
+        warnings: Vec::new(),
+    };
+    let executable = std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "androidforge".to_string());
+    let _ = ensure_dir(&target_dir);
+    let label = slugify(target.target.label(), 40);
+    let stdout_path = target_dir.join(format!("{:02}-{label}.stdout.json", index + 1));
+    let stderr_path = target_dir.join(format!("{:02}-{label}.stderr.txt", index + 1));
+    // Child output goes to files, not pipes. Emulators and other detached
+    // grandchildren can inherit pipe handles on Windows, which makes reading
+    // stdout until EOF hang long after the direct child exits. Waiting on the
+    // process itself and then reading the files keeps the parent bounded.
+    let envelope = match (
+        std::fs::File::create(&stdout_path),
+        std::fs::File::create(&stderr_path),
+    ) {
+        (Ok(stdout), Ok(stderr)) => {
+            let spawned = tokio::process::Command::new(executable)
+                .args(&argv)
+                .current_dir(cwd)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::from(stdout))
+                .stderr(std::process::Stdio::from(stderr))
+                .kill_on_drop(true)
+                .spawn();
+            match spawned {
+                Ok(mut child) => match tokio::time::timeout(timeout, child.wait()).await {
+                    Ok(Ok(status)) => {
+                        let stdout = std::fs::read_to_string(&stdout_path).unwrap_or_default();
+                        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+                        match serde_json::from_str::<Value>(stdout.trim()) {
+                            Ok(envelope) => {
+                                result.child_status = envelope
+                                    .get("status")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string);
+                                result.child_exit_code = envelope
+                                    .get("exit_code")
+                                    .and_then(Value::as_i64)
+                                    .map(|code| code as i32);
+                                if let Some(child) = envelope
+                                    .get("result")
+                                    .and_then(|value| value.get("target_results"))
+                                    .and_then(Value::as_array)
+                                    .and_then(|items| items.first())
+                                    .cloned()
+                                    && let Ok(child_result) =
+                                        serde_json::from_value::<MatrixTargetResult>(child)
+                                {
+                                    result = child_result;
+                                }
+                                if status.success() && result.status == "passed" {
+                                    result.status = "passed".to_string();
+                                } else if !status.success() {
+                                    result.status = "failed".to_string();
+                                }
+                                envelope
+                            }
+                            Err(error) => {
+                                result.failure_code =
+                                    Some("E_MATRIX_CHILD_OUTPUT_INVALID".to_string());
+                                result.failure_message = Some(format!(
+                                    "parallel child returned invalid JSON: {error}; stderr: {}",
+                                    truncate(&stderr, 2000)
+                                ));
+                                json!({"status": "error", "error": {"code": "E_MATRIX_CHILD_OUTPUT_INVALID", "message": error.to_string()}})
+                            }
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        result.failure_code = Some(ErrorCode::CommandFailed.as_str().to_string());
+                        result.failure_message =
+                            Some(format!("parallel child wait failed: {error}"));
+                        json!({"status": "error", "error": {"code": "E_COMMAND_FAILED", "message": error.to_string()}})
+                    }
+                    Err(_) => {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        result.failure_code = Some(ErrorCode::CommandTimeout.as_str().to_string());
+                        result.failure_message = Some(format!(
+                            "parallel child exceeded its {}s timeout and was killed",
+                            timeout.as_secs()
+                        ));
+                        json!({"status": "error", "error": {"code": "E_COMMAND_TIMEOUT", "message": "parallel child timed out"}})
+                    }
+                },
+                Err(error) => {
+                    result.failure_code = Some(ErrorCode::CommandFailed.as_str().to_string());
+                    result.failure_message =
+                        Some(format!("parallel child failed to start: {error}"));
+                    json!({"status": "error", "error": {"code": "E_COMMAND_FAILED", "message": error.to_string()}})
+                }
+            }
+        }
+        (stdout, stderr) => {
+            let message = format!(
+                "could not create parallel child log files: stdout={:?} stderr={:?}",
+                stdout.err(),
+                stderr.err()
+            );
+            result.failure_code = Some(ErrorCode::Internal.as_str().to_string());
+            result.failure_message = Some(message.clone());
+            json!({"status": "error", "error": {"code": "E_INTERNAL", "message": message}})
+        }
+    };
+    result.ended_at = now_rfc3339();
+    result.duration_ms = started.elapsed().as_millis() as u64;
+    (index, target, result, envelope)
 }
 
 async fn build_plan(
@@ -784,5 +1141,55 @@ fn truncate(value: &str, max: usize) -> String {
         value.to_string()
     } else {
         value.chars().take(max).collect::<String>() + "\n[truncated]"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report_value() -> Value {
+        json!({
+            "schema_version": 1,
+            "matrix_run_id": "matrix-20261118120000-test",
+            "project": "Example",
+            "project_root": "A:/example",
+            "flow": null,
+            "fixture": null,
+            "build": {},
+            "targets_requested": 2,
+            "started_at": "2026-11-18T12:00:00Z",
+            "ended_at": "2026-11-18T12:00:01Z",
+            "duration_ms": 1000,
+            "aggregate_status": "passed",
+            "passed": 2,
+            "failed": 0,
+            "skipped": 0,
+            "cleanup_policy": {
+                "sessions": "released",
+                "emulators": "not stopped by default",
+                "note": "test"
+            },
+            "target_results": [],
+            "warnings": []
+        })
+    }
+
+    #[test]
+    fn matrix_report_serializes_parallel_and_defaults_legacy_reports() {
+        let value = report_value();
+        let report: MatrixReport = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(report.parallel, 1);
+        assert_eq!(report.passed, 2);
+
+        let mut parallel = value.clone();
+        parallel["parallel"] = json!(4);
+        let report: MatrixReport = serde_json::from_value(parallel).unwrap();
+        assert_eq!(report.parallel, 4);
+
+        let mut legacy = value;
+        legacy.as_object_mut().unwrap().remove("parallel");
+        let report: MatrixReport = serde_json::from_value(legacy).unwrap();
+        assert_eq!(report.parallel, 1);
     }
 }

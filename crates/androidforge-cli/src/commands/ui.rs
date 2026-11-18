@@ -13,6 +13,7 @@ use crate::cli::{
 };
 use crate::commands::common::{require_selector, success};
 use crate::commands::observation;
+use crate::commands::ocr;
 use crate::commands::receipt;
 use crate::context::CliContext;
 
@@ -76,14 +77,29 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                 true,
                 |_run| async {
                     let ui = ctx.ui_manager()?;
-                    let result = ui.find(&serial, &selector).await?;
+                    let mut result = ui.find(&serial, &selector).await?;
+                    if result.matches.is_empty() && args.selector.ocr_fallback {
+                        let ocr = ocr::find(ctx, &serial, &selector).await?;
+                        result = androidforge_ui::FindResult {
+                            ambiguous: ocr.len() > 1,
+                            ocr_used: true,
+                            matches: ocr
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, item)| {
+                                    androidforge_ui::UiMatch::ocr(index, item.text, item.bounds)
+                                })
+                                .collect(),
+                        };
+                    }
                     let human = if result.matches.is_empty() {
                         "No matching UI elements.\n".to_string()
                     } else {
                         format!(
-                            "{} matching element(s){}\n{}\n",
+                            "{} matching element(s){}{}\n{}\n",
                             result.matches.len(),
                             if result.ambiguous { " (ambiguous)" } else { "" },
+                            if result.ocr_used { " [OCR]" } else { "" },
                             result
                                 .matches
                                 .iter()
@@ -101,7 +117,10 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                         item.bounds.right,
                                         item.bounds.bottom
                                     );
-                                    format!("  --index {} {label} {bounds}", item.index)
+                                    format!(
+                                        "  --index {} {label} {bounds} ({})",
+                                        item.index, item.source
+                                    )
                                 })
                                 .collect::<Vec<_>>()
                                 .join("\n")
@@ -459,7 +478,15 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 }
                             };
                             builder.set_before(before);
-                            let result = match ui.tap(&serial, &selector).await {
+                            let result = match tap_or_ocr(
+                                ctx,
+                                &ui,
+                                &serial,
+                                &selector,
+                                args.selector.ocr_fallback,
+                            )
+                            .await
+                            {
                                 Ok(result) => result,
                                 Err(error) => {
                                     let resolved = !matches!(
@@ -518,7 +545,9 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             .with_session(session.id.clone())
                             .with_device(serial.clone()));
                         }
-                        let result = ui.tap(&serial, &selector).await?;
+                        let result =
+                            tap_or_ocr(ctx, &ui, &serial, &selector, args.selector.ocr_fallback)
+                                .await?;
                         let action = serde_json::to_value(&result)?;
                         let (value, suffix) = apply_postconditions(
                             ctx,
@@ -1104,6 +1133,39 @@ async fn dismiss_overlays(
         },
     )
     .await
+}
+
+async fn tap_or_ocr(
+    ctx: &CliContext,
+    ui: &androidforge_ui::UiManager,
+    serial: &str,
+    selector: &Selector,
+    ocr_fallback: bool,
+) -> Result<androidforge_ui::TapResult> {
+    match ui.tap(serial, selector).await {
+        Ok(result) => Ok(result),
+        Err(error)
+            if ocr_fallback
+                && error.code() == androidforge_core::error::ErrorCode::SelectorNotFound =>
+        {
+            let matches = ocr::find(ctx, serial, selector).await?;
+            let Some(item) = matches.first() else {
+                return Err(error);
+            };
+            let (x, y) = item.bounds.center();
+            ui.tap_xy(serial, x, y).await?;
+            Ok(androidforge_ui::TapResult {
+                matched: androidforge_ui::UiMatch::ocr(0, item.text.clone(), item.bounds),
+                tap_x: x,
+                tap_y: y,
+                used_clickable_ancestor: false,
+                ancestor: None,
+                display_size: None,
+                rotation: None,
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn inspect(

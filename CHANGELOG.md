@@ -8,6 +8,74 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.10.0] - 2026-11-18
+
+Agent-surface release. Seven capabilities requested for the next minor line, delivered together and
+verified on live emulators.
+
+### Added
+
+- `mcp serve`, a local stdio Model Context Protocol server (JSON-RPC 2025-06-18). It exposes 31 tools
+  and 29 resources, shells out to the same CLI and refuses destructive tools without `confirm=true`.
+- `tools schema --format mcp|openai|json` exports the same tool catalog for other function-calling
+  clients.
+- Selector v2: `--role`, `--text-regex`, `--region`, `--within`, `--above`, `--below`, `--left-of` and
+  `--right-of`. OCR fallback via `--ocr-fallback`, using `tesseract` by default and
+  `ANDROIDFORGE_OCR_COMMAND` as an override.
+- Resumable runs: `run checkpoint`, `run resume --from-checkpoint`, append-only `events.ndjson`,
+  `run events [--follow]` and `report repro`. Reports keep `checkpoints`, `resume_count`,
+  `resumed_from_checkpoint` and `failure_history`.
+- Structured `diagnostics logcat query` with level/package/time/regex filters and
+  `diagnostics logcat watch` NDJSON streaming for log, crash and ANR events.
+- Generic intents: `app launch --component/--action/--data/--mime-type/--category/--extra/--flag/
+  --wait/--force-stop`, `app broadcast` and `app service`.
+- `network proxy get|set|clear`, `network profile list|apply` and `network restore`. Profiles are
+  `default`, `offline`, `wifi-only`, `data-only` and `no-proxy`; state is recorded per session.
+- `session ensure --wait --timeout` for busy devices and `agent matrix --parallel 1..32`, which runs
+  one independent child matrix per target, assigns ports under a cross-process lock, writes
+  per-target child logs and reports, and aggregates partial results.
+- `tests/mcp-smoke.ps1`, a real stdio MCP handshake, tools, resources and shutdown harness.
+
+### Fixed
+
+- Parallel `session ensure` calls can no longer select the same emulator port before either session
+  record exists. Port probing and session creation are serialized, and live session ports are treated
+  as occupied.
+- Parallel matrix workers can no longer hang the parent on inherited stdout/stderr pipe handles.
+  Child output is file-backed, the direct child is awaited with a timeout, and a timed-out child is
+  killed.
+- No-wait `am start` output containing `Starting: Intent` is accepted as success, so
+  `app launch --component` works without `--wait`.
+- `network profile list` no longer requires a connected device.
+
+### Changed
+
+- Workspace, CLI, desktop, installer and compatibility version are `0.10.0`.
+- `matrix.schema.json` documents `parallel` and `child_report`.
+- Capability reporting adds MCP, tool schema, selector v2, OCR fallback, run resume, structured
+  logcat, intents, network profiles and parallel matrix.
+
+### Validation
+
+- MCP smoke: **10/10 PASS**, 31 tools, 29 resources, protocol `2025-06-18`, clean shutdown.
+- Selector/OCR: 21 UI tests pass; live fake-OCR find/tap succeeded; missing OCR engine returned
+  `E_TOOL_NOT_FOUND`.
+- Runs: checkpoint, failure, resume, NDJSON events and exact-argv repro verified live; core test
+  covers the full sequence.
+- Logcat: injected `AF_WATCH_SENTINEL` was returned by both query and watch.
+- Intents: action start, explicit component (no-wait and wait) and broadcast passed; service stop
+  returned the expected command failure for a missing service.
+- Network: proxy set/get/clear, `wifi-only` apply and restore passed.
+- Devices: busy-device wait returned `E_DEVICE_BUSY` after ~6.8s for a 6s timeout.
+- Matrix: two AVDs, `--parallel 2`, **2 passed / 0 failed** in 7.2s with distinct serials and released
+  sessions.
+
+### Not validated
+
+- Real Tesseract accuracy. OCR was exercised with a deterministic local test engine; the default
+  `tesseract` binary was not installed on the verification host.
+- MCP over HTTP/SSE. Only local stdio is implemented.
+
 ## [0.9.4] - 2026-11-18
 
 Safety and repeatability release. Closes the v0.9.3 long-horizon certification finding and the
@@ -643,7 +711,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.10.0
 [0.9.4]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.4
 [0.9.3]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.3
 [0.9.2]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.2

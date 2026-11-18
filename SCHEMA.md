@@ -37,7 +37,7 @@ The schema files:
 | `apk-diff.schema.json` | Installed/candidate field comparison, overall equivalence and skip safety. |
 | `bundle.schema.json` | Diagnostic bundle manifest, checksummed payloads and exclusions. |
 | `health.schema.json` | Read-only device health report and unknown reasons. |
-| `matrix.schema.json` | Sequential matrix plan/results, per-target health and cleanup. |
+| `matrix.schema.json` | Matrix plan/results, `parallel`, per-target health, child reports and cleanup. |
 | `performance.schema.json` | `diagnostics performance` startup, jank, memory, CPU, command evidence and unknown reasons. |
 | `agent-brief.schema.json` | `agent brief` project/session/device/app/screen/last-run snapshot and next actions. |
 | `wireless.schema.json` | Wireless pair/connect/disconnect results (never pairing codes). |

@@ -108,10 +108,93 @@ impl AppStateExpectation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentExtra {
+    /// Android `am` extra flag without the leading `--`, for example `es` or `ei`.
+    pub kind: String,
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct IntentSpec {
+    pub package: Option<String>,
+    pub component: Option<String>,
+    pub action: Option<String>,
+    pub data: Option<String>,
+    pub mime_type: Option<String>,
+    pub categories: Vec<String>,
+    pub extras: Vec<IntentExtra>,
+    pub flags: Vec<String>,
+    pub receiver_permission: Option<String>,
+    pub asynchronous: bool,
+    pub wait: bool,
+    pub force_stop: bool,
+    pub wake: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentOutput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub output: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+fn append_intent_selector(args: &mut Vec<String>, spec: &IntentSpec, _service: bool) {
+    if let Some(component) = &spec.component {
+        args.push("-n".to_string());
+        args.push(component.clone());
+    }
+    if let Some(action) = &spec.action {
+        args.push("-a".to_string());
+        args.push(action.clone());
+    }
+    if let Some(data) = &spec.data {
+        args.push("-d".to_string());
+        args.push(data.clone());
+    }
+    if let Some(mime) = &spec.mime_type {
+        args.push("-t".to_string());
+        args.push(mime.clone());
+    }
+    for category in &spec.categories {
+        args.push("-c".to_string());
+        args.push(category.clone());
+    }
+    for extra in &spec.extras {
+        args.push(format!("--{}", extra.kind));
+        args.push(extra.key.clone());
+        args.push(extra.value.clone());
+    }
+    for flag in &spec.flags {
+        args.push("-f".to_string());
+        args.push(flag.clone());
+    }
+    if let Some(permission) = &spec.receiver_permission {
+        args.push("--receiver-permission".to_string());
+        args.push(permission.clone());
+    }
+    if spec.asynchronous {
+        args.push("--async".to_string());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppLaunch {
     pub package: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,11 +463,190 @@ impl AppManager {
         Ok(AppLaunch {
             package: package.to_string(),
             component,
+            action: None,
+            data: None,
             status,
             total_time_ms,
             foreground,
             foreground_app,
             warnings,
+        })
+    }
+
+    pub async fn start_intent(&self, serial: &str, spec: &IntentSpec) -> Result<AppLaunch> {
+        let package = spec.package.clone();
+        if let Some(package) = &package
+            && installed_package(&self.adb, serial, package)
+                .await?
+                .is_none()
+        {
+            return Err(ForgeError::new(
+                ErrorCode::PackageNotFound,
+                format!("package {package} is not installed"),
+            )
+            .with_suggestion("Install the application with `androidforge app install <apk>`.")
+            .device(serial.to_string()));
+        }
+        let mut warnings = Vec::new();
+        if spec.wake
+            && let Err(error) = self.adb.wake(serial).await
+        {
+            warnings.push(format!("device wake failed: {}", error.message()));
+        }
+        if spec.force_stop
+            && let Some(package) = &package
+        {
+            self.force_stop(serial, package).await?;
+        }
+        let mut args = vec!["am".to_string(), "start".to_string()];
+        if spec.wait {
+            args.push("-W".to_string());
+        }
+        if let Some(component) = &spec.component {
+            args.push("-n".to_string());
+            args.push(component.clone());
+        }
+        if let Some(action) = &spec.action {
+            args.push("-a".to_string());
+            args.push(action.clone());
+        }
+        if let Some(data) = &spec.data {
+            args.push("-d".to_string());
+            args.push(data.clone());
+        }
+        if let Some(mime) = &spec.mime_type {
+            args.push("-t".to_string());
+            args.push(mime.clone());
+        }
+        for category in &spec.categories {
+            args.push("-c".to_string());
+            args.push(category.clone());
+        }
+        for extra in &spec.extras {
+            args.push(format!("--{}", extra.kind));
+            args.push(extra.key.clone());
+            args.push(extra.value.clone());
+        }
+        for flag in &spec.flags {
+            args.push("-f".to_string());
+            args.push(flag.clone());
+        }
+        let output = self
+            .adb
+            .shell_args(
+                serial,
+                &args,
+                Some(self.launch_timeout),
+                Some(2 * 1024 * 1024),
+            )
+            .await?;
+        let text = output.combined_text();
+        let status = find_value(&text, "Status:");
+        let total_time_ms = find_value(&text, "TotalTime:")
+            .and_then(|value| value.trim_end_matches("ms").parse::<u64>().ok());
+        let success = status.as_deref() == Some("ok")
+            || text.contains("Warning: Activity not started")
+            || text.contains("Starting: Intent");
+        if !success {
+            return Err(ForgeError::new(
+                ErrorCode::CommandFailed,
+                format!(
+                    "am start did not report success{}",
+                    spec.action
+                        .as_deref()
+                        .map(|action| format!(" for {action}"))
+                        .unwrap_or_default()
+                ),
+            )
+            .with_context_string("output", truncate(text.trim(), 4000))
+            .device(serial.to_string()));
+        }
+        let foreground_app = self.adb.current_focus(serial).await;
+        let foreground = package
+            .as_ref()
+            .map(|package| {
+                foreground_app
+                    .as_ref()
+                    .is_some_and(|app| &app.package == package)
+            })
+            .unwrap_or(true);
+        if package.is_some() && !foreground {
+            warnings.push(format!(
+                "intent completed but the requested package is not the current focus (focus: {})",
+                foreground_app
+                    .as_ref()
+                    .map(|app| app.package.clone())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ));
+        }
+        Ok(AppLaunch {
+            package: package.unwrap_or_else(|| "intent".to_string()),
+            component: spec.component.clone(),
+            action: spec.action.clone(),
+            data: spec.data.clone(),
+            status,
+            total_time_ms,
+            foreground,
+            foreground_app,
+            warnings,
+        })
+    }
+
+    pub async fn broadcast_intent(&self, serial: &str, spec: &IntentSpec) -> Result<IntentOutput> {
+        let mut args = vec!["am".to_string(), "broadcast".to_string()];
+        append_intent_selector(&mut args, spec, false);
+        let output = self
+            .adb
+            .shell_args(
+                serial,
+                &args,
+                Some(self.launch_timeout),
+                Some(2 * 1024 * 1024),
+            )
+            .await?;
+        let text = output.combined_text();
+        Ok(IntentOutput {
+            action: spec.action.clone(),
+            package: spec.package.clone(),
+            component: spec.component.clone(),
+            status: find_value(&text, "Broadcast completed:"),
+            output: text.trim().to_string(),
+            warnings: Vec::new(),
+        })
+    }
+
+    pub async fn service_intent(
+        &self,
+        serial: &str,
+        spec: &IntentSpec,
+        stop: bool,
+    ) -> Result<IntentOutput> {
+        let mut args = vec![
+            "am".to_string(),
+            if stop { "stopservice" } else { "startservice" }.to_string(),
+        ];
+        append_intent_selector(&mut args, spec, true);
+        let output = self
+            .adb
+            .shell_args(
+                serial,
+                &args,
+                Some(self.launch_timeout),
+                Some(2 * 1024 * 1024),
+            )
+            .await?;
+        let text = output.combined_text();
+        Ok(IntentOutput {
+            action: spec.action.clone(),
+            package: spec.package.clone(),
+            component: spec.component.clone(),
+            status: if text.trim().is_empty() {
+                None
+            } else {
+                Some(text.trim().to_string())
+            },
+            output: text.trim().to_string(),
+            warnings: Vec::new(),
         })
     }
 

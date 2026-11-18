@@ -92,6 +92,53 @@ pub struct LogcatStopResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogcatRecord {
+    pub timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tid: Option<u32>,
+    pub level: String,
+    pub tag: String,
+    pub message: String,
+    pub raw: String,
+}
+
+/// Parse one Android `threadtime` logcat line. Non-log lines such as
+/// `--------- beginning of main` return `None`.
+pub fn parse_threadtime_line(line: &str) -> Option<LogcatRecord> {
+    let fields = line.split_whitespace().collect::<Vec<_>>();
+    if fields.len() < 6 {
+        return None;
+    }
+    if !fields[0].contains('-') || !fields[1].contains(':') {
+        return None;
+    }
+    let timestamp = format!("{} {}", fields[0], fields[1]);
+    let pid = fields[2].parse::<u32>().ok();
+    let tid = fields[3].parse::<u32>().ok();
+    let level = fields[4].chars().next()?.to_string();
+    if !matches!(level.as_str(), "V" | "D" | "I" | "W" | "E" | "F" | "A") {
+        return None;
+    }
+    let tag = fields[5].trim_end_matches(':').to_string();
+    let message = fields[6..]
+        .join(" ")
+        .trim_start_matches(':')
+        .trim_start()
+        .to_string();
+    Some(LogcatRecord {
+        timestamp,
+        pid,
+        tid,
+        level,
+        tag,
+        message,
+        raw: line.to_string(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrashEvent {
     pub kind: String,
     pub package: String,
@@ -857,6 +904,21 @@ mod tests {
         assert!(filtered.contains("hello com.example"));
         assert!(filtered.contains("E/Tag: other"));
         assert!(!filtered.contains("unrelated"));
+    }
+
+    #[test]
+    fn parses_threadtime_records_and_ignores_buffer_markers() {
+        let record = parse_threadtime_line(
+            "11-18 13:00:00.123  1234  1300 E AndroidRuntime: FATAL EXCEPTION: main",
+        )
+        .unwrap();
+        assert_eq!(record.timestamp, "11-18 13:00:00.123");
+        assert_eq!(record.pid, Some(1234));
+        assert_eq!(record.tid, Some(1300));
+        assert_eq!(record.level, "E");
+        assert_eq!(record.tag, "AndroidRuntime");
+        assert!(record.message.contains("FATAL EXCEPTION"));
+        assert!(parse_threadtime_line("--------- beginning of main").is_none());
     }
 
     #[test]

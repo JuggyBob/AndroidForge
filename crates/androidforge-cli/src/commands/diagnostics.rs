@@ -7,15 +7,15 @@ use androidforge_core::retry::ReadOnlyOperation;
 use androidforge_core::run::{RunContext, clear_active_run, set_active_run};
 use androidforge_core::util::write_atomic;
 use androidforge_diagnostics::{
-    LogcatStream, PerformanceOptions, PerformanceReport, Recorder, capture_frame,
+    LogcatRecord, LogcatStream, PerformanceOptions, PerformanceReport, Recorder, capture_frame,
     capture_screenshot, collect_diagnostics, collect_logcat_peek, collect_logcat_tail,
-    collect_performance, detect_crashes,
+    collect_performance, detect_crashes, parse_threadtime_line,
 };
 
 use crate::cli::{
     CaptureCommand, CaptureFrameArgs, CaptureScreenshotArgs, DiagnosticsCollectArgs,
-    DiagnosticsCommand, DiagnosticsPerformanceArgs, LogcatCommand, LogcatPeekArgs, LogcatStartArgs,
-    LogcatTailArgs, RecordCommand, RecordStartArgs,
+    DiagnosticsCommand, DiagnosticsPerformanceArgs, LogcatCommand, LogcatPeekArgs, LogcatQueryArgs,
+    LogcatStartArgs, LogcatTailArgs, LogcatWatchArgs, RecordCommand, RecordStartArgs,
 };
 use crate::commands::common::{self, success};
 use crate::context::CliContext;
@@ -567,6 +567,11 @@ async fn logcat(ctx: &CliContext, command: &LogcatCommand) -> Result<CommandSucc
     match command {
         LogcatCommand::Tail(args) => logcat_tail(ctx, args).await,
         LogcatCommand::Peek(args) => logcat_peek(ctx, args).await,
+        LogcatCommand::Query(args) => logcat_query(ctx, args).await,
+        LogcatCommand::Watch(_) => Err(ForgeError::new(
+            ErrorCode::UnsupportedOperation,
+            "logcat watch is an NDJSON stream and is handled directly by the CLI entry point",
+        )),
         LogcatCommand::Start(args) => logcat_start(ctx, args).await,
         LogcatCommand::Stop => logcat_stop(ctx).await,
         LogcatCommand::Status => logcat_status(ctx).await,
@@ -721,6 +726,201 @@ async fn logcat_peek(ctx: &CliContext, args: &LogcatPeekArgs) -> Result<CommandS
     )
     .with_optional_session(session.as_ref().map(|session| session.id.clone()))
     .with_device(device.serial))
+}
+
+async fn logcat_query(ctx: &CliContext, args: &LogcatQueryArgs) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let lines = args.lines.clamp(1, 20_000);
+    let (result, retry_report) =
+        common::retry_read_only(ReadOnlyOperation::LogcatPeek, args.retries, || async {
+            collect_logcat_peek(
+                &ctx.adb()?,
+                &device.serial,
+                args.package.as_deref(),
+                Some(lines),
+                Some(ctx.config.file.diagnostics.max_log_bytes),
+                args.level.as_deref(),
+                args.since.as_deref(),
+            )
+            .await
+        })
+        .await?;
+    let regex = args
+        .grep
+        .as_deref()
+        .map(regex::Regex::new)
+        .transpose()
+        .map_err(|error| ForgeError::invalid_argument(format!("invalid --grep: {error}")))?;
+    let mut records = result
+        .lines
+        .iter()
+        .filter_map(|line| parse_threadtime_line(line))
+        .filter(|record| {
+            args.until
+                .as_deref()
+                .is_none_or(|until| record.timestamp.as_str() <= until)
+                && regex.as_ref().is_none_or(|regex| {
+                    regex.is_match(&record.message) || regex.is_match(&record.tag)
+                })
+        })
+        .collect::<Vec<LogcatRecord>>();
+    let matched = records.len();
+    if records.len() > args.limit {
+        records = records.split_off(records.len() - args.limit);
+    }
+    let value = serde_json::json!({
+        "schema_version": 1,
+        "serial": device.serial,
+        "package": args.package,
+        "level": args.level,
+        "since": args.since,
+        "until": args.until,
+        "grep": args.grep,
+        "records": records,
+        "matched": matched,
+        "returned": records.len(),
+        "line_count": result.line_count,
+        "pid_filter": result.pid_filter,
+        "truncated": result.truncated,
+        "captured_at": result.captured_at,
+        "notes": result.notes,
+        "retry": if args.retries > 0 { serde_json::to_value(&retry_report).unwrap_or(serde_json::Value::Null) } else { serde_json::Value::Null },
+    });
+    let human = records
+        .iter()
+        .map(|record| {
+            format!(
+                "{} {} {}: {}",
+                record.timestamp, record.level, record.tag, record.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(success(
+        "diagnostics.logcat.query",
+        value,
+        format!(
+            "{} matching record(s), {} returned from {} line(s)\n{}\n",
+            matched,
+            records.len(),
+            result.line_count,
+            human
+        ),
+    )
+    .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+    .with_device(device.serial))
+}
+
+pub async fn stream_logcat_watch(cli: &crate::cli::Cli, args: &LogcatWatchArgs) -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let ctx = CliContext::new(cli)?;
+    let session = ctx.require_session()?;
+    let device = ctx.resolve_device(Some(&session)).await?;
+    let adb = ctx.adb()?;
+    let timeout = ctx.parse_timeout(Some(&args.timeout), 60)?;
+    let regex = args
+        .grep
+        .as_deref()
+        .map(regex::Regex::new)
+        .transpose()
+        .map_err(|error| ForgeError::invalid_argument(format!("invalid --grep: {error}")))?;
+    let level = args.level.as_deref().and_then(priority).unwrap_or(0);
+    let mut child = tokio::process::Command::new(&adb.adb)
+        .arg("-s")
+        .arg(&device.serial)
+        .arg("shell")
+        .arg("logcat")
+        .arg("-v")
+        .arg("threadtime")
+        .arg("-T")
+        .arg("1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            ForgeError::new(
+                ErrorCode::CommandFailed,
+                format!("could not start logcat stream: {error}"),
+            )
+            .with_suggestion("Verify ADB is available and the device is online.")
+        })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ForgeError::new(ErrorCode::CommandFailed, "logcat stream has no stdout"))?;
+    let mut lines = BufReader::new(stdout).lines();
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    let explicit_filter = args.crash || args.anr || regex.is_some();
+    let mut emitted = 0usize;
+    loop {
+        let line = tokio::select! {
+            _ = &mut deadline => break,
+            line = lines.next_line() => line,
+        };
+        let Ok(Some(line)) = line else {
+            break;
+        };
+        let Some(record) = parse_threadtime_line(&line) else {
+            continue;
+        };
+        if priority(&record.level).unwrap_or(0) < level {
+            continue;
+        }
+        let crash = record.level == "F" || record.message.contains("FATAL EXCEPTION");
+        let anr = record.message.contains("ANR in ");
+        let grep_match = regex
+            .as_ref()
+            .is_some_and(|regex| regex.is_match(&record.message) || regex.is_match(&record.tag));
+        if explicit_filter && !((args.crash && crash) || (args.anr && anr) || grep_match) {
+            continue;
+        }
+        let event = if crash {
+            "crash"
+        } else if anr {
+            "anr"
+        } else {
+            "log"
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "schema_version": 1,
+                "event": event,
+                "serial": device.serial,
+                "session_id": session.id,
+                "timestamp": record.timestamp,
+                "pid": record.pid,
+                "tid": record.tid,
+                "level": record.level,
+                "tag": record.tag,
+                "message": record.message,
+                "raw": record.raw,
+            }))?
+        );
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        emitted += 1;
+        if emitted >= args.max_events.max(1) {
+            break;
+        }
+    }
+    let _ = child.kill().await;
+    Ok(())
+}
+
+fn priority(value: &str) -> Option<u8> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "v" | "verbose" => Some(0),
+        "d" | "debug" => Some(1),
+        "i" | "info" => Some(2),
+        "w" | "warn" | "warning" => Some(3),
+        "e" | "error" => Some(4),
+        "f" | "fatal" | "assert" => Some(5),
+        _ => None,
+    }
 }
 
 async fn logcat_start(ctx: &CliContext, args: &LogcatStartArgs) -> Result<CommandSuccess> {

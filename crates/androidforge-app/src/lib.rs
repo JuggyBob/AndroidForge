@@ -21,6 +21,7 @@ pub use diff::{
 pub use files::{AppFileTransfer, AppFiles};
 pub use install::{InstallOptions, InstallResult, InstalledPackage, SignatureDiagnosis};
 pub use package::{
-    AppLaunch, AppManager, AppStateExpectation, AppStates, PackageInfo, ProcessState,
+    AppLaunch, AppManager, AppStateExpectation, AppStates, IntentExtra, IntentOutput, IntentSpec,
+    PackageInfo, ProcessState,
 };
 pub use permissions::{PermissionState, Permissions};

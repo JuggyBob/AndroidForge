@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.9.2 agent loop
+## 0. The v0.10 agent loop
 
 The shortest reliable loop is:
 
@@ -41,17 +41,22 @@ observation unless `--dry-run` is used):
 - `doctor`, `capabilities`, `devices list|inspect|health`, `session list|inspect|status`, `context`,
   `ui observe`, `ui diff`, `ui inspect`, `ui dump`, `report list|show|path|explain|history|recurrences`,
   `report bundle --dry-run`, `doctor fix --plan|--check`, `apk inspect|verify|resolve|diff`,
-  `diagnostics logcat peek`, `agent matrix --dry-run`. `apk diff` pulls the installed base APK and
-  splits but does not change the device.
+  `diagnostics logcat peek|query`, `run status|events`, `network proxy get`,
+  `network profile list`, `tools schema`, `agent matrix --dry-run`. `apk diff` pulls the installed
+  base APK and splits but does not change the device.
 - `session ensure --dry-run` and `agent test --dry-run` make no device or session changes.
+- `mcp serve` is local only: it reads stdin, writes stdout and shells out to this CLI. It has no
+  listener or network transport.
 
 Device-modifying commands:
 
 - `session start|ensure|attach|restart`, `app install` (plain install preserves app data), `ui
   tap|long-press|text|clear|scroll|swipe|back|home|keyevent` (including `--ref` actions), `fixture run`,
   `conformance run`, `agent test` without `--dry-run`, `agent matrix` without `--dry-run`,
-  `diagnostics performance` (it launches the app; `--cold` also force-stops it), and
-  `devices pair|connect|disconnect`.
+  `diagnostics performance` (it launches the app; `--cold` also force-stops it),
+  `diagnostics logcat watch` (a bounded read stream), `app launch`, `app broadcast`, `app service`,
+  `network proxy set|clear`, `network profile apply`, `network restore`, `run checkpoint`,
+  `run resume`, and `devices pair|connect|disconnect`.
 
 Potentially destructive commands (require `--yes` or an explicit confirmation flag):
 
@@ -360,21 +365,108 @@ target context text. Context text inside a clickable row carries `actionable_via
 valid tap/long-press ref; dispatch goes to that ancestor. **There is no fallback to text, resource id or
 coordinates.** `--expect-token` is required.
 
-### 0.10 Sequential device matrix
+### 0.10 Device matrix (sequential or parallel)
 
 ```powershell
 androidforge agent matrix --project . --avd Pixel_8_API_35 --avd Pixel_8_API_36 --flow conformance --json
-androidforge agent matrix --project . --serial emulator-5554 --serial emulator-5556 --flow conformance --json
+androidforge agent matrix --project . --serial emulator-5554 --serial emulator-5556 --flow conformance --parallel 2 --json
 androidforge agent matrix --project . --avd Pixel_8_API_35 --avd Pixel_8_API_36 --dry-run --json
 ```
 
-The matrix validates every AVD/serial, rejects duplicates, resolves the build once, and runs targets
-sequentially. Each target gets its own owned session and calls the existing `agent test` pipeline.
-`--fail-fast` stops after the first failure; otherwise remaining independent targets still run. The
-result aggregates `passed`, `failed`, `partial` or `failed`, includes per-target sessions, API/model,
-health, run ids, failures, artifacts and cleanup state. Only sessions created by this matrix with the
-matrix owner are released; pre-existing sessions and emulators are not stopped. `--parallel` >1 currently
-returns `E_UNSUPPORTED_OPERATION` because parallel isolation is not validated.
+The matrix validates every AVD/serial, rejects duplicates, resolves the build once, and runs one
+independent target per device. Each target gets its own owned session and calls the existing
+`agent test` pipeline. `--parallel 1..32` runs one separate child matrix process per target; port
+probing and session creation are serialized so two workers cannot claim the same emulator port. Child
+stdout/stderr goes to per-target files, and a child that exceeds `--timeout` is killed.
+
+`--fail-fast` is best-effort in parallel mode: already-running targets finish. The result aggregates
+`passed`, `failed` or `partial`, includes `parallel`, and records per-target sessions, API/model,
+health, run ids, failures, child logs/reports and cleanup state. Only sessions created by this matrix
+with the matrix owner are released; pre-existing sessions and emulators are not stopped.
+
+### 0.14 v0.10 agent surfaces
+
+MCP and tool export:
+
+```powershell
+androidforge mcp serve
+androidforge tools schema --format mcp --json
+androidforge tools schema --format openai --json
+```
+
+`mcp serve` speaks newline-delimited JSON-RPC on stdin/stdout. Only JSON-RPC lines go to stdout;
+diagnostics go to stderr. Destructive tools require `confirm=true`, and uninstall/fresh-install are
+guarded. `tools schema` exports the same 31-tool catalog.
+
+Selector v2 and OCR:
+
+```powershell
+androidforge ui tap --session ses-... --role button --text-regex "Save|Apply" --json
+androidforge ui find --session ses-... --text "Continue" --within "Checkout" --json
+androidforge ui find --session ses-... --text "Continue" --region 0,800,1080,1600 --json
+androidforge ui find --session ses-... --text "Continue" --ocr-fallback --json
+```
+
+`--ocr-fallback` runs only when UIAutomator has no match. It supports text, regex, region and index;
+it deliberately refuses resource-id/class/role/relative conditions because OCR cannot prove them.
+Default engine `tesseract`, override with `ANDROIDFORGE_OCR_COMMAND`.
+
+Resumable runs:
+
+```powershell
+androidforge run checkpoint after-login --run <ID> --json
+androidforge run end --run <ID> --status failed --json
+androidforge run resume <ID> --from-checkpoint after-login --json
+androidforge run events <ID>
+androidforge report repro <ID> --json
+```
+
+`events` prints raw NDJSON (`run_started`, `step_started`, `step_finished`, `checkpoint`, `artifact`,
+`run_finalized`, `resumed`). It is not wrapped in the JSON envelope. `--follow` tails until the run is
+terminal or `--timeout` expires. `report repro` emits a PowerShell script from the run's exact argv.
+
+Structured logcat:
+
+```powershell
+androidforge diagnostics logcat query --session ses-... --grep "FATAL|ANR" --level warn --json
+androidforge diagnostics logcat watch --session ses-... --crash --anr --timeout 30s
+```
+
+`query` returns structured threadtime records. `watch` prints raw NDJSON events (`log`, `crash`, `anr`)
+and is bounded by `--timeout` and `--max-events`.
+
+Intents, deep links, broadcasts and services:
+
+```powershell
+androidforge app launch com.example --action android.intent.action.VIEW --data "myapp://checkout/42" --wait --json
+androidforge app launch com.example --component com.example/.MainActivity --extra "coupon:s:SAVE10" --json
+androidforge app broadcast --action com.example.PING --extra "n:i:7" --json
+androidforge app service --package com.example --service .SyncService --stop --json
+```
+
+Extras are `key:type:value` with `s`, `i`, `l`, `f`, `z`, `esa`, `eia`.
+
+Network:
+
+```powershell
+androidforge network proxy set http://127.0.0.1:8080 --session ses-... --json
+androidforge network proxy get --session ses-... --json
+androidforge network profile apply wifi-only --session ses-... --json
+androidforge network restore --session ses-... --json
+```
+
+Profiles are `default`, `offline`, `wifi-only`, `data-only`, `no-proxy`. Apply records the previous
+state in the session; `restore` puts it back and removes the record. Latency/loss shaping is not
+implemented.
+
+Device waiting:
+
+```powershell
+androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --wait --timeout 10m --json
+```
+
+`--wait` retries only `E_DEVICE_BUSY`; all other errors fail immediately. On timeout it returns
+`E_DEVICE_BUSY` with the elapsed wait and does not steal the device.
 
 ### 0.11 Wireless ADB and device health
 

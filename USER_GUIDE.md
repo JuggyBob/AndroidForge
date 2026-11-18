@@ -78,9 +78,12 @@ are reused unless `--refresh-screen` is passed. `--dry-run` avoids capturing a n
 androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --ttl 1h --json
 androidforge session ensure --project . --avd Pixel_8_API_35 --port 5562 --owner MyAgent --json
 androidforge session ensure --project . --serial emulator-5554 --owner MyAgent --json
+androidforge session ensure --project . --avd Pixel_8_API_35 --owner MyAgent --wait --timeout 10m --json
 ```
 
-`ensure` is idempotent for the same owner/project/target. It reuses a healthy compatible session,
+`ensure` is idempotent for the same owner/project/target. `--wait` retries only while the device is
+busy (`E_DEVICE_BUSY`); other errors fail immediately. On timeout it returns `E_DEVICE_BUSY` with the
+elapsed wait and never steals the device. It reuses a healthy compatible session,
 attaches to a warm unowned emulator, or starts the requested AVD. It refuses to steal a device from
 another owner. `lease_expires_at` and `lease_ttl_seconds` are advisory: expiry never stops a device or
 interrupts work. An expired lease is reported as `needs_reconciliation: true`; supplying `--ttl` to
@@ -205,19 +208,21 @@ wait/assert may reference context text that is not itself actionable. Context te
 row is marked `actionable_via: "ancestor"` and can be tapped or long-pressed through that ancestor.
 Observe again after navigation; unchanged nodes keep the same ref.
 
-### Sequential device matrix
+### Device matrix (sequential or parallel)
 
 ```powershell
 androidforge agent matrix --project . --avd AVD_1 --avd AVD_2 --flow conformance --json
-androidforge agent matrix --project . --serial emulator-5554 --serial emulator-5556 --flow conformance --json
+androidforge agent matrix --project . --serial emulator-5554 --serial emulator-5556 --flow conformance --parallel 2 --json
 androidforge agent matrix --project . --avd AVD_1 --avd AVD_2 --flow conformance --dry-run --json
 ```
 
-Targets are validated up front and duplicates are rejected. Execution is sequential; each target gets a
-separate owned session and runs the normal `agent test` pipeline. Aggregate status is `passed`, `failed`
-or `partial`; per-target API/model, health, session, run and cleanup are recorded. `--fail-fast` skips
-remaining targets. Only sessions created by the matrix with the matrix owner are released; emulators and
-pre-existing sessions are untouched. `--parallel` >1 is deliberately unsupported until validated.
+Targets are validated up front and duplicates are rejected. Each target gets a separate owned session
+and runs the normal `agent test` pipeline. `--parallel 1..32` launches one independent child matrix per
+target; port probing and session creation are serialized so workers cannot claim the same emulator
+port. Aggregate status is `passed`, `failed` or `partial`; `parallel`, per-target API/model, health,
+session, child report and cleanup are recorded. `--fail-fast` is best-effort in parallel mode because
+already-running targets finish. Only sessions created by the matrix with the matrix owner are released;
+emulators and pre-existing sessions are untouched.
 
 ### Wireless ADB and health
 
@@ -275,6 +280,19 @@ androidforge doctor fix --check --json
 `--plan` never installs packages, downloads tools, edits PATH or the registry, or changes Java/emulator
 configuration. Every issue lists severity, detected state, component, reason and (when exact) a repair
 command with confirmation/network/permission flags. `mutations_performed` is empty.
+
+### MCP server and tool schema
+
+```powershell
+androidforge mcp serve
+androidforge tools schema --format mcp --json
+androidforge tools schema --format openai --json
+```
+
+`mcp serve` is a local stdio JSON-RPC server. It writes only protocol lines to stdout; logs go to
+stderr. It exposes the same 31 tools as `tools schema`, shells out to the same CLI and requires
+`confirm=true` for destructive tools. There is no HTTP listener, account or key. Use `tools schema`
+to feed the same catalog to another function-calling client.
 
 ### Transparent agent pipeline
 
@@ -616,6 +634,10 @@ Use `--no-verify` only when you explicitly need to skip post-install hash verifi
 
 ```powershell
 androidforge app launch com.example.app --session <ID> --json
+androidforge app launch com.example.app --action android.intent.action.VIEW --data "myapp://checkout/42" --wait --session <ID> --json
+androidforge app launch com.example.app --component com.example.app/.MainActivity --extra "coupon:s:SAVE10" --session <ID> --json
+androidforge app broadcast --action com.example.app.PING --extra "n:i:7" --session <ID> --json
+androidforge app service --package com.example.app --service .SyncService --stop --session <ID> --json
 androidforge app status com.example.app --session <ID> --expect foreground --json
 androidforge app status com.example.app --session <ID> --expect foreground --assert-task-exists --assert-process-stable --stable-for 2s --json
 androidforge app force-stop com.example.app --session <ID> --json
@@ -625,6 +647,11 @@ androidforge app uninstall com.example.app --session <ID> --yes --json
 androidforge app list --session <ID> --json
 androidforge app info com.example.app --session <ID> --json
 ```
+
+`app launch` accepts `--component`, `--action`, `--data` (deep links), `--mime-type`, `--category`,
+`--extra`, `--flag`, `--wait` and `--force-stop`. Extras use `key:type:value` with `s`, `i`, `l`, `f`,
+`z`, `esa` and `eia`; values may contain colons. `app broadcast` adds `--receiver-permission` and
+`--asynchronous`; `app service` starts or stops a service intent. A supplied package must be installed.
 
 `force-stop` removes the task/process and stops scheduled work. `kill` is the softer `am kill`. `clear-data` and `uninstall` are destructive and require `--yes`. `run-as` file operations require a debuggable build:
 
@@ -653,6 +680,10 @@ androidforge ui dump --session <ID> --json
 androidforge ui find --session <ID> --text "Save" --json
 androidforge ui find --session <ID> --contains "Save" --json
 androidforge ui find --session <ID> --resource-id com.example.app:id/save --json
+androidforge ui find --session <ID> --role button --text-regex "Save|Apply" --json
+androidforge ui find --session <ID> --text "Continue" --within "Checkout" --json
+androidforge ui find --session <ID> --text "Continue" --region 0,800,1080,1600 --json
+androidforge ui find --session <ID> --text "Continue" --ocr-fallback --json
 androidforge ui focused --session <ID> --json
 ```
 
@@ -690,6 +721,10 @@ androidforge ui scroll-to --session <ID> --text "Settings" --json
 Rules:
 
 - Exact matching is the default; use `--contains` deliberately.
+- Selector v2 adds `--role`, `--text-regex`, `--region`, `--within`, `--above`, `--below`, `--left-of`
+  and `--right-of`. `--ocr-fallback` runs only after UIAutomator finds nothing; it supports text,
+  regex, region and index and refuses conditions OCR cannot prove (resource id, class, role,
+  relative nodes). The default engine is `tesseract`; override with `ANDROIDFORGE_OCR_COMMAND`.
 - `ui find` is a search: it succeeds with `matches: []` when nothing matches. `ui assert`, `ui tap` and `ui wait` fail with `E_SELECTOR_NOT_FOUND` when the condition is absent.
 - `ui assert` is a quick one-attempt check (default 1s). Pass `--timeout` or use `ui wait` first for animated/loading screens.
 - `ui clear` with no selector clears the focused editable field. If none is focused it returns `E_SELECTOR_NOT_FOUND` with the focused nodes and a selector suggestion. Android Settings and some OEM fields expose their hint as `text`; AndroidForge treats an exact hint as empty before typing and after clearing, so clearing a search field does not false-fail.
@@ -719,12 +754,17 @@ Screenshots include dimensions, display size, timestamp and SHA-256. Recordings 
 
 ```powershell
 androidforge diagnostics logcat --session <ID> --package com.example.app --lines 2000 --json
+androidforge diagnostics logcat query --session <ID> --grep "FATAL|ANR" --level warn --json
+androidforge diagnostics logcat watch --session <ID> --crash --anr --timeout 30s
 androidforge diagnostics logcat start --session <ID> --package com.example.app --json
 androidforge diagnostics logcat status --session <ID> --json
 androidforge diagnostics logcat stop --session <ID> --json
 ```
 
-One-shot tails are bounded. Continuous capture runs on-device with `[diagnostics].logcat_max_seconds` and `max_log_bytes` caps. AndroidForge never clears the global buffer by default.
+One-shot tails are bounded. `query` returns structured threadtime records filtered by package,
+level, time and regex. `watch` streams raw NDJSON events (`log`, `crash`, `anr`) and stops at
+`--timeout` or `--max-events`. Continuous capture runs on-device with `[diagnostics].logcat_max_seconds`
+and `max_log_bytes` caps. AndroidForge never clears the global buffer by default.
 
 ### Diagnostics collection
 
@@ -773,12 +813,23 @@ androidforge doze status --session <ID> --json
 androidforge standby get com.example.app --session <ID> --json
 androidforge battery status --session <ID> --json
 androidforge network status --session <ID> --json
+androidforge network proxy set http://127.0.0.1:8080 --session <ID> --json
+androidforge network proxy get --session <ID> --json
+androidforge network proxy clear --session <ID> --json
+androidforge network profile list --json
+androidforge network profile apply wifi-only --session <ID> --json
+androidforge network restore --session <ID> --json
 androidforge time get --session <ID> --json
 ```
 
 Short permission names are normalized to `android.permission.*`. `SCHEDULE_EXACT_ALARM` and similar special permissions may need AppOps or user consent; a failed grant reports what remains. Notification/job/alarm/Doze parsers are best-effort across Android versions; raw dumps are preserved.
 
 Interactive toggles (`doze force`, `network airplane`, `time set`) require `--yes`. Time changes usually require root, which AndroidForge will not provide.
+
+Network profiles are `default`, `offline`, `wifi-only`, `data-only` and `no-proxy`. Applying one
+records the previous airplane/Wi-Fi/data/proxy state in the session; `network restore` puts it back
+and removes the record. Profiles do not simulate latency, loss or bandwidth. `network profile list`
+works without a device.
 
 ## 12. Runs and reports
 
@@ -802,6 +853,23 @@ active pointer when that run is the session's active run, so a later command sta
 of appending to a finished one; a stale pointer to a finished run is ignored and cleared. A run that
 did not install inherits the build identity observed in the session; if none is known it reads the
 installed package/version once and marks hash/certificate verification false.
+
+### Checkpoints, resume and events
+
+```powershell
+androidforge run checkpoint after-login --run <ID> --note "session ready" --json
+androidforge run end --run <ID> --status failed --json
+androidforge run resume <ID> --from-checkpoint after-login --json
+androidforge run events <ID>
+androidforge run events <ID> --follow --timeout 5m
+androidforge report repro <ID> --json
+```
+
+A checkpoint records the current step index and session. Resuming reopens a terminal run, moves the
+previous failure into `failure_history`, increments `resume_count` and keeps appending to the same
+report. `events` prints raw NDJSON (`run_started`, `step_started`, `step_finished`, `checkpoint`,
+`artifact`, `run_finalized`, `resumed`) without the usual JSON envelope. `report repro` emits a
+PowerShell script from the run's exact recorded argv.
 
 `report show` and `report path` search the current artifacts directory first, then project-local
 `.artifacts/runs` directories under the project tree. This makes a conformance run under

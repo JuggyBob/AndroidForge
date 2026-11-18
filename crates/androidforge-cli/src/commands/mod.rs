@@ -11,7 +11,9 @@ pub mod diagnostics;
 pub mod doctor;
 pub mod maintenance;
 pub mod matrix;
+pub mod mcp;
 pub mod observation;
+pub mod ocr;
 pub mod receipt;
 pub mod report;
 pub mod session;
@@ -37,6 +39,8 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
         Command::Context(args) => context::context(cli, args).await,
         Command::Agent { command } => agent::agent(cli, command).await,
         Command::Capabilities => doctor::capabilities(cli).await,
+        Command::Mcp { command } => mcp::mcp(command),
+        Command::Tools { command } => mcp::tools(command),
         Command::Schema { command } => doctor::schema(command),
         Command::Init(args) => doctor::init(cli, args),
         Command::Config { command } => doctor::config(cli, command).await,
@@ -188,6 +192,8 @@ pub fn canonical_name(command: &Command) -> String {
             crate::cli::AgentCommand::Matrix(_) => "agent.matrix".to_string(),
         },
         Command::Capabilities => "capabilities".to_string(),
+        Command::Mcp { .. } => "mcp".to_string(),
+        Command::Tools { .. } => "tools".to_string(),
         Command::Schema { .. } => "schema".to_string(),
         Command::Init(_) => "init".to_string(),
         Command::Config { .. } => "config".to_string(),
@@ -294,6 +300,8 @@ fn app_name(command: &AppCommand) -> &'static str {
         AppCommand::Uninstall(_) => "uninstall",
         AppCommand::ClearData(_) => "clear-data",
         AppCommand::Launch(_) => "launch",
+        AppCommand::Broadcast(_) => "broadcast",
+        AppCommand::Service(_) => "service",
         AppCommand::ForceStop(_) => "force-stop",
         AppCommand::Kill(_) => "kill",
         AppCommand::Status(_) => "status",
@@ -372,6 +380,9 @@ fn run_name(command: &RunCommand) -> &'static str {
         RunCommand::End(_) => "end",
         RunCommand::Status => "status",
         RunCommand::Exec(_) => "exec",
+        RunCommand::Checkpoint(_) => "checkpoint",
+        RunCommand::Resume(_) => "resume",
+        RunCommand::Events(_) => "events",
     }
 }
 
@@ -395,6 +406,7 @@ fn report_name(command: &ReportCommand) -> &'static str {
         ReportCommand::History(_) => "history",
         ReportCommand::Recurrences(_) => "recurrences",
         ReportCommand::Bundle(_) => "bundle",
+        ReportCommand::Repro(_) => "repro",
         ReportCommand::Import { .. } => "import",
     }
 }
@@ -498,6 +510,9 @@ impl NestedName for crate::cli::NetworkCommand {
             Self::Airplane { .. } => "airplane",
             Self::Wifi { .. } => "wifi",
             Self::Data { .. } => "data",
+            Self::Proxy { .. } => "proxy",
+            Self::Profile { .. } => "profile",
+            Self::Restore => "restore",
         }
     }
 }

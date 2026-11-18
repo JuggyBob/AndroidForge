@@ -120,6 +120,30 @@ impl UiNode {
             || class.contains("searchview")
     }
 
+    /// Stable semantic role used by selector v2, observations and MCP tools.
+    pub fn semantic_role(&self) -> &'static str {
+        let class = self.class.as_deref().unwrap_or("").to_ascii_lowercase();
+        if self.editable_like() {
+            "edit_text"
+        } else if class.contains("button") {
+            "button"
+        } else if class.contains("checkbox") || class.contains("switch") {
+            "toggle"
+        } else if class.contains("tab") {
+            "tab"
+        } else if self.scrollable {
+            "scrollable"
+        } else if self.clickable || self.long_clickable {
+            "actionable"
+        } else if class.contains("image") {
+            "image"
+        } else if class.contains("textview") || class.contains("text") {
+            "text"
+        } else {
+            "other"
+        }
+    }
+
     /// Text is empty, or exactly matches an explicit hint/placeholder.
     /// Safe to use before typing: a real value that happens to equal a
     /// content description is not treated as empty.

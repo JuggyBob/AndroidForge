@@ -119,12 +119,27 @@ async fn allocate_emulator_port(
     requested: Option<u16>,
 ) -> Result<androidforge_emulator::PortReservation> {
     let adb = ctx.adb()?;
-    let occupied = adb
+    let mut occupied = adb
         .devices_raw()
         .await?
         .iter()
         .filter_map(|device| parse_emulator_port(&device.serial))
         .collect::<BTreeSet<_>>();
+    // Sessions record their port before the emulator process is spawned. The
+    // TCP reservation is released at that point, so another concurrent
+    // `session ensure` must treat a live session's port as occupied even when
+    // ADB does not list the emulator yet.
+    for entry in list_sessions(&ctx.paths)? {
+        if matches!(
+            entry.state,
+            SessionState::Released | SessionState::Failed | SessionState::Abandoned
+        ) {
+            continue;
+        }
+        if let Some(port) = entry.port {
+            occupied.insert(port);
+        }
+    }
     if let Some(port) = requested {
         if occupied.contains(&port) {
             return Err(ForgeError::new(
@@ -239,6 +254,11 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
         );
     }
 
+    // The port choice and the session record that makes it durable must be one
+    // cross-process critical section. Otherwise two parallel matrix workers can
+    // both probe 5554 as free before either session exists, and the second one
+    // fails on the device lock with a colliding serial.
+    let port_lock = PortWindowLock::acquire(&ctx.paths).await?;
     let reservation = allocate_emulator_port(ctx, args.port).await?;
     let port = reservation.console_port;
     let serial = reservation.serial();
@@ -258,6 +278,7 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
         return Err(error.session(session.id.clone()));
     }
     reservation.release();
+    drop(port_lock);
     let log_dir = ctx.paths.sessions_dir().join(&session.id).join("logs");
     let started = manager
         .start(
@@ -436,6 +457,59 @@ impl Drop for EnsureLock {
     }
 }
 
+/// Serializes emulator port probing with session creation across processes.
+/// It is a region lock, not a boot lock: once the session records its port the
+/// lock is released and the emulator boots in parallel with other targets.
+struct PortWindowLock {
+    path: PathBuf,
+}
+
+impl PortWindowLock {
+    async fn acquire(paths: &androidforge_core::paths::ForgePaths) -> Result<Self> {
+        let dir = paths.state_dir.join("locks");
+        ensure_dir(&dir)?;
+        let path = dir.join("emulator-port.lock");
+        let started = Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => {
+                    let _ = writeln!(file, "{}", std::process::id());
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if ensure_lock_is_stale(&path) {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    if started.elapsed() > Duration::from_secs(60) {
+                        return Err(ForgeError::new(
+                            ErrorCode::DeviceBusy,
+                            "another process is still allocating an emulator port",
+                        )
+                        .with_context_string("lock", path.to_string_lossy())
+                        .with_suggestion(
+                            "Wait for the other emulator start to finish, then retry.",
+                        ));
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(error) => {
+                    return Err(ForgeError::internal(format!(
+                        "could not create emulator port lock {}: {error}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for PortWindowLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn ensure_lock_is_stale(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
@@ -508,6 +582,34 @@ async fn alternative_serials(ctx: &CliContext) -> Result<Vec<String>> {
 }
 
 pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result<CommandSuccess> {
+    if !args.wait {
+        return ensure_once(ctx, args).await;
+    }
+    let timeout = parse_duration(&args.timeout).map_err(ForgeError::invalid_argument)?;
+    if timeout.is_zero() {
+        return Err(ForgeError::invalid_argument(
+            "session ensure --timeout must be greater than zero",
+        ));
+    }
+    let started = std::time::Instant::now();
+    loop {
+        match ensure_once(ctx, args).await {
+            Ok(success) => return Ok(success),
+            Err(error) if error.code() == ErrorCode::DeviceBusy => {
+                if started.elapsed() >= timeout {
+                    return Err(error.with_suggestion(format!(
+                        "Waited {}s for a device. Inspect `session list` and choose another AVD or serial.",
+                        timeout.as_secs()
+                    )));
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn ensure_once(ctx: &CliContext, args: &SessionEnsureArgs) -> Result<CommandSuccess> {
     if args.avd.is_none() && args.serial.is_none() {
         return Err(ForgeError::invalid_argument(
             "session ensure needs --avd <AVD> or --serial <SERIAL>",
@@ -560,6 +662,8 @@ pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result
                 "port": args.port,
                 "headless": true,
                 "prepare": args.prepare,
+                "wait": args.wait,
+                "timeout": args.timeout,
                 "lease_ttl_seconds": ttl.map(|ttl| ttl.as_secs()),
                 "would": would,
                 "destructive": false,

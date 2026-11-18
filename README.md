@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.9.4`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.10.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
 > Maestro, instrumentation, snapshot restore and root-only operations are not yet fully validated.
 > Read [Project status](#project-status) before relying on it.
@@ -74,12 +74,41 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
 | Agent context | `context`, `agent brief`, compact observations/diffs, stable refs, action receipts, postconditions and exact next-action argv |
 | Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints, recurrence memory, `report explain/history/recurrences` and diagnostic bundles |
-| Orchestration | Idempotent `session ensure`, read-only `doctor fix --plan`, transparent `agent test`, APK resolution, `--only-if-changed` and sequential `agent matrix` |
+| Orchestration | Idempotent and waitable `session ensure`, read-only `doctor fix --plan`, transparent `agent test`, APK resolution, `--only-if-changed` and parallel `agent matrix` |
 | Desktop | Native egui/eframe cockpit: onboarding, context, matrix, ownership, devices with health/wireless, sessions, runs, triage with explanations/receipts/recurrence/bundle previews, comparison, live logcat, inspector, repair planning, maintenance and updates |
 | Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
+
+## What is new in v0.10.0
+
+Seven agent-facing capabilities, delivered together:
+
+- **MCP server and tool export:** `androidforge mcp serve` runs a local stdio MCP server (JSON-RPC
+  2025-06-18). It exposes 31 tools and 29 resources, shells out to the same CLI, and refuses
+  destructive calls without `confirm=true`. `tools schema --format mcp|openai|json` exports the same
+  catalog for other function-calling clients.
+- **Selector v2 and OCR fallback:** selectors gain `--role`, `--text-regex`, `--region`, `--within`,
+  `--above`, `--below`, `--left-of` and `--right-of`. `--ocr-fallback` runs only when UIAutomator has
+  no match; OCR supports text, regex, region and index, and cannot pretend to prove resource IDs,
+  roles or relative relationships.
+- **Resumable runs and NDJSON events:** `run checkpoint`, `run resume --from-checkpoint`,
+  `run events [--follow]` and `report repro`. Failure history and resume counts are preserved in the
+  report; events are append-only `events.ndjson`.
+- **Logcat query and watch:** `diagnostics logcat query` returns structured threadtime records with
+  level, package, time and regex filters. `diagnostics logcat watch` streams log/crash/ANR events as
+  raw NDJSON with a bounded timeout.
+- **Generic intents and deep links:** `app launch --action/--data/--mime-type/--category/--extra/
+  --flag/--component/--wait/--force-stop`, plus `app broadcast` and `app service`. Extras use
+  `key:type:value` (`s`, `i`, `l`, `f`, `z`, `esa`, `eia`).
+- **Network profiles and proxy:** `network proxy get|set|clear`, `network profile list|apply` and
+  `network restore`. Profiles are honest (`default`, `offline`, `wifi-only`, `data-only`, `no-proxy`);
+  latency/loss simulation is not faked.
+- **Device waiting and parallel matrix:** `session ensure --wait --timeout` waits for a busy device
+  instead of failing immediately. `agent matrix --parallel N` runs one independent child matrix per
+  target, with late-binding port allocation and per-target reports. `--fail-fast` is best-effort:
+  already-running targets finish.
 
 ## What is new in v0.9.4
 
@@ -223,7 +252,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.9.4` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.10.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -271,7 +300,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.9.4)
+### Agent loop quick start (v0.10.0)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -433,12 +462,12 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.9.4`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD matrix, and against a Xiaomi HyperOS device for read-only and safe
-UI paths. v0.9.4 adds physical-device mutation guardrails, correct uninstall confirmation, complete
-receipt effect classification, overlay dismissal, reliable emulator snapshots, crash-safe state
-writes, metadata-only bundles, repeatable long-horizon/real-device/upgrade/fault harnesses and a
-supply-chain policy. The v0.9.2/v0.9.3 product fixes remain in place. See
+**Alpha `v0.10.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
+emulators, including a two-AVD parallel matrix, and against a Xiaomi HyperOS device for read-only and
+safe UI paths. v0.10.0 adds the MCP server and tool export, selector v2 with optional local OCR,
+resumable runs with NDJSON events, structured logcat query/watch, generic intents and deep links,
+network profiles/proxy control, bounded device waiting and a parallel matrix. The v0.9.x safety
+fixes remain in place. See
 [VERIFICATION.md](VERIFICATION.md), [docs/REAL_DEVICE_COMPATIBILITY.md](docs/REAL_DEVICE_COMPATIBILITY.md),
 [docs/LONG_HORIZON_TESTING.md](docs/LONG_HORIZON_TESTING.md) and [case-studies/](case-studies/).
 
@@ -488,6 +517,10 @@ Validated:
   cross-process locking, empty-hierarchy retry, and the 26 previously `NOT RUN` certification checks
   exercised on a clean API 36 AVD. The desktop smoke harness rendered all 13 pages with UI Automation
   and invoked Refresh.
+- v0.10.0 agent-surface validation: MCP handshake/tools/resources (31 tools, 29 resources), selector
+  v2 and OCR fallback, checkpoint/resume/event/repro, structured logcat query/watch, intent/broadcast
+  and service paths, proxy/profile/restore, bounded device waiting, and a two-AVD `--parallel 2`
+  matrix with distinct ports and released sessions.
 - v0.9.4 safety and repeatability validation: physical-device mutation refusal, uninstall `--yes`,
   full-spectrum receipt effects, SystemUI overlay dismissal, snapshot save/load/delete, recording
   duration, metadata-only bundles, crash-safe Windows state replacement, and the long-horizon,
@@ -500,6 +533,11 @@ Not yet validated:
 - Physical devices and vendor ROMs (MIUI, Samsung, etc.). v0.9.4 adds a safe real-device harness and
   records a Xiaomi HyperOS read-only pass. Physical-device debug install was blocked by
   `INSTALL_FAILED_USER_RESTRICTED`; emulator coverage is not a substitute for vendor install testing.
+- Real Tesseract accuracy. OCR fallback was verified end-to-end with a deterministic local test engine
+  and a missing-engine failure path; the default `tesseract` binary was not installed on the
+  verification host, so recognition quality is engine- and language-data-dependent.
+- MCP transports other than local stdio (no HTTP/SSE server is shipped), and MCP client-specific
+  tool-calling behavior beyond the recorded JSON-RPC handshake and calls.
 - Maestro and instrumentation execution remain `best-effort` and were not end-to-end validated in
   this release.
 - Maestro execution and instrumentation test APKs.

@@ -32,6 +32,129 @@ pub struct Selector {
     pub checked: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_regex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub above: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub below: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SelectorContext {
+    text_regex: Option<regex::Regex>,
+    region: Option<Rect>,
+    within: Vec<(usize, Rect)>,
+    above: Vec<(usize, Rect)>,
+    below: Vec<(usize, Rect)>,
+    left_of: Vec<(usize, Rect)>,
+    right_of: Vec<(usize, Rect)>,
+}
+
+impl SelectorContext {
+    fn build(hierarchy: &UiHierarchy, selector: &Selector) -> Result<Self> {
+        let text_regex = selector
+            .text_regex
+            .as_deref()
+            .map(regex::Regex::new)
+            .transpose()
+            .map_err(|error| {
+                ForgeError::invalid_argument(format!("invalid --text-regex: {error}"))
+            })?;
+        let region = selector.region.as_deref().map(parse_region).transpose()?;
+        Ok(Self {
+            text_regex,
+            region,
+            within: reference_rects(hierarchy, selector.within.as_deref())?,
+            above: reference_rects(hierarchy, selector.above.as_deref())?,
+            below: reference_rects(hierarchy, selector.below.as_deref())?,
+            left_of: reference_rects(hierarchy, selector.left_of.as_deref())?,
+            right_of: reference_rects(hierarchy, selector.right_of.as_deref())?,
+        })
+    }
+}
+
+fn parse_region(value: &str) -> Result<Rect> {
+    let numbers = value
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<i32>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| {
+            ForgeError::invalid_argument(format!(
+                "--region {value:?} must be four integers: x1,y1,x2,y2 ({error})"
+            ))
+        })?;
+    if numbers.len() != 4 || numbers[2] <= numbers[0] || numbers[3] <= numbers[1] {
+        return Err(ForgeError::invalid_argument(format!(
+            "--region {value:?} must be x1,y1,x2,y2 with x2>x1 and y2>y1"
+        )));
+    }
+    Ok(Rect {
+        left: numbers[0],
+        top: numbers[1],
+        right: numbers[2],
+        bottom: numbers[3],
+    })
+}
+
+fn rect_contains(rect: Rect, point: (i32, i32)) -> bool {
+    rect.contains(point.0, point.1)
+}
+
+fn label_matches(node: &UiNode, label: &str) -> bool {
+    node.text.as_deref() == Some(label)
+        || node.content_desc.as_deref() == Some(label)
+        || node.resource_id.as_deref() == Some(label)
+}
+
+fn reference_rects(hierarchy: &UiHierarchy, label: Option<&str>) -> Result<Vec<(usize, Rect)>> {
+    let Some(label) = label else {
+        return Ok(Vec::new());
+    };
+    let mut matches = hierarchy
+        .nodes
+        .iter()
+        .filter(|node| node.visible() && label_matches(node, label))
+        .map(|node| (node.id, node.bounds))
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        matches = hierarchy
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.visible()
+                    && (node
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| text.contains(label))
+                        || node
+                            .content_desc
+                            .as_deref()
+                            .is_some_and(|text| text.contains(label)))
+            })
+            .map(|node| (node.id, node.bounds))
+            .collect();
+    }
+    if matches.is_empty() {
+        return Err(ForgeError::new(
+            ErrorCode::SelectorNotFound,
+            format!("reference selector {label:?} did not match any visible node"),
+        )
+        .with_suggestion("Use --text, --content-desc or --resource-id for the reference node.")
+        .with_suggestion("Run `androidforge ui find --contains <label>` to inspect candidates."));
+    }
+    Ok(matches)
 }
 
 impl Selector {
@@ -48,18 +171,41 @@ impl Selector {
             || self.scrollable.is_some()
             || self.checked.is_some()
             || self.visible.is_some()
+            || self.role.is_some()
+            || self.text_regex.is_some()
+            || self.within.is_some()
+            || self.above.is_some()
+            || self.below.is_some()
+            || self.left_of.is_some()
+            || self.right_of.is_some()
+            || self.region.is_some()
     }
 
     pub fn validate(&self) -> Result<()> {
         if !self.has_conditions() {
             return Err(ForgeError::invalid_argument(
-                "a UI selector needs at least one condition (for example --text, --content-desc or --resource-id)",
+                "a UI selector needs at least one condition (for example --text, --content-desc, --resource-id, --role or --text-regex)",
             ));
+        }
+        if let Some(pattern) = &self.text_regex {
+            regex::Regex::new(pattern).map_err(|error| {
+                ForgeError::invalid_argument(format!(
+                    "--text-regex {pattern:?} is invalid: {error}"
+                ))
+            })?;
+        }
+        if let Some(region) = &self.region {
+            parse_region(region)?;
         }
         Ok(())
     }
 
-    pub fn matches(&self, hierarchy: &UiHierarchy, node: &UiNode) -> bool {
+    pub(crate) fn matches(
+        &self,
+        hierarchy: &UiHierarchy,
+        node: &UiNode,
+        context: &SelectorContext,
+    ) -> bool {
         if let Some(text) = &self.text
             && node.text.as_deref() != Some(text.as_str())
         {
@@ -98,6 +244,28 @@ impl Selector {
         {
             return false;
         }
+        if let Some(role) = &self.role {
+            let requested = role.to_ascii_lowercase();
+            let requested = match requested.as_str() {
+                "text_input" | "textfield" | "edit" => "edit_text",
+                "checkbox" | "switch" | "toggle_button" => "toggle",
+                "image_view" => "image",
+                other => other,
+            };
+            if node.semantic_role() != requested {
+                return false;
+            }
+        }
+        if let Some(regex) = &context.text_regex {
+            let matched = node
+                .text
+                .as_deref()
+                .or(node.content_desc.as_deref())
+                .is_some_and(|text| regex.is_match(text));
+            if !matched {
+                return false;
+            }
+        }
         if let Some(clickable) = self.clickable {
             // A clickable ancestor makes a label actionable for tap purposes.
             // This is the same rule the UI manager applies when dispatching, so
@@ -133,6 +301,51 @@ impl Selector {
         {
             return false;
         }
+        if let Some(region) = context.region
+            && !rect_contains(region, node.bounds.center())
+        {
+            return false;
+        }
+        if !context.within.is_empty()
+            && !context
+                .within
+                .iter()
+                .any(|(id, rect)| *id != node.id && rect_contains(*rect, node.bounds.center()))
+        {
+            return false;
+        }
+        if !context.above.is_empty()
+            && !context
+                .above
+                .iter()
+                .any(|(id, rect)| *id != node.id && node.bounds.bottom <= rect.top)
+        {
+            return false;
+        }
+        if !context.below.is_empty()
+            && !context
+                .below
+                .iter()
+                .any(|(id, rect)| *id != node.id && node.bounds.top >= rect.bottom)
+        {
+            return false;
+        }
+        if !context.left_of.is_empty()
+            && !context
+                .left_of
+                .iter()
+                .any(|(id, rect)| *id != node.id && node.bounds.right <= rect.left)
+        {
+            return false;
+        }
+        if !context.right_of.is_empty()
+            && !context
+                .right_of
+                .iter()
+                .any(|(id, rect)| *id != node.id && node.bounds.left >= rect.right)
+        {
+            return false;
+        }
         true
     }
 
@@ -165,6 +378,12 @@ pub struct UiMatch {
     pub scrollable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_clickable: Option<bool>,
+    #[serde(default = "default_match_source")]
+    pub source: String,
+}
+
+fn default_match_source() -> String {
+    "uiautomator".to_string()
 }
 
 impl UiMatch {
@@ -202,6 +421,27 @@ impl UiMatch {
             parent_clickable: hierarchy
                 .clickable_ancestor(node)
                 .map(|ancestor| ancestor.clickable),
+            source: default_match_source(),
+        }
+    }
+
+    pub fn ocr(index: usize, text: String, bounds: Rect) -> Self {
+        Self {
+            index,
+            node_id: 0,
+            path: format!("ocr:{index}"),
+            text: Some(text),
+            content_desc: None,
+            resource_id: None,
+            class: None,
+            package: None,
+            bounds,
+            clickable: true,
+            enabled: true,
+            focused: false,
+            scrollable: false,
+            parent_clickable: None,
+            source: "ocr".to_string(),
         }
     }
 }
@@ -244,11 +484,12 @@ impl Selection {
 
 pub fn find(hierarchy: &UiHierarchy, selector: &Selector) -> Result<Vec<UiMatch>> {
     selector.validate()?;
+    let context = SelectorContext::build(hierarchy, selector)?;
     let indices = hierarchy
         .nodes
         .iter()
         .enumerate()
-        .filter(|(_, node)| selector.matches(hierarchy, node))
+        .filter(|(_, node)| selector.matches(hierarchy, node, &context))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     Ok(indices
@@ -262,11 +503,12 @@ pub fn find(hierarchy: &UiHierarchy, selector: &Selector) -> Result<Vec<UiMatch>
 
 pub fn select(hierarchy: UiHierarchy, selector: &Selector) -> Result<Selection> {
     selector.validate()?;
+    let context = SelectorContext::build(&hierarchy, selector)?;
     let indices = hierarchy
         .nodes
         .iter()
         .enumerate()
-        .filter(|(_, node)| selector.matches(&hierarchy, node))
+        .filter(|(_, node)| selector.matches(&hierarchy, node, &context))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     if indices.is_empty() {
@@ -470,6 +712,76 @@ mod tests {
             ..Selector::default()
         };
         assert_eq!(find(&hierarchy, &selector).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn regex_role_region_and_relative_selectors_match() {
+        let hierarchy = UiHierarchy::parse(XML).unwrap();
+        let regex = Selector {
+            text_regex: Some("^Save$".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &regex).unwrap().len(), 2);
+
+        let role = Selector {
+            role: Some("button".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &role).unwrap().len(), 2);
+
+        let region = Selector {
+            text: Some("Save".to_string()),
+            region: Some("150,240,250,260".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &region).unwrap().len(), 1);
+
+        let above = Selector {
+            resource_id: Some("com.example:id/save".to_string()),
+            above: Some("Save draft".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &above).unwrap().len(), 1);
+
+        let below = Selector {
+            resource_id: Some("com.example:id/save2".to_string()),
+            below: Some("Save".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &below).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn within_and_left_right_selectors_use_reference_bounds() {
+        let hierarchy = UiHierarchy::parse(
+            r#"<hierarchy rotation="0">
+  <node index="0" text="Form" resource-id="com.example:id/form" class="android.widget.FrameLayout" package="com.example" clickable="false" enabled="true" focused="false" scrollable="false" bounds="[0,0][1000,800]">
+    <node index="0" text="Left" resource-id="com.example:id/left" class="android.widget.Button" package="com.example" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[10,10][200,100]" />
+    <node index="1" text="Right" resource-id="com.example:id/right" class="android.widget.Button" package="com.example" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[800,10][990,100]" />
+  </node>
+  <node index="1" text="Outside" resource-id="com.example:id/outside" class="android.widget.Button" package="com.example" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[10,900][200,1000]" />
+</hierarchy>"#,
+        )
+        .unwrap();
+        let within = Selector {
+            within: Some("Form".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &within).unwrap().len(), 2);
+
+        let left_of = Selector {
+            text: Some("Left".to_string()),
+            left_of: Some("Right".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &left_of).unwrap().len(), 1);
+
+        let right_of = Selector {
+            text: Some("Right".to_string()),
+            right_of: Some("Left".to_string()),
+            ..Selector::default()
+        };
+        assert_eq!(find(&hierarchy, &right_of).unwrap().len(), 1);
     }
 
     #[test]

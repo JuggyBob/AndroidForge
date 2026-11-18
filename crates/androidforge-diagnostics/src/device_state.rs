@@ -45,6 +45,14 @@ pub struct BatteryState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airplane_mode: Option<bool>,
@@ -338,6 +346,34 @@ impl DeviceStateManager {
             )
             .await?;
         self.battery(serial).await
+    }
+
+    pub async fn proxy(&self, serial: &str) -> Result<ProxyState> {
+        let raw = self
+            .adb
+            .settings_get(serial, "global", "http_proxy")
+            .await
+            .ok()
+            .map(|value| value.trim().to_string());
+        let proxy = raw
+            .as_deref()
+            .filter(|value| !value.is_empty() && *value != ":0")
+            .map(str::to_string);
+        Ok(ProxyState { proxy, raw })
+    }
+
+    pub async fn set_proxy(&self, serial: &str, proxy: Option<&str>) -> Result<ProxyState> {
+        self.adb
+            .settings_put(
+                serial,
+                "global",
+                "http_proxy",
+                proxy
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or(":0"),
+            )
+            .await?;
+        self.proxy(serial).await
     }
 
     pub async fn network(&self, serial: &str) -> Result<NetworkState> {

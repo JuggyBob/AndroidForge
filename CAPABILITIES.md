@@ -17,7 +17,7 @@
 | `devices.list` | supported | adb | Parses `adb devices -l`, enriches operational devices. |
 | `emulator.lifecycle` | supported | adb, emulator | Legacy emulator executable; headless start, boot wait, stop, snapshots. |
 | `session.ownership` | supported | filesystem locks | Coordinates AndroidForge sessions only; external ADB users are not prevented. |
-| `session.ensure` | supported | filesystem locks | Idempotent reuse/attach/launch with advisory lease metadata; never steals another owner's device. |
+| `session.ensure` | supported | filesystem locks | Idempotent reuse/attach/launch with advisory lease metadata and bounded `--wait`; never steals another owner's device. |
 | `context` | supported | local state, optional adb | Compact project/session/device/app/screen/run snapshot with partial results and argv next actions. |
 | `ui.observation` | supported | adb, uiautomator | Compact semantic observations, session/boot-scoped tokens, semantic diffs and `--full` hierarchy. |
 | `ui.postconditions` | supported | adb, uiautomator | One action plus observation polling; no hidden action retries. |
@@ -34,7 +34,15 @@
 | `agent.pipeline` | supported | adb, project adapter | Transparent ensure/inspect/install/fixture/conformance/explain stages with dry-run. |
 | `agent.brief` | supported | local state, optional adb | One small project/session/device/app/screen snapshot with next commands. |
 | `agent.output_profiles` | supported | none | Full, compact and brief JSON with minification, caps, counts, summaries and next commands. |
-| `agent.matrix` | supported | adb, emulator, project adapter | Sequential one-session-per-target matrix, health preflight, fail-fast and partial aggregates; parallel rejected. |
+| `agent.matrix` | supported | adb, emulator, project adapter | One independent child matrix per target, health preflight, fail-fast and partial aggregates. `--parallel 1-32`; `--fail-fast` is best-effort because running targets finish. |
+| `mcp.server` | supported | none | Local stdio JSON-RPC MCP server (`mcp serve`) that shells out to the same CLI. Destructive tools require `confirm=true`. |
+| `tools.schema` | supported | none | `tools schema --format mcp|openai|json` exports the tool catalog for MCP and function-calling clients. |
+| `ui.selector_v2` | supported | adb, uiautomator | `--role`, `--text-regex`, `--region`, `--within`, `--above`, `--below`, `--left-of` and `--right-of` in addition to the v1 selectors. |
+| `ui.ocr_fallback` | best-effort | adb, optional local OCR engine | `--ocr-fallback` runs only after UIAutomator finds nothing. Default engine `tesseract`; override with `ANDROIDFORGE_OCR_COMMAND`. Images stay local. |
+| `runs.resume` | supported | local reports | `run checkpoint`, `run resume --from-checkpoint`, failure history and append-only `events.ndjson`; `report repro` emits exact argv. |
+| `diagnostics.logcat.query` | supported | adb | Bounded structured threadtime records with level/grep/time filters. `logcat watch` emits log/crash/ANR NDJSON. |
+| `intents` | supported | adb | Action/deep-link starts, typed extras, categories, flags, broadcasts and service start/stop. |
+| `network.profiles` | supported | adb | `default`, `offline`, `wifi-only`, `data-only` and `no-proxy`, global proxy get/set/clear and session-scoped restore. |
 | `apk.inspect` | supported | aapt2 | Package, version, SDKs, label, launchable activity, architectures, hash. |
 | `apk.verify` | supported | aapt2, apksigner, Java | Local signature verification. No signing automation. |
 | `apk.resolve` | supported | aapt2, project config | Deterministic newest valid variant output; never runs Gradle; ambiguity is explicit. |

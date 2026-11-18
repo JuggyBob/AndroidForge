@@ -1,10 +1,167 @@
 # Verification record
 
-This document records what was actually run for the `0.9.4` safety and repeatability release, the
-`0.9.3` contract and coverage release, the `0.9.2` patch, the `0.9.1` patch, the `0.9.0` Alpha
-delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and
-`0.3.0` records. It separates automated checks, real Android validation, desktop workflow validation
-and packaging validation from areas that were not exercised.
+This document records what was actually run for the `0.10.0` agent-surface release, the `0.9.4`
+safety and repeatability release, the `0.9.3` contract and coverage release, the `0.9.2` patch, the
+`0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`,
+`0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android
+validation, desktop workflow validation and packaging validation from areas that were not
+exercised.
+
+## v0.10.0 verification (2026-11-18)
+
+### Scope
+
+Seven requested capabilities:
+
+1. MCP server and tool-schema export;
+2. selector v2 with optional OCR fallback;
+3. resumable runs with checkpoints and NDJSON events;
+4. structured logcat query and watch;
+5. generic intents, deep links, broadcasts and services;
+6. network profiles and proxy control;
+7. bounded device waiting and parallel matrix execution.
+
+### Environment
+
+- Windows host, Rust `1.95`, workspace version `0.10.0`.
+- Emulators: `af_cert_clean` (API 36, `emulator-5554`) and `aster_test` (API 34, `emulator-5556`),
+  both x86_64 and AndroidForge-launched.
+- Physical device present but not mutated: Xiaomi `DM9X8LFQYHSSQKIN`.
+- MCP client harness: `tests/mcp-smoke.ps1` speaking newline-delimited JSON-RPC over stdio.
+
+### Automated checks
+
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `cargo test --workspace` reported **333 passed, 0 failed, 0 ignored** across **27 test
+  executables**.
+- `cargo build --workspace --release` passed; `androidforge --version` and
+  `androidforge-desktop --version` both report `0.10.0`.
+- `desktop/tests/smoke.ps1` on the release binaries: **13/13 pages passed, 0 failed**. Every page
+  rendered a non-blank screenshot, exposed a UI Automation tree, and the overview Refresh button was
+  invoked.
+- New regression tests cover:
+  - selector v2 regex/role/region/relative matching (`21` UI tests);
+  - OCR TSV parsing and line reconstruction;
+  - run checkpoints, resume, failure history and NDJSON event records;
+  - threadtime logcat records and buffer-marker rejection;
+  - typed intent extras, values containing colons, invalid types and component expansion;
+  - network profile uniqueness;
+  - matrix `parallel` serialization plus legacy-report defaulting;
+  - MCP tool catalog shape, destructive confirmation and new tool argv mapping.
+
+### MCP server and tool export
+
+On the release binary:
+
+- `tests/mcp-smoke.ps1`: **10/10 PASS**.
+- `initialize` returned protocol `2025-06-18`, server `androidforge`, version `0.10.0`.
+- `tools/list` returned **31 tools**, including `androidforge_app_launch`,
+  `androidforge_diagnostics_logcat_query`, `androidforge_network_restore`,
+  `androidforge_run_checkpoint` and `androidforge_report_repro`.
+- `tools/call androidforge_version` returned `androidforge 0.10.0`.
+- `tools/call androidforge_doctor` returned `status=success`, `isError=false`.
+- `tools/call androidforge_network_profile_list` returned all five profiles without a device.
+- `resources/list` returned **29 resources**; `resources/read` of
+  `androidforge://schema/observation.schema.json` returned the embedded schema.
+- `shutdown` and process exit returned code `0`.
+- `tools schema --format mcp` and `--format openai` both exported **31 tools**.
+
+### Selector v2 and OCR
+
+- `cargo test -p androidforge-ui` passed **21 tests**, including the new region, role, regex,
+  within/above/below/left-of/right-of cases.
+- On `emulator-5554`, `ui find --text-regex 'AF_OCR.*' --ocr-fallback` returned
+  `ocr_used=true`, `source=ocr`, text `AF_OCR_TAP`.
+- `ui tap --text AF_OCR_TAP --ocr-fallback` tapped at `(540,1200)` and returned
+  `matched.source=ocr`.
+- With `ANDROIDFORGE_OCR_COMMAND` pointing at a missing executable, the same command returned
+  `E_TOOL_NOT_FOUND` with install-path suggestions instead of silently falling back.
+
+The test engine was a deterministic local script because `tesseract` is not installed on the host.
+OCR matching, bounds, regex, region/index handling and failure behavior are verified; recognition
+accuracy of a real Tesseract language model is not.
+
+### Resumable runs and NDJSON events
+
+On the release binary with a temporary project:
+
+- `run start` created `20261118-140421-0c66e040_release-resume`.
+- `run checkpoint after-login` succeeded.
+- `run end --status failed` finalized the run as failed.
+- `run resume --from-checkpoint after-login` returned `resume_count=1` and
+  `from_checkpoint.name=after-login`.
+- `run events` returned 4 NDJSON records containing `resumed`, `checkpoint` and `run_finalized`.
+- `report repro` returned `exact_argv=true` and a 462-character PowerShell script.
+- A final `run end --status passed` closed the resumed run.
+
+### Logcat query and watch
+
+On `emulator-5554`:
+
+- Injected `AF_RELEASE_SENTINEL query` with `log -t AF_REL`.
+- `diagnostics logcat query --grep AF_RELEASE_SENTINEL` returned `matched=1`, tag `AF_REL`, message
+  `AF_RELEASE_SENTINEL query`.
+- `diagnostics logcat watch --grep AF_RELEASE_SENTINEL --timeout 12s --max-events 1` exited `0`
+  and emitted an NDJSON event with `event=log` containing `AF_RELEASE_SENTINEL watch`.
+- The threadtime parser ignores `--------- beginning of main` and similar buffer markers.
+
+### Intents, deep links, broadcasts and services
+
+On `emulator-5554` with the release binary:
+
+- `app launch com.android.settings --component com.android.settings/.Settings` succeeded without
+  `--wait`, reported the component and `foreground=true`.
+- `app launch com.android.settings --action android.settings.SETTINGS --wait` succeeded with
+  `status=ok`.
+- `app broadcast --action com.androidforge.RELEASE_TEST --extra af_key:s:af_value` succeeded with
+  `result=0`.
+- Stopping a missing service returned a structured `E_COMMAND_FAILED`; service start/stop does not
+  claim success for a service the platform did not find.
+
+### Network profiles, proxy and restore
+
+On `emulator-5554` with the release binary:
+
+- `network proxy set http://127.0.0.1:8123` returned that proxy.
+- `network proxy get` returned the same value.
+- `network proxy clear` returned an empty proxy.
+- `network profile apply wifi-only` returned `airplane=false`, `wifi=true`, `data=false`.
+- `network restore` returned `airplane=false`, `wifi=true`, `data=true`, with zero warnings.
+- `network profile list` works without a connected device.
+
+Latency, packet loss and bandwidth shaping are not implemented and are not reported.
+
+### Device waiting and parallel matrix
+
+- `session ensure --avd af_cert_clean --owner release-blocker --wait --timeout 5s` returned
+  `E_DEVICE_BUSY` after **6.6s**, confirming bounded retry rather than immediate failure.
+- Release-binary matrix: `agent matrix --avd af_cert_clean --avd aster_test --apk <debug apk>
+  --install --parallel 2` returned `aggregate_status=passed`, `parallel=2`, `passed=2`,
+  `failed=0`. Targets ran on `emulator-5554` and `emulator-5556`, used different session IDs, and
+  both reported `cleanup=released`.
+- A debug-binary two-AVD run also passed 2/2 in **7.2s**.
+- The earlier parallel attempt exposed two real defects, both fixed and retested:
+  - both workers could choose port `5554` before either session record existed; port probing and
+    session creation are now serialized and live session ports are treated as occupied;
+  - the parent could wait indefinitely on inherited child stdout/stderr pipe handles; child output
+    is now file-backed and a timed-out child is killed.
+
+### Packaging and publication
+
+- `packaging/package.ps1` produced the CLI ZIP, portable desktop ZIP, checksum file and, when Inno
+  Setup is available, the per-user installer.
+- The portable archive contains `androidforge.exe`, `androidforge-desktop.exe`, `LICENSE`,
+  `README.md`, `USER_GUIDE.md`, `CHANGELOG.md` and `PORTABLE.txt`.
+- The downloaded-asset check, tag, release title and Scoop hash are recorded in the release
+  section below after publication.
+
+### Not validated
+
+- Real Tesseract recognition accuracy and non-English language data.
+- MCP transports other than local stdio (no HTTP/SSE server).
+- Physical-device mutation for intents, network profiles and parallel matrix targets. The existing
+  physical-device mutation policy remains in force.
 
 ## v0.9.4 verification (2026-11-18)
 

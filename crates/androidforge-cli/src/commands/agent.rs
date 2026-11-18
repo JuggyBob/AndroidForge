@@ -654,6 +654,8 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                         port: args.port,
                         headless: true,
                         snapshot_save: false,
+                        wait: false,
+                        timeout: "10m".to_string(),
                         prepare: false,
                     };
                     let acquisition = match session::ensure(&ctx, &ensure_args).await {

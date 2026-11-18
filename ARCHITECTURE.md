@@ -122,10 +122,14 @@ fallback exists.
 ### Matrix execution
 
 `agent matrix` validates targets, resolves the build once and acquires one owned session per target.
-Execution is sequential and each target calls the existing `agent test` pipeline as a child process, so
-the matrix does not duplicate install/conformance logic. Health is collected before the child run. Only
-sessions created by the matrix with the matrix owner are released; pre-existing sessions and emulators
-are not stopped. Parallel mode is rejected until independent-device isolation is validated.
+Sequential mode calls the existing `agent test` pipeline directly; parallel mode launches one
+independent child matrix (`--parallel 1`) per target, so the matrix does not duplicate
+install/conformance logic. A semaphore bounds workers. Emulator port probing and the session record
+that makes a port durable are one cross-process critical section, and live session ports are treated
+as occupied. Parallel child stdout/stderr goes to per-target files instead of pipes, because detached
+grandchildren can inherit pipe handles on Windows; a child that exceeds the timeout is killed. Health
+is collected before the child run. Only sessions created by the matrix with the matrix owner are
+released; pre-existing sessions and emulators are not stopped.
 
 ### Wireless ADB and health
 

@@ -1,14 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use androidforge_app::{AppFiles, AppStateExpectation, AppStates, InstallOptions};
+use androidforge_app::{
+    AppFiles, AppStateExpectation, AppStates, InstallOptions, IntentExtra, IntentOutput, IntentSpec,
+};
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::session::Session;
 
 use crate::cli::{
-    ApkVerifyArgs, AppCommand, AppInstallArgs, AppLaunchArgs, AppListArgs, AppPackageArgs,
-    AppStatusArgs, AppUninstallArgs,
+    ApkVerifyArgs, AppBroadcastArgs, AppCommand, AppInstallArgs, AppLaunchArgs, AppListArgs,
+    AppPackageArgs, AppServiceArgs, AppStatusArgs, AppUninstallArgs,
 };
 use crate::commands::common::success;
 use crate::context::CliContext;
@@ -19,6 +21,8 @@ pub async fn app(ctx: &CliContext, command: &AppCommand) -> Result<CommandSucces
         AppCommand::Uninstall(args) => uninstall(ctx, args).await,
         AppCommand::ClearData(args) => clear_data(ctx, args).await,
         AppCommand::Launch(args) => launch(ctx, args).await,
+        AppCommand::Broadcast(args) => broadcast(ctx, args).await,
+        AppCommand::Service(args) => service(ctx, args).await,
         AppCommand::ForceStop(args) => force_stop(ctx, args).await,
         AppCommand::Kill(args) => kill(ctx, args).await,
         AppCommand::Status(args) => status(ctx, args).await,
@@ -635,31 +639,252 @@ async fn launch(ctx: &CliContext, args: &AppLaunchArgs) -> Result<CommandSuccess
     let package = args.package.clone();
     let activity = args.activity.clone();
     let wake = !args.no_wake;
+    let spec = IntentSpec {
+        package: Some(package.clone()),
+        component: args.component.clone().or_else(|| {
+            activity
+                .as_ref()
+                .map(|activity| component_for(&package, activity))
+        }),
+        action: args.action.clone(),
+        data: args.data.clone(),
+        mime_type: args.mime_type.clone(),
+        categories: args.category.clone(),
+        extras: parse_extras(&args.extra)?,
+        flags: args.flag.clone(),
+        receiver_permission: None,
+        asynchronous: false,
+        wait: args.wait,
+        force_stop: args.force_stop,
+        wake,
+    };
+    let uses_intent = spec.component.is_some()
+        || spec.action.is_some()
+        || spec.data.is_some()
+        || spec.mime_type.is_some()
+        || !spec.categories.is_empty()
+        || !spec.extras.is_empty()
+        || !spec.flags.is_empty();
     execute_in_run!(
         ctx,
-        "app.launch",
-        Some("app launch"),
+        if uses_intent {
+            "app.intent"
+        } else {
+            "app.launch"
+        },
+        Some(if uses_intent {
+            "app intent start"
+        } else {
+            "app launch"
+        }),
         session.as_ref(),
         Some(&device),
         true,
         |_run| async {
             let app = ctx.app_manager()?;
-            let result = app
-                .launch(&device.serial, &package, activity.as_deref(), wake)
-                .await?;
+            let result = if uses_intent {
+                app.start_intent(&device.serial, &spec).await?
+            } else {
+                app.launch(&device.serial, &package, activity.as_deref(), wake)
+                    .await?
+            };
             let human = format!(
-                "Launched {}{} foreground={}\n",
+                "Launched {}{}{} foreground={}\n",
                 package,
                 result
                     .component
                     .as_ref()
                     .map(|component| format!(" ({component})"))
                     .unwrap_or_default(),
+                result
+                    .action
+                    .as_ref()
+                    .map(|action| format!(" action={action}"))
+                    .unwrap_or_default(),
                 result.foreground
             );
-            Ok(success("app.launch", serde_json::to_value(&result)?, human)
-                .with_optional_session(session_id(session.as_ref()))
-                .with_device(device.serial.clone()))
+            Ok(success(
+                if uses_intent {
+                    "app.intent"
+                } else {
+                    "app.launch"
+                },
+                serde_json::to_value(&result)?,
+                human,
+            )
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
+}
+
+fn component_for(package: &str, component: &str) -> String {
+    if component.contains('/') {
+        component.to_string()
+    } else {
+        format!("{package}/{component}")
+    }
+}
+
+fn parse_extras(values: &[String]) -> Result<Vec<IntentExtra>> {
+    values
+        .iter()
+        .map(|value| {
+            let mut parts = value.splitn(3, ':');
+            let key = parts.next().unwrap_or_default();
+            let kind = parts.next().unwrap_or_default();
+            let value = parts.next().unwrap_or_default();
+            let kind = match kind.to_ascii_lowercase().as_str() {
+                "s" | "string" => "es",
+                "i" | "int" => "ei",
+                "l" | "long" => "el",
+                "f" | "float" => "ef",
+                "z" | "bool" | "boolean" => "ez",
+                "esa" | "string-array" => "esa",
+                "eia" | "int-array" => "eia",
+                other => {
+                    return Err(ForgeError::invalid_argument(format!(
+                        "unknown intent extra type '{other}' in {value:?}; use s, i, l, f, z, esa or eia"
+                    )));
+                }
+            };
+            if key.is_empty() {
+                return Err(ForgeError::invalid_argument(format!(
+                    "intent extra {value:?} needs key:type:value"
+                )));
+            }
+            Ok(IntentExtra {
+                kind: kind.to_string(),
+                key: key.to_string(),
+                value: value.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn broadcast_spec(args: &AppBroadcastArgs) -> Result<IntentSpec> {
+    Ok(IntentSpec {
+        package: args.package.clone(),
+        component: None,
+        action: args.action.clone(),
+        data: args.data.clone(),
+        mime_type: args.mime_type.clone(),
+        categories: args.category.clone(),
+        extras: parse_extras(&args.extra)?,
+        flags: args.flag.clone(),
+        receiver_permission: args.receiver_permission.clone(),
+        asynchronous: args.asynchronous,
+        wait: false,
+        force_stop: false,
+        wake: false,
+    })
+}
+
+async fn broadcast(ctx: &CliContext, args: &AppBroadcastArgs) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let spec = broadcast_spec(args)?;
+    if ctx.dry_run {
+        return Ok(plan(
+            "app.broadcast",
+            &device.serial,
+            session.as_ref(),
+            format!("Would broadcast {:?}\n", spec.action),
+        ));
+    }
+    execute_in_run!(
+        ctx,
+        "app.broadcast",
+        Some("app broadcast"),
+        session.as_ref(),
+        Some(&device),
+        true,
+        |_run| async {
+            let app = ctx.app_manager()?;
+            let result: IntentOutput = app.broadcast_intent(&device.serial, &spec).await?;
+            Ok(success(
+                "app.broadcast",
+                serde_json::to_value(&result)?,
+                format!(
+                    "Broadcast {:?}: {}\n",
+                    result.action,
+                    result.status.as_deref().unwrap_or("completed")
+                ),
+            )
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
+}
+
+async fn service(ctx: &CliContext, args: &AppServiceArgs) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let component = args
+        .component
+        .clone()
+        .or_else(|| {
+            args.service
+                .as_ref()
+                .zip(args.package.as_ref())
+                .map(|(service, package)| component_for(package, service))
+        })
+        .or_else(|| args.service.clone());
+    let spec = IntentSpec {
+        package: args.package.clone(),
+        component,
+        action: args.action.clone(),
+        data: args.data.clone(),
+        mime_type: None,
+        categories: Vec::new(),
+        extras: parse_extras(&args.extra)?,
+        flags: Vec::new(),
+        receiver_permission: None,
+        asynchronous: false,
+        wait: false,
+        force_stop: false,
+        wake: false,
+    };
+    if ctx.dry_run {
+        return Ok(plan(
+            "app.service",
+            &device.serial,
+            session.as_ref(),
+            format!(
+                "Would {} service {:?}\n",
+                if args.stop { "stop" } else { "start" },
+                spec.component
+            ),
+        ));
+    }
+    execute_in_run!(
+        ctx,
+        "app.service",
+        Some(if args.stop {
+            "app service stop"
+        } else {
+            "app service start"
+        }),
+        session.as_ref(),
+        Some(&device),
+        true,
+        |_run| async {
+            let app = ctx.app_manager()?;
+            let result = app.service_intent(&device.serial, &spec, args.stop).await?;
+            Ok(success(
+                "app.service",
+                serde_json::to_value(&result)?,
+                format!(
+                    "{} service {:?}: {}\n",
+                    if args.stop { "Stopped" } else { "Started" },
+                    result.component,
+                    result.status.as_deref().unwrap_or("requested")
+                ),
+            )
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()))
         },
     )
     .await
@@ -1025,4 +1250,80 @@ fn plan(command: &str, serial: &str, session: Option<&Session>, human: String) -
 
 fn session_id(session: Option<&Session>) -> Option<String> {
     session.map(|session| session.id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_typed_intent_extras() {
+        let extras = parse_extras(&[
+            "name:s:Ada".to_string(),
+            "count:i:7".to_string(),
+            "ratio:f:1.5".to_string(),
+            "enabled:z:true".to_string(),
+            "labels:esa:a,b".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(extras[0].kind, "es");
+        assert_eq!(extras[0].key, "name");
+        assert_eq!(extras[0].value, "Ada");
+        assert_eq!(extras[1].kind, "ei");
+        assert_eq!(extras[2].kind, "ef");
+        assert_eq!(extras[3].kind, "ez");
+        assert_eq!(extras[4].kind, "esa");
+    }
+
+    #[test]
+    fn intent_extra_keeps_colons_inside_the_value() {
+        let extras = parse_extras(&["url:s:https://example.test/a:b".to_string()]).unwrap();
+        assert_eq!(extras[0].value, "https://example.test/a:b");
+    }
+
+    #[test]
+    fn intent_extra_rejects_unknown_types_and_missing_values() {
+        let error = parse_extras(&["key:q:value".to_string()]).unwrap_err();
+        assert!(error.message().contains("unknown intent extra type"));
+        let error = parse_extras(&[":s:value".to_string()]).unwrap_err();
+        assert!(error.message().contains("key:type:value"));
+    }
+
+    #[test]
+    fn component_is_expanded_only_when_needed() {
+        assert_eq!(
+            component_for("com.example", ".MainActivity"),
+            "com.example/.MainActivity"
+        );
+        assert_eq!(
+            component_for("com.example", "com.example/.Other"),
+            "com.example/.Other"
+        );
+    }
+
+    #[test]
+    fn broadcast_spec_carries_receiver_options() {
+        let spec = broadcast_spec(&AppBroadcastArgs {
+            package: Some("com.example".to_string()),
+            action: Some("com.example.PING".to_string()),
+            data: None,
+            mime_type: None,
+            category: vec!["com.example.CATEGORY".to_string()],
+            extra: vec!["ping:s:1".to_string()],
+            flag: vec!["0x10000000".to_string()],
+            receiver_permission: Some("com.example.PERMISSION".to_string()),
+            asynchronous: true,
+            timeout: None,
+        })
+        .unwrap();
+        assert_eq!(spec.action.as_deref(), Some("com.example.PING"));
+        assert!(spec.asynchronous);
+        assert_eq!(
+            spec.receiver_permission.as_deref(),
+            Some("com.example.PERMISSION")
+        );
+        assert_eq!(spec.extras.len(), 1);
+        assert_eq!(spec.categories.len(), 1);
+        assert_eq!(spec.flags.len(), 1);
+    }
 }

@@ -86,6 +86,47 @@ async fn run() -> i32 {
             return forge.exit_code();
         }
     };
+    if matches!(
+        &cli.command,
+        cli::Command::Mcp {
+            command: cli::McpCommand::Serve
+        }
+    ) {
+        return match commands::mcp::serve_stdio() {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("[androidforge] mcp: {}", error.message());
+                error.exit_code()
+            }
+        };
+    }
+    if let cli::Command::Diagnostics {
+        command:
+            cli::DiagnosticsCommand::Logcat {
+                command: cli::LogcatCommand::Watch(args),
+            },
+    } = &cli.command
+    {
+        return match commands::diagnostics::stream_logcat_watch(&cli, args).await {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("[androidforge] logcat watch: {}", error.message());
+                error.exit_code()
+            }
+        };
+    }
+    if let cli::Command::Run {
+        command: cli::RunCommand::Events(args),
+    } = &cli.command
+    {
+        return match commands::report::stream_events(&cli, args).await {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("[androidforge] run events: {}", error.message());
+                error.exit_code()
+            }
+        };
+    }
     let command_name = canonical_name(&cli.command);
     let plan = compact::resolve(&cli);
     let mut output = OutputOptions::new(cli.json, cli.quiet);
@@ -175,7 +216,17 @@ fn preprocess(mut args: Vec<OsString>) -> Vec<OsString> {
             .map(|arg| arg.to_string_lossy().to_string());
         let is_subcommand = matches!(
             next.as_deref(),
-            Some("start" | "end" | "status" | "exec" | "--help" | "-h")
+            Some(
+                "start"
+                    | "end"
+                    | "status"
+                    | "exec"
+                    | "checkpoint"
+                    | "resume"
+                    | "events"
+                    | "--help"
+                    | "-h"
+            )
         );
         if !is_subcommand {
             args.insert(index + 1, OsString::from("exec"));
@@ -193,7 +244,9 @@ fn preprocess(mut args: Vec<OsString>) -> Vec<OsString> {
             .map(|arg| arg.to_string_lossy().to_string());
         let is_subcommand = matches!(
             next.as_deref(),
-            Some("tail" | "peek" | "start" | "stop" | "status" | "--help" | "-h")
+            Some(
+                "tail" | "peek" | "query" | "watch" | "start" | "stop" | "status" | "--help" | "-h"
+            )
         );
         if !is_subcommand {
             args.insert(logcat_index + 1, OsString::from("tail"));
@@ -210,6 +263,7 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
             || arg == "--trace"
             || arg == "--dry-run"
             || arg == "--yes"
+            || arg == "--allow-physical-mutation"
             || arg == "--quiet"
             || arg == "--no-failure-capture"
             || arg == "--brief"

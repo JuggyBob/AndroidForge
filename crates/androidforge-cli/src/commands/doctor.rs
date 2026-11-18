@@ -1127,7 +1127,7 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         "session.ensure",
         "supported",
         &["filesystem locks", "optional adb/emulator"],
-        "Idempotent reuse/attach/launch with advisory leases and ownership refusal.",
+        "Idempotent reuse/attach/launch with advisory leases, ownership refusal and bounded --wait for busy devices.",
     );
     add(
         "context",
@@ -1224,6 +1224,64 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         "supported",
         &["none"],
         "Full, compact and brief JSON profiles with minification, explicit caps, counts, summaries and next commands.",
+    );
+    add(
+        "agent.matrix",
+        if has_adb && has_emulator {
+            "supported"
+        } else {
+            "unsupported"
+        },
+        &["adb", "emulator", "project adapter"],
+        "One independent child matrix per target; --parallel 1-32; late-binding port allocation; partial aggregates.",
+    );
+    add(
+        "mcp.server",
+        "supported",
+        &["none"],
+        "Local stdio JSON-RPC MCP server that shells out to the same CLI; destructive tools require confirm=true.",
+    );
+    add(
+        "tools.schema",
+        "supported",
+        &["none"],
+        "MCP, OpenAI function-calling and plain JSON export of the tool catalog.",
+    );
+    add(
+        "ui.selector_v2",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb", "uiautomator"],
+        "Role, text regex, region, within/above/below/left-of/right-of bounds and indexed candidates.",
+    );
+    add(
+        "ui.ocr_fallback",
+        "best-effort",
+        &["adb", "tesseract or ANDROIDFORGE_OCR_COMMAND"],
+        "Optional local OCR only when UIAutomator has no match; images never leave the host.",
+    );
+    add(
+        "runs.resume",
+        "supported",
+        &["local reports"],
+        "Named checkpoints, resume from a checkpoint, failure history and an append-only NDJSON event stream.",
+    );
+    add(
+        "diagnostics.logcat.query",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb"],
+        "Structured threadtime records with level/grep/time filters; watch streams crash/ANR events as NDJSON.",
+    );
+    add(
+        "intents",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb"],
+        "Action/deep-link starts, typed extras, categories, flags, broadcasts and service start/stop.",
+    );
+    add(
+        "network.profiles",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb"],
+        "default/offline/wifi-only/data-only/no-proxy profiles, global proxy control and session-scoped restore.",
     );
     add(
         "capture.screenshot",
@@ -1428,7 +1486,7 @@ pub fn schema(command: &SchemaCommand) -> Result<CommandSuccess> {
     }
 }
 
-fn schema_files() -> Vec<(&'static str, &'static str)> {
+pub(crate) fn schema_files() -> Vec<(&'static str, &'static str)> {
     vec![
         (
             "androidforge.schema.json",

@@ -1264,7 +1264,7 @@ fn v07_safety_options_are_explicit_without_a_device() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("V07 Safety");
     project_with_defaults(&root);
-    let parallel = binary()
+    let invalid_parallel = binary()
         .current_dir(&root)
         .env("ANDROIDFORGE_HOME", temp.path())
         .args([
@@ -1272,16 +1272,16 @@ fn v07_safety_options_are_explicit_without_a_device() {
             "matrix",
             "--flow",
             "conformance",
+            "--avd",
+            "alpha",
             "--parallel",
-            "2",
+            "0",
             "--dry-run",
             "--json",
         ])
         .output()
-        .expect("matrix parallel");
-    assert_eq!(parallel.status.code(), Some(3));
-    let json: Value = serde_json::from_slice(&parallel.stdout).unwrap();
-    assert_eq!(json["error"]["code"], "E_UNSUPPORTED_OPERATION");
+        .expect("matrix parallel bounds");
+    assert_eq!(invalid_parallel.status.code(), Some(2));
 
     let no_targets = binary()
         .current_dir(&root)

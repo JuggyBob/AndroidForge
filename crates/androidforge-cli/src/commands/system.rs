@@ -9,8 +9,8 @@ use chrono::DateTime;
 
 use crate::cli::{
     AlarmsCommand, AppOpsCommand, BatteryCommand, DozeCommand, JobWaitArgs, JobsCommand,
-    NetworkCommand, NotificationWaitArgs, NotificationsCommand, PermissionsCommand, StandbyCommand,
-    TimeCommand, TimeSetArgs,
+    NetworkCommand, NetworkProfileCommand, NetworkProxyCommand, NotificationWaitArgs,
+    NotificationsCommand, PermissionsCommand, StandbyCommand, TimeCommand, TimeSetArgs,
 };
 use crate::commands::common::success;
 use crate::context::CliContext;
@@ -496,8 +496,28 @@ pub async fn battery(ctx: &CliContext, command: &BatteryCommand) -> Result<Comma
 }
 
 pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<CommandSuccess> {
-    let (session, device) = target(ctx).await?;
+    // The profile catalog is static. Listing it must not require a connected
+    // device, otherwise MCP clients and offline hosts get E_DEVICE_AMBIGUOUS.
+    if let NetworkCommand::Profile {
+        command: NetworkProfileCommand::List,
+    } = command
+    {
+        return network_profile_list();
+    }
+    let (mut session, device) = target(ctx).await?;
     let manager = DeviceStateManager::new(ctx.adb()?);
+    match command {
+        NetworkCommand::Proxy { command } => {
+            return network_proxy(ctx, &device, &manager, command).await;
+        }
+        NetworkCommand::Profile { command } => {
+            return network_profile(ctx, &mut session, &device, &manager, command).await;
+        }
+        NetworkCommand::Restore => {
+            return network_restore(ctx, &mut session, &device, &manager).await;
+        }
+        _ => {}
+    }
     let state = match command {
         NetworkCommand::Status => manager.network(&device.serial).await?,
         NetworkCommand::Airplane { enable, disable } => {
@@ -517,6 +537,7 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
             ctx.ensure_physical_mutation_allowed(&device, "changing mobile data")?;
             manager.set_mobile_data(&device.serial, enabled).await?
         }
+        _ => unreachable!("new network commands return early"),
     };
     Ok(success(
         "network",
@@ -531,6 +552,290 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
     )
     .with_optional_session(session.map(|session| session.id.clone()))
     .with_device(device.serial.clone()))
+}
+
+async fn network_proxy(
+    ctx: &CliContext,
+    device: &androidforge_core::model::Device,
+    manager: &DeviceStateManager,
+    command: &NetworkProxyCommand,
+) -> Result<CommandSuccess> {
+    match command {
+        NetworkProxyCommand::Get => {
+            let state = manager.proxy(&device.serial).await?;
+            Ok(success(
+                "network.proxy.get",
+                serde_json::to_value(&state)?,
+                format!("proxy={:?}\n", state.proxy),
+            )
+            .with_device(device.serial.clone()))
+        }
+        NetworkProxyCommand::Set { .. } | NetworkProxyCommand::Clear => {
+            let proxy = match command {
+                NetworkProxyCommand::Set { proxy } => Some(proxy.as_str()),
+                _ => None,
+            };
+            if ctx.dry_run {
+                return Ok(success(
+                    "network.proxy.set",
+                    serde_json::json!({"dry_run": true, "proxy": proxy, "requires_physical_mutation": device.kind == androidforge_core::model::DeviceKind::Physical}),
+                    format!("Would set device proxy to {:?}.\n", proxy),
+                )
+                .with_device(device.serial.clone()));
+            }
+            ctx.ensure_physical_mutation_allowed(device, "changing the device proxy")?;
+            let previous = manager.proxy(&device.serial).await?;
+            if let Some(session) = ctx.load_session(true)? {
+                let mut session = session;
+                session.record_device_setting(&ctx.paths, "network:proxy", previous.raw.clone())?;
+            }
+            let state = manager.set_proxy(&device.serial, proxy).await?;
+            Ok(success(
+                "network.proxy.set",
+                serde_json::to_value(&state)?,
+                format!("proxy={:?}\n", state.proxy),
+            )
+            .with_device(device.serial.clone()))
+        }
+    }
+}
+
+const NETWORK_PROFILES: &[(&str, &str)] = &[
+    (
+        "default",
+        "airplane off, Wi-Fi on, mobile data on, proxy clear",
+    ),
+    ("offline", "airplane on"),
+    ("wifi-only", "airplane off, Wi-Fi on, mobile data off"),
+    ("data-only", "airplane off, Wi-Fi off, mobile data on"),
+    ("no-proxy", "clear the global HTTP proxy"),
+];
+
+async fn network_profile(
+    ctx: &CliContext,
+    session: &mut Option<Session>,
+    device: &androidforge_core::model::Device,
+    manager: &DeviceStateManager,
+    command: &NetworkProfileCommand,
+) -> Result<CommandSuccess> {
+    match command {
+        NetworkProfileCommand::List => network_profile_list(),
+        NetworkProfileCommand::Apply { name } => {
+            let Some(profile) = NETWORK_PROFILES
+                .iter()
+                .find(|(candidate, _)| candidate == name)
+            else {
+                return Err(ForgeError::invalid_argument(format!(
+                    "unknown network profile '{name}'"
+                ))
+                .with_suggestion(format!(
+                    "Available profiles: {}",
+                    NETWORK_PROFILES
+                        .iter()
+                        .map(|(name, _)| *name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            };
+            if ctx.dry_run {
+                return Ok(success(
+                    "network.profile.apply",
+                    serde_json::json!({"dry_run": true, "profile": profile.0, "requires_physical_mutation": device.kind == androidforge_core::model::DeviceKind::Physical}),
+                    format!("Would apply network profile {}: {}\n", profile.0, profile.1),
+                )
+                .with_device(device.serial.clone()));
+            }
+            ctx.ensure_physical_mutation_allowed(device, "applying a network profile")?;
+            let Some(session) = session.as_mut() else {
+                return Err(ForgeError::new(
+                    ErrorCode::SessionNotFound,
+                    "network profile apply needs a session to record the previous state",
+                )
+                .with_suggestion("Pass --session <ID>."));
+            };
+            record_network_state(ctx, session, device, manager).await?;
+            let after = apply_network_profile(manager, &device.serial, name).await?;
+            Ok(success(
+                "network.profile.apply",
+                serde_json::to_value(&after)?,
+                format!("Applied network profile {name}: {}\n", profile.1),
+            )
+            .with_session(session.id.clone())
+            .with_device(device.serial.clone()))
+        }
+    }
+}
+
+fn network_profile_list() -> Result<CommandSuccess> {
+    Ok(success(
+        "network.profile.list",
+        serde_json::json!({
+            "profiles": NETWORK_PROFILES.iter().map(|(name, description)| serde_json::json!({"name": name, "description": description})).collect::<Vec<_>>()
+        }),
+        NETWORK_PROFILES
+            .iter()
+            .map(|(name, description)| format!("{name}: {description}\n"))
+            .collect::<String>(),
+    ))
+}
+
+async fn apply_network_profile(
+    manager: &DeviceStateManager,
+    serial: &str,
+    name: &str,
+) -> Result<androidforge_diagnostics::NetworkState> {
+    match name {
+        "default" => {
+            manager.set_airplane(serial, false, true).await?;
+            manager.set_wifi(serial, true).await?;
+            manager.set_mobile_data(serial, true).await?;
+            manager.set_proxy(serial, None).await?;
+        }
+        "offline" => {
+            manager.set_airplane(serial, true, true).await?;
+            manager.set_proxy(serial, None).await?;
+        }
+        "wifi-only" => {
+            manager.set_airplane(serial, false, true).await?;
+            manager.set_wifi(serial, true).await?;
+            manager.set_mobile_data(serial, false).await?;
+        }
+        "data-only" => {
+            manager.set_airplane(serial, false, true).await?;
+            manager.set_wifi(serial, false).await?;
+            manager.set_mobile_data(serial, true).await?;
+        }
+        "no-proxy" => {
+            manager.set_proxy(serial, None).await?;
+        }
+        other => {
+            return Err(ForgeError::invalid_argument(format!(
+                "unknown network profile '{other}'"
+            )));
+        }
+    }
+    manager.network(serial).await
+}
+
+async fn record_network_state(
+    ctx: &CliContext,
+    session: &mut Session,
+    device: &androidforge_core::model::Device,
+    manager: &DeviceStateManager,
+) -> Result<()> {
+    let network = manager.network(&device.serial).await?;
+    let proxy = manager.proxy(&device.serial).await?;
+    for (key, value) in [
+        ("network:airplane", network.airplane_mode),
+        ("network:wifi", network.wifi_enabled),
+        ("network:data", network.mobile_data_enabled),
+    ] {
+        if let Some(value) = value {
+            session.record_device_setting(
+                &ctx.paths,
+                key,
+                Some(if value { "1" } else { "0" }.to_string()),
+            )?;
+        }
+    }
+    session.record_device_setting(&ctx.paths, "network:proxy", proxy.raw)?;
+    Ok(())
+}
+
+async fn network_restore(
+    ctx: &CliContext,
+    session: &mut Option<Session>,
+    device: &androidforge_core::model::Device,
+    manager: &DeviceStateManager,
+) -> Result<CommandSuccess> {
+    let Some(session) = session.as_mut() else {
+        return Err(ForgeError::new(
+            ErrorCode::SessionNotFound,
+            "network restore needs a session",
+        )
+        .with_suggestion("Pass --session <ID>."));
+    };
+    let saved = session.device_settings.clone();
+    if !saved.keys().any(|key| key.starts_with("network:")) {
+        return Err(ForgeError::invalid_argument(
+            "no recorded network state is available for restore",
+        )
+        .with_suggestion(
+            "Apply a network profile or proxy first; AndroidForge records the previous state.",
+        ));
+    }
+    if ctx.dry_run {
+        return Ok(success(
+            "network.restore",
+            serde_json::json!({"dry_run": true, "saved": saved}),
+            "Would restore recorded network state.\n".to_string(),
+        )
+        .with_session(session.id.clone())
+        .with_device(device.serial.clone()));
+    }
+    ctx.ensure_physical_mutation_allowed(device, "restoring network state")?;
+    let mut warnings = Vec::new();
+    for (key, setter) in [
+        ("network:airplane", "airplane"),
+        ("network:wifi", "wifi"),
+        ("network:data", "data"),
+    ] {
+        let Some(Some(value)) = saved.get(key) else {
+            continue;
+        };
+        let enabled = value == "1";
+        let result = match setter {
+            "airplane" => manager
+                .set_airplane(&device.serial, enabled, true)
+                .await
+                .map(|_| ()),
+            "wifi" => manager.set_wifi(&device.serial, enabled).await.map(|_| ()),
+            _ => manager
+                .set_mobile_data(&device.serial, enabled)
+                .await
+                .map(|_| ()),
+        };
+        if let Err(error) = result {
+            warnings.push(format!("could not restore {key}: {}", error.message()));
+        }
+    }
+    if let Some(Some(proxy)) = saved.get("network:proxy")
+        && let Err(error) = manager
+            .set_proxy(
+                &device.serial,
+                (proxy.as_str() != ":0" && !proxy.is_empty()).then_some(proxy.as_str()),
+            )
+            .await
+    {
+        warnings.push(format!(
+            "could not restore network:proxy: {}",
+            error.message()
+        ));
+    }
+    for key in [
+        "network:airplane",
+        "network:wifi",
+        "network:data",
+        "network:proxy",
+    ] {
+        session.device_settings.remove(key);
+    }
+    session.save(&ctx.paths)?;
+    let state = manager.network(&device.serial).await?;
+    let mut success = success(
+        "network.restore",
+        serde_json::json!({"state": state, "warnings": warnings}),
+        format!(
+            "Network restore attempted: airplane={:?} wifi={:?} data={:?}\n",
+            state.airplane_mode, state.wifi_enabled, state.mobile_data_enabled
+        ),
+    )
+    .with_session(session.id.clone())
+    .with_device(device.serial.clone());
+    if !warnings.is_empty() {
+        success.exit_code = 10;
+    }
+    Ok(success)
 }
 
 fn bool_switch(enable: bool, disable: bool, label: &str) -> Result<bool> {
@@ -693,4 +998,21 @@ async fn time_restore(ctx: &CliContext) -> Result<CommandSuccess> {
         success.exit_code = 10;
     }
     Ok(success)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_profiles_are_unique_and_documented() {
+        let mut names = std::collections::BTreeSet::new();
+        for (name, description) in NETWORK_PROFILES {
+            assert!(names.insert(*name), "duplicate profile {name}");
+            assert!(!description.is_empty());
+        }
+        for expected in ["default", "offline", "wifi-only", "data-only", "no-proxy"] {
+            assert!(names.contains(expected), "missing profile {expected}");
+        }
+    }
 }

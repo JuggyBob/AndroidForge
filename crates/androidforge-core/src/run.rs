@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -110,6 +111,18 @@ pub struct RunInvocation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunCheckpoint {
+    pub name: String,
+    pub at: String,
+    pub status: RunStatus,
+    pub step_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunReport {
     pub schema_version: u32,
     pub run_id: String,
@@ -141,6 +154,14 @@ pub struct RunReport {
     pub artifacts: Vec<ArtifactRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recovery_suggestions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoints: Vec<RunCheckpoint>,
+    #[serde(default)]
+    pub resume_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_from_checkpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failure_history: Vec<FailureInfo>,
 }
 
 impl RunReport {
@@ -170,6 +191,10 @@ impl RunReport {
             failure: None,
             artifacts: Vec::new(),
             recovery_suggestions: Vec::new(),
+            checkpoints: Vec::new(),
+            resume_count: 0,
+            resumed_from_checkpoint: None,
+            failure_history: Vec::new(),
         }
     }
 
@@ -332,6 +357,15 @@ impl RunContext {
             redactor,
         };
         context.save()?;
+        context.append_event(
+            "run_started",
+            serde_json::json!({
+                "command": context.report.command,
+                "project": context.report.project,
+                "session_id": context.report.session_id,
+                "device_serial": context.report.device_serial,
+            }),
+        )?;
         Ok(context)
     }
 
@@ -449,6 +483,14 @@ impl RunContext {
         };
         self.report.steps.push(step);
         self.save()?;
+        self.append_event(
+            "step_started",
+            serde_json::json!({
+                "step_id": self.report.steps[index].id,
+                "name": self.report.steps[index].name,
+                "command": self.report.steps[index].command,
+            }),
+        )?;
         Ok(index)
     }
 
@@ -470,7 +512,15 @@ impl RunContext {
                 merge_artifact(&mut self.report.artifacts, artifact);
             }
         }
-        self.save()
+        self.save()?;
+        self.append_event(
+            "step_finished",
+            serde_json::json!({
+                "step_id": self.report.steps.get(index).map(|step| step.id.clone()),
+                "status": "success",
+                "exit_code": 0,
+            }),
+        )
     }
 
     pub fn finish_step_failure(
@@ -505,7 +555,17 @@ impl RunContext {
                 self.report.recovery_suggestions.push(suggestion.clone());
             }
         }
-        self.save()
+        self.save()?;
+        self.append_event(
+            "step_finished",
+            serde_json::json!({
+                "step_id": self.report.steps.get(index).map(|step| step.id.clone()),
+                "status": "failed",
+                "exit_code": error.exit_code(),
+                "code": error.code().as_str(),
+                "message": error.message(),
+            }),
+        )
     }
 
     pub fn finish_step_skipped(&mut self, index: usize, reason: impl Into<String>) -> Result<()> {
@@ -515,12 +575,28 @@ impl RunContext {
             step.duration_ms = duration_from(&step.started_at);
             step.details = serde_json::json!({ "reason": reason.into() });
         }
-        self.save()
+        self.save()?;
+        self.append_event(
+            "step_finished",
+            serde_json::json!({
+                "step_id": self.report.steps.get(index).map(|step| step.id.clone()),
+                "status": "skipped",
+            }),
+        )
     }
 
     pub fn add_artifact(&mut self, artifact_ref: ArtifactRef) -> Result<ArtifactRef> {
         merge_artifact(&mut self.report.artifacts, artifact_ref.clone());
         self.save()?;
+        self.append_event(
+            "artifact",
+            serde_json::json!({
+                "kind": artifact_ref.kind,
+                "path": artifact_ref.path,
+                "sha256": artifact_ref.sha256,
+                "size_bytes": artifact_ref.size_bytes,
+            }),
+        )?;
         Ok(artifact_ref)
     }
 
@@ -560,6 +636,102 @@ impl RunContext {
         let path = artifact::safe_join(&self.dir, relative)?;
         write_atomic(&path, bytes)?;
         Ok(path)
+    }
+
+    pub fn events_path(&self) -> PathBuf {
+        self.dir.join("events.ndjson")
+    }
+
+    pub fn append_event(&self, event: &str, data: Value) -> Result<()> {
+        ensure_dir(&self.dir)?;
+        let mut value = serde_json::json!({
+            "schema_version": 1,
+            "run_id": self.run_id,
+            "ts": now_rfc3339(),
+            "event": event,
+            "data": data,
+        });
+        self.redactor.redact_value(&mut value);
+        let line = serde_json::to_string(&value)?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.events_path())?;
+        file.write_all(line.as_bytes())?;
+        file.write_all(b"\n")?;
+        Ok(())
+    }
+
+    pub fn checkpoint(&mut self, name: &str, note: Option<&str>) -> Result<RunCheckpoint> {
+        let name = name.trim();
+        if name.is_empty() || name.contains('\n') || name.contains('\r') {
+            return Err(ForgeError::invalid_argument(
+                "checkpoint name must be non-empty and single-line",
+            ));
+        }
+        let checkpoint = RunCheckpoint {
+            name: name.to_string(),
+            at: now_rfc3339(),
+            status: self.report.status,
+            step_index: self.report.steps.len(),
+            session_id: self.report.session_id.clone(),
+            note: note.map(str::to_string),
+        };
+        self.report.checkpoints.push(checkpoint.clone());
+        self.save()?;
+        self.append_event("checkpoint", serde_json::to_value(&checkpoint)?)?;
+        Ok(checkpoint)
+    }
+
+    pub fn resume(&mut self, from_checkpoint: Option<&str>) -> Result<RunCheckpoint> {
+        if self.report.status == RunStatus::Running {
+            return Err(ForgeError::invalid_argument(format!(
+                "run {} is already running",
+                self.run_id
+            ))
+            .with_suggestion("Continue appending commands with --run, or finalize it first."));
+        }
+        let checkpoint = if let Some(name) = from_checkpoint {
+            self.report
+                .checkpoints
+                .iter()
+                .rev()
+                .find(|checkpoint| checkpoint.name == name)
+                .cloned()
+                .ok_or_else(|| {
+                    ForgeError::invalid_argument(format!(
+                        "checkpoint '{name}' was not found in run {}",
+                        self.run_id
+                    ))
+                    .with_suggestion("Run `androidforge run status --json` or inspect report.json.")
+                })?
+        } else {
+            RunCheckpoint {
+                name: format!("resume-{}", self.report.resume_count + 1),
+                at: now_rfc3339(),
+                status: self.report.status,
+                step_index: self.report.steps.len(),
+                session_id: self.report.session_id.clone(),
+                note: Some("implicit resume point".to_string()),
+            }
+        };
+        if let Some(failure) = self.report.failure.take() {
+            self.report.failure_history.push(failure);
+        }
+        self.report.status = RunStatus::Running;
+        self.report.exit_code = 0;
+        self.report.ended_at = None;
+        self.report.resume_count += 1;
+        self.report.resumed_from_checkpoint = Some(checkpoint.name.clone());
+        self.save()?;
+        self.append_event(
+            "resumed",
+            serde_json::json!({
+                "checkpoint": checkpoint,
+                "resume_count": self.report.resume_count,
+            }),
+        )?;
+        Ok(checkpoint)
     }
 
     pub fn save(&mut self) -> Result<()> {
@@ -613,7 +785,16 @@ impl RunContext {
         {
             self.report.failure = step.failure.clone();
         }
-        self.save()
+        self.save()?;
+        self.append_event(
+            "run_finalized",
+            serde_json::json!({
+                "status": self.report.status,
+                "exit_code": self.report.exit_code,
+                "duration_ms": self.report.duration_ms,
+                "failed_steps": self.report.failed_steps(),
+            }),
+        )
     }
 
     pub fn finalize_pass(&mut self) -> Result<()> {
@@ -896,6 +1077,58 @@ mod tests {
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.steps.len(), 1);
         assert!(context.manifest_path().is_file());
+    }
+
+    #[test]
+    fn checkpoints_resume_and_ndjson_events_are_recorded() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut options = RunOptions::new(
+            temp.path().join(".artifacts"),
+            temp.path(),
+            "Example",
+            "agent.test",
+        );
+        options.name = Some("resumable".to_string());
+        let mut context = RunContext::create(options, Redactor::default()).unwrap();
+        let step = context.start_step("login", "ui.tap --text Login").unwrap();
+        context
+            .finish_step_success(step, serde_json::json!({}), Vec::new())
+            .unwrap();
+        let checkpoint = context
+            .checkpoint("after-login", Some("session ready"))
+            .unwrap();
+        assert_eq!(checkpoint.step_index, 1);
+        context
+            .finalize_failure(&ForgeError::new(
+                ErrorCode::CommandFailed,
+                "checkout failed",
+            ))
+            .unwrap();
+        assert_eq!(context.report.status, RunStatus::Failed);
+
+        let resumed = context.resume(Some("after-login")).unwrap();
+        assert_eq!(resumed.name, "after-login");
+        assert_eq!(context.report.status, RunStatus::Running);
+        assert_eq!(context.report.resume_count, 1);
+        assert_eq!(context.report.checkpoints.len(), 1);
+        assert_eq!(context.report.failure_history.len(), 1);
+
+        let events = std::fs::read_to_string(context.events_path()).unwrap();
+        for event in [
+            "run_started",
+            "step_started",
+            "step_finished",
+            "checkpoint",
+            "run_finalized",
+            "resumed",
+        ] {
+            assert!(events.contains(event), "missing event {event}: {events}");
+        }
+        let parsed = events
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(parsed.iter().all(|event| event["run_id"] == context.run_id));
     }
 
     #[test]

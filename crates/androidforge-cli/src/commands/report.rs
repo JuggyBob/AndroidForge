@@ -14,11 +14,12 @@ use androidforge_core::run::{
     RunContext, RunOptions, RunReport, RunStatus, clear_active_run, get_active_run, list_runs,
     resolve_run_dir, set_active_run,
 };
-use androidforge_core::util::parse_duration;
+use androidforge_core::util::{parse_duration, read_json};
 
 use crate::cli::{
     ReportCommand, ReportCompareArgs, ReportExplainArgs, ReportFlakyArgs, ReportHistoryArgs,
-    ReportReconcileArgs, ReportRecurrencesArgs, RunCommand, RunEndArgs, RunExecArgs, RunStartArgs,
+    ReportReconcileArgs, ReportRecurrencesArgs, ReportReproArgs, RunCheckpointArgs, RunCommand,
+    RunEndArgs, RunEventsArgs, RunExecArgs, RunResumeArgs, RunStartArgs,
 };
 use crate::commands::bundle;
 use crate::commands::common::success;
@@ -32,7 +33,189 @@ pub async fn run_command(ctx: &CliContext, command: &RunCommand) -> Result<Comma
         RunCommand::End(args) => run_end(ctx, args).await,
         RunCommand::Status => run_status_command(ctx).await,
         RunCommand::Exec(args) => run_exec(ctx, args).await,
+        RunCommand::Checkpoint(args) => run_checkpoint(ctx, args).await,
+        RunCommand::Resume(args) => run_resume(ctx, args).await,
+        RunCommand::Events(_) => Err(ForgeError::new(
+            ErrorCode::UnsupportedOperation,
+            "run events is an NDJSON stream and is handled directly by the CLI entry point",
+        )),
     }
+}
+
+async fn run_checkpoint(ctx: &CliContext, args: &RunCheckpointArgs) -> Result<CommandSuccess> {
+    let (run_id, session_id, _) = resolve_active_run(ctx)?;
+    let mut run = RunContext::open(&ctx.paths.artifacts_dir, &run_id, ctx.redactor())?;
+    let checkpoint = run.checkpoint(&args.name, args.note.as_deref())?;
+    let value = serde_json::json!({
+        "run_id": run_id,
+        "checkpoint": checkpoint,
+        "events_path": run.events_path(),
+    });
+    Ok(success(
+        "run.checkpoint",
+        value,
+        format!(
+            "Recorded checkpoint '{}' at step {}.\n",
+            args.name,
+            run.report
+                .checkpoints
+                .last()
+                .map(|checkpoint| checkpoint.step_index)
+                .unwrap_or(0)
+        ),
+    )
+    .with_optional_session(session_id)
+    .with_run(run_id))
+}
+
+async fn run_resume(ctx: &CliContext, args: &RunResumeArgs) -> Result<CommandSuccess> {
+    let run_id = target_run_id(ctx, args.run.as_deref())?;
+    let mut run = RunContext::open(&ctx.paths.artifacts_dir, &run_id, ctx.redactor())?;
+    let checkpoint = run.resume(args.from_checkpoint.as_deref())?;
+    let value = serde_json::json!({
+        "run_id": run_id,
+        "resumed": true,
+        "from_checkpoint": checkpoint,
+        "resume_count": run.report.resume_count,
+        "session_id": run.report.session_id,
+        "events_path": run.events_path(),
+    });
+    Ok(success(
+        "run.resume",
+        value,
+        format!(
+            "Resumed run {run_id} from checkpoint '{}'. Continue with --run {run_id}.\n",
+            checkpoint.name
+        ),
+    )
+    .with_optional_session(run.report.session_id.clone())
+    .with_run(run_id))
+}
+
+pub async fn stream_events(cli: &crate::cli::Cli, args: &RunEventsArgs) -> Result<()> {
+    use std::io::Write;
+    let ctx = CliContext::new(cli)?;
+    let run_id = target_run_id(&ctx, args.run.as_deref())?;
+    let dir = androidforge_core::run::resolve_run_dir(&ctx.paths.artifacts_dir, &run_id)?;
+    let events_path = dir.join("events.ndjson");
+    let timeout = ctx.parse_timeout(Some(&args.timeout), 300)?;
+    let started = std::time::Instant::now();
+    let mut printed = 0usize;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(&events_path) {
+            for line in text.lines().skip(printed) {
+                println!("{line}");
+            }
+            printed = text.lines().count();
+            let _ = std::io::stdout().flush();
+        }
+        if !args.follow {
+            break;
+        }
+        let terminal = std::fs::read(dir.join("report.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<RunReport>(&bytes).ok())
+            .is_some_and(|report| report.status != RunStatus::Running);
+        if terminal && printed > 0 {
+            break;
+        }
+        if started.elapsed() >= timeout {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Ok(())
+}
+
+async fn report_repro(ctx: &CliContext, args: &ReportReproArgs) -> Result<CommandSuccess> {
+    let dir = androidforge_core::run::resolve_run_dir(&ctx.paths.artifacts_dir, &args.run)?;
+    let report: RunReport = read_json(&dir.join("report.json"))?;
+    let mut script = String::new();
+    script.push_str("# AndroidForge reproduction script\n");
+    script.push_str(&format!("# run: {}\n", report.run_id));
+    script.push_str(&format!("# command: {}\n", report.command));
+    script.push_str(&format!("# project: {}\n", report.project_root));
+    script.push_str(&format!("# status: {:?}\n\n", report.status));
+    if let Some(invocation) = &report.invocation {
+        script.push_str(&format!(
+            "Set-Location -LiteralPath '{}'\n",
+            quote_powershell(&invocation.cwd)
+        ));
+        script.push_str("& ");
+        for (index, arg) in invocation.argv.iter().enumerate() {
+            if index > 0 {
+                script.push(' ');
+            }
+            script.push('\'');
+            script.push_str(&quote_powershell(arg));
+            script.push('\'');
+        }
+        script.push('\n');
+    } else {
+        script.push_str("# Legacy run: no exact argv was recorded.\n");
+        for step in &report.steps {
+            script.push_str(&format!(
+                "# step {} [{}]: {}\n",
+                step.id,
+                format!("{:?}", step.status).to_ascii_lowercase(),
+                step.command
+            ));
+        }
+        script.push_str(&format!(
+            "# Re-run the failing commands with --run {}\n",
+            report.run_id
+        ));
+    }
+    let output = args.output.as_ref().map(|path| {
+        if path.is_absolute() {
+            path.clone()
+        } else {
+            ctx.paths.cwd.join(path)
+        }
+    });
+    if let Some(path) = &output {
+        androidforge_core::util::write_atomic(path, script.as_bytes())?;
+    }
+    Ok(success(
+        "report.repro",
+        serde_json::json!({
+            "run_id": report.run_id,
+            "output": output,
+            "script": script,
+            "exact_argv": report.invocation.is_some(),
+        }),
+        if let Some(path) = output {
+            format!("Reproduction script written to {}\n", path.display())
+        } else {
+            script.clone()
+        },
+    )
+    .with_run(report.run_id))
+}
+
+fn quote_powershell(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn target_run_id(ctx: &CliContext, explicit: Option<&str>) -> Result<String> {
+    if let Some(run) = explicit.filter(|run| !run.trim().is_empty()) {
+        return Ok(run.to_string());
+    }
+    if let Some(run) = ctx.run_arg.as_deref().filter(|run| !run.trim().is_empty()) {
+        return Ok(run.to_string());
+    }
+    if let Ok(run) = std::env::var("ANDROIDFORGE_RUN_ID")
+        && !run.trim().is_empty()
+    {
+        return Ok(run);
+    }
+    let session_id = ctx.session_id()?;
+    get_active_run(&ctx.paths, session_id.as_deref())?
+        .map(|run| run.run_id)
+        .ok_or_else(|| {
+            ForgeError::new(ErrorCode::InvalidArgument, "no run was specified or active")
+                .with_suggestion("Pass a run id or start one with `androidforge run start`.")
+        })
 }
 
 async fn run_start(ctx: &CliContext, args: &RunStartArgs) -> Result<CommandSuccess> {
@@ -356,6 +539,7 @@ pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<Command
         ReportCommand::History(args) => report_history(ctx, args).await,
         ReportCommand::Recurrences(args) => report_recurrences(ctx, args).await,
         ReportCommand::Bundle(args) => bundle::bundle_command(ctx, args).await,
+        ReportCommand::Repro(args) => report_repro(ctx, args).await,
         ReportCommand::Import { command } => match command {
             crate::cli::ReportImportCommand::Junit { paths } => {
                 import_junit_report(ctx, paths).await

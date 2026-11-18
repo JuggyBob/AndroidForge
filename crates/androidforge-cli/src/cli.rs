@@ -104,6 +104,7 @@ impl OutputProfile {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Inspect host, SDK, ADB, emulator, tools, AVDs, disks and sessions.
     Doctor {
@@ -120,6 +121,16 @@ pub enum Command {
     },
     /// Report implemented, best-effort and unsupported capabilities.
     Capabilities,
+    /// Run the local Model Context Protocol server.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+    /// Export the MCP/function-calling tool catalog.
+    Tools {
+        #[command(subcommand)]
+        command: ToolsCommand,
+    },
     /// Print AndroidForge JSON schemas.
     Schema {
         #[command(subcommand)]
@@ -404,6 +415,25 @@ pub enum SchemaCommand {
     Show { name: String },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum McpCommand {
+    /// Run MCP over stdin/stdout. Only JSON-RPC lines are written to stdout.
+    Serve,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ToolsCommand {
+    /// Export the tool catalog as MCP, OpenAI function-calling or plain JSON.
+    Schema(ToolsSchemaArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ToolsSchemaArgs {
+    /// Output format: mcp, openai or json.
+    #[arg(long, default_value = "mcp")]
+    pub format: String,
+}
+
 #[derive(Debug, Args)]
 pub struct InitArgs {
     #[arg(long)]
@@ -477,6 +507,12 @@ pub struct SessionEnsureArgs {
     /// Allow manual emulator snapshots by omitting the default -no-snapshot-save flag.
     #[arg(long)]
     pub snapshot_save: bool,
+    /// Wait for a busy device instead of failing immediately.
+    #[arg(long)]
+    pub wait: bool,
+    /// Maximum wait duration when --wait is used.
+    #[arg(long, default_value = "10m")]
+    pub timeout: String,
     /// Prepare animations/stay-awake settings.
     #[arg(long)]
     pub prepare: bool,
@@ -704,6 +740,10 @@ pub enum AppCommand {
     ClearData(AppPackageArgs),
     #[command(alias = "l")]
     Launch(AppLaunchArgs),
+    /// Send a broadcast intent.
+    Broadcast(AppBroadcastArgs),
+    /// Start or stop a service intent.
+    Service(AppServiceArgs),
     ForceStop(AppPackageArgs),
     Kill(AppPackageArgs),
     Status(AppStatusArgs),
@@ -756,8 +796,77 @@ pub struct AppLaunchArgs {
     pub package: String,
     #[arg(long)]
     pub activity: Option<String>,
+    /// Explicit component, for example com.example/.MainActivity.
+    #[arg(long)]
+    pub component: Option<String>,
+    /// Intent action, for example android.intent.action.VIEW.
+    #[arg(long)]
+    pub action: Option<String>,
+    /// Intent data URI, for example myapp://checkout/42.
+    #[arg(long)]
+    pub data: Option<String>,
+    #[arg(long = "mime-type")]
+    pub mime_type: Option<String>,
+    #[arg(long)]
+    pub category: Vec<String>,
+    /// Typed extra in key:type:value form; type is s, i, l, f, z, esa or eia.
+    #[arg(long = "extra")]
+    pub extra: Vec<String>,
+    /// Intent flag, for example 0x10000000.
+    #[arg(long)]
+    pub flag: Vec<String>,
+    #[arg(long)]
+    pub wait: bool,
+    #[arg(long = "force-stop")]
+    pub force_stop: bool,
     #[arg(long)]
     pub no_wake: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AppBroadcastArgs {
+    /// Optional package recorded with the intent and used for validation.
+    #[arg(long)]
+    pub package: Option<String>,
+    #[arg(long)]
+    pub action: Option<String>,
+    #[arg(long)]
+    pub data: Option<String>,
+    #[arg(long = "mime-type")]
+    pub mime_type: Option<String>,
+    #[arg(long)]
+    pub category: Vec<String>,
+    #[arg(long = "extra")]
+    pub extra: Vec<String>,
+    #[arg(long)]
+    pub flag: Vec<String>,
+    #[arg(long = "receiver-permission")]
+    pub receiver_permission: Option<String>,
+    #[arg(long)]
+    pub asynchronous: bool,
+    #[arg(long)]
+    pub timeout: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AppServiceArgs {
+    #[arg(long)]
+    pub package: Option<String>,
+    /// Service component, for example .SyncService or com.example/.SyncService.
+    #[arg(long)]
+    pub service: Option<String>,
+    #[arg(long)]
+    pub component: Option<String>,
+    #[arg(long)]
+    pub action: Option<String>,
+    #[arg(long)]
+    pub data: Option<String>,
+    #[arg(long = "extra")]
+    pub extra: Vec<String>,
+    #[arg(long)]
+    pub stop: bool,
+    #[arg(long)]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -887,6 +996,26 @@ pub struct SelectorArgs {
     pub checked: bool,
     #[arg(long)]
     pub visible: bool,
+    #[arg(long)]
+    pub role: Option<String>,
+    #[arg(long = "text-regex")]
+    pub text_regex: Option<String>,
+    #[arg(long)]
+    pub within: Option<String>,
+    #[arg(long)]
+    pub above: Option<String>,
+    #[arg(long)]
+    pub below: Option<String>,
+    #[arg(long = "left-of")]
+    pub left_of: Option<String>,
+    #[arg(long = "right-of")]
+    pub right_of: Option<String>,
+    /// Device-pixel bounds x1,y1,x2,y2.
+    #[arg(long)]
+    pub region: Option<String>,
+    /// Try local OCR when UIAutomator has no matching text.
+    #[arg(long = "ocr-fallback")]
+    pub ocr_fallback: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1212,9 +1341,59 @@ pub enum LogcatCommand {
     Tail(LogcatTailArgs),
     /// Read a bounded logcat window without creating a run or artifact.
     Peek(LogcatPeekArgs),
+    /// Read a bounded window and return structured filtered records.
+    Query(LogcatQueryArgs),
+    /// Stream log records, crashes and ANRs as NDJSON.
+    Watch(LogcatWatchArgs),
     Start(LogcatStartArgs),
     Stop,
     Status,
+}
+
+#[derive(Debug, Args)]
+pub struct LogcatQueryArgs {
+    /// Bounded retries for transient read failures (0-5).
+    #[arg(long, default_value_t = 0)]
+    pub retries: u32,
+    #[arg(long)]
+    pub package: Option<String>,
+    #[arg(long, default_value_t = 2000)]
+    pub lines: usize,
+    /// Minimum Android log priority: verbose, debug, info, warn, error, fatal.
+    #[arg(long)]
+    pub level: Option<String>,
+    /// Only records at or after this device timestamp (MM-DD HH:MM:SS.mmm).
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Only records at or before this device timestamp (MM-DD HH:MM:SS.mmm).
+    #[arg(long)]
+    pub until: Option<String>,
+    /// Regular expression applied to tag and message.
+    #[arg(long)]
+    pub grep: Option<String>,
+    #[arg(long, default_value_t = 500)]
+    pub limit: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct LogcatWatchArgs {
+    #[arg(long)]
+    pub package: Option<String>,
+    #[arg(long)]
+    pub level: Option<String>,
+    /// Regular expression applied to tag and message.
+    #[arg(long)]
+    pub grep: Option<String>,
+    /// Emit only crash/FATAL events (plus any --grep/--anr match).
+    #[arg(long)]
+    pub crash: bool,
+    /// Emit only ANR events (plus any --grep/--crash match).
+    #[arg(long)]
+    pub anr: bool,
+    #[arg(long, default_value = "60s")]
+    pub timeout: String,
+    #[arg(long, default_value_t = 100)]
+    pub max_events: usize,
 }
 
 #[derive(Debug, Args)]
@@ -1440,6 +1619,31 @@ pub enum NetworkCommand {
         #[arg(long)]
         disable: bool,
     },
+    /// Read, set or clear the global HTTP proxy.
+    Proxy {
+        #[command(subcommand)]
+        command: NetworkProxyCommand,
+    },
+    /// Apply a named network profile and record the previous state.
+    Profile {
+        #[command(subcommand)]
+        command: NetworkProfileCommand,
+    },
+    /// Restore network/proxy state recorded in the current session.
+    Restore,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NetworkProxyCommand {
+    Get,
+    Set { proxy: String },
+    Clear,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NetworkProfileCommand {
+    List,
+    Apply { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1520,6 +1724,37 @@ pub enum RunCommand {
     End(RunEndArgs),
     Status,
     Exec(RunExecArgs),
+    /// Record a named resume point in a run.
+    Checkpoint(RunCheckpointArgs),
+    /// Reopen a terminal run and continue appending to it.
+    Resume(RunResumeArgs),
+    /// Print the run's NDJSON event stream; --follow tails it.
+    Events(RunEventsArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RunCheckpointArgs {
+    pub name: String,
+    #[arg(long)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RunResumeArgs {
+    /// Run id; defaults to --run, ANDROIDFORGE_RUN_ID or the active run.
+    pub run: Option<String>,
+    #[arg(long = "from-checkpoint")]
+    pub from_checkpoint: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RunEventsArgs {
+    /// Run id; defaults to --run, ANDROIDFORGE_RUN_ID or the active run.
+    pub run: Option<String>,
+    #[arg(long)]
+    pub follow: bool,
+    #[arg(long, default_value = "300s")]
+    pub timeout: String,
 }
 
 #[derive(Debug, Args)]
@@ -1607,10 +1842,19 @@ pub enum ReportCommand {
     Recurrences(ReportRecurrencesArgs),
     /// Create a portable diagnostic bundle or a Markdown/JSON evidence summary.
     Bundle(ReportBundleArgs),
+    /// Emit a copyable PowerShell reproduction script from a run.
+    Repro(ReportReproArgs),
     Import {
         #[command(subcommand)]
         command: ReportImportCommand,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct ReportReproArgs {
+    pub run: String,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -1758,6 +2002,14 @@ impl SelectorArgs {
             scrollable: self.scrollable.then_some(true),
             checked: self.checked.then_some(true),
             visible: self.visible.then_some(true),
+            role: self.role,
+            text_regex: self.text_regex,
+            within: self.within,
+            above: self.above,
+            below: self.below,
+            left_of: self.left_of,
+            right_of: self.right_of,
+            region: self.region,
         }
     }
 
@@ -1774,6 +2026,14 @@ impl SelectorArgs {
             || self.scrollable
             || self.checked
             || self.visible
+            || self.role.is_some()
+            || self.text_regex.is_some()
+            || self.within.is_some()
+            || self.above.is_some()
+            || self.below.is_some()
+            || self.left_of.is_some()
+            || self.right_of.is_some()
+            || self.region.is_some()
     }
 
     pub fn has_ref(&self) -> bool {

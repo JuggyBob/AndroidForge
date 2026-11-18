@@ -14,6 +14,8 @@ use crate::selector::{Selection, Selector, UiMatch, find, select, selector_not_f
 pub struct FindResult {
     pub matches: Vec<UiMatch>,
     pub ambiguous: bool,
+    #[serde(default)]
+    pub ocr_used: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +275,7 @@ impl UiManager {
         Ok(FindResult {
             ambiguous: matches.len() > 1,
             matches,
+            ocr_used: false,
         })
     }
 
