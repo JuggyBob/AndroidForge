@@ -45,9 +45,13 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub dry_run: bool,
 
-    /// Confirm a destructive operation. Required for data-clearing and restore commands.
+    /// Confirm a destructive operation. Required for data-clearing, uninstall and restore commands.
     #[arg(long, global = true)]
     pub yes: bool,
+
+    /// Allow data-changing operations on a physical device. Emulators never need this flag.
+    #[arg(long, global = true)]
+    pub allow_physical_mutation: bool,
 
     /// Session id. Also read from ANDROIDFORGE_SESSION.
     #[arg(long, global = true)]
@@ -470,6 +474,9 @@ pub struct SessionEnsureArgs {
     /// Start the emulator headless.
     #[arg(long)]
     pub headless: bool,
+    /// Allow manual emulator snapshots by omitting the default -no-snapshot-save flag.
+    #[arg(long)]
+    pub snapshot_save: bool,
     /// Prepare animations/stay-awake settings.
     #[arg(long)]
     pub prepare: bool,
@@ -493,6 +500,9 @@ pub struct SessionStartArgs {
     pub cores: Option<u32>,
     #[arg(long)]
     pub cold_boot: bool,
+    /// Allow manual emulator snapshots by omitting the default -no-snapshot-save flag.
+    #[arg(long)]
+    pub snapshot_save: bool,
     #[arg(long)]
     pub reuse: bool,
     #[arg(long)]
@@ -899,6 +909,8 @@ pub enum UiCommand {
     #[command(alias = "w")]
     Wait(UiWaitArgs),
     Assert(UiWaitArgs),
+    /// Dismiss known SystemUI immersive/permission overlays with a safe allowlist.
+    DismissOverlays(UiDismissOverlaysArgs),
     Settle(UiSettleArgs),
     Scroll(UiScrollArgs),
     ScrollTo(UiScrollToArgs),
@@ -1037,6 +1049,13 @@ pub struct UiWaitArgs {
     pub not_exists: bool,
     #[arg(long)]
     pub timeout: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct UiDismissOverlaysArgs {
+    /// Maximum number of overlays to dismiss in one call.
+    #[arg(long, default_value_t = 3)]
+    pub max: usize,
 }
 
 #[derive(Debug, Args)]
@@ -1698,6 +1717,9 @@ pub struct ReportBundleArgs {
     /// Include the full stored logcat instead of a bounded excerpt.
     #[arg(long = "include-full-logs")]
     pub include_full_logs: bool,
+    /// Emit the manifest, summary and explanation only; exclude every run artifact.
+    #[arg(long)]
+    pub metadata_only: bool,
     /// Maximum uncompressed payload size in bytes.
     #[arg(long, default_value_t = 26_214_400)]
     pub max_bytes: u64,

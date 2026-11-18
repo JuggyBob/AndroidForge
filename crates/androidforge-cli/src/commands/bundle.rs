@@ -142,6 +142,15 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
 
     let mut included_sources = BTreeSet::new();
     for (index, evidence) in explanation.evidence.iter().enumerate() {
+        if args.metadata_only {
+            excluded.push(ExcludedItem {
+                source: evidence.source.clone(),
+                kind: "evidence".to_string(),
+                reason: "metadata-only bundle requested".to_string(),
+                size_bytes: None,
+            });
+            continue;
+        }
         let Ok(path) = safe_source(&dir, &evidence.source) else {
             excluded.push(ExcludedItem {
                 source: evidence.source.clone(),
@@ -224,6 +233,16 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
         let is_hierarchy =
             kind.contains("hierarchy") || (path.ends_with(".xml") && path.contains("hierarchy"));
         if included_sources.contains(&artifact.path) {
+            continue;
+        }
+        if args.metadata_only {
+            excluded.retain(|item| item.source != artifact.path);
+            excluded.push(ExcludedItem {
+                source: artifact.path.clone(),
+                kind: artifact.kind.clone(),
+                reason: "metadata-only bundle requested".to_string(),
+                size_bytes: artifact.size_bytes,
+            });
             continue;
         }
         // Replace a generic exclusion (for example "binary evidence") with a

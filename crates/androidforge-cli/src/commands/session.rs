@@ -179,6 +179,7 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
                 "port": args.port,
                 "headless": headless,
                 "reuse": args.reuse,
+                "snapshot_save": args.snapshot_save,
                 "prepare": args.prepare,
             }),
             format!(
@@ -249,6 +250,7 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
         Some(port),
         headless,
     );
+    session.snapshot_save = args.snapshot_save;
     session.create(&ctx.paths)?;
     session.bind_project(&ctx.paths, &ctx.paths.project_root.to_string_lossy())?;
     if let Err(error) = session.acquire_device(&ctx.paths, &serial) {
@@ -265,6 +267,7 @@ async fn start(ctx: &CliContext, args: &SessionStartArgs) -> Result<CommandSucce
             args.memory,
             args.cores,
             args.cold_boot,
+            args.snapshot_save,
             &[],
             &log_dir,
         )
@@ -750,6 +753,7 @@ pub(crate) async fn ensure(ctx: &CliContext, args: &SessionEnsureArgs) -> Result
                 memory: None,
                 cores: None,
                 cold_boot: false,
+                snapshot_save: args.snapshot_save,
                 reuse: true,
                 prepare: args.prepare,
                 no_wake: false,
@@ -1236,6 +1240,7 @@ async fn restart(ctx: &CliContext, args: &SessionRestartArgs) -> Result<CommandS
             None,
             None,
             args.cold_boot,
+            session.snapshot_save,
             &[],
             &log_dir,
         )
@@ -1422,6 +1427,7 @@ pub async fn emulator(ctx: &CliContext, command: &EmulatorCommand) -> Result<Com
 pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<CommandSuccess> {
     let mut session = ctx.require_session()?;
     let serial = session.serial()?.to_string();
+    let device = ctx.resolve_device(Some(&session)).await?;
     let manager = ctx.emulator_manager()?;
     match command {
         SnapshotCommand::List => {
@@ -1447,6 +1453,7 @@ pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<Com
                     format!("Would save snapshot {name}\n"),
                 ));
             }
+            ctx.ensure_physical_mutation_allowed(&device, "saving an emulator snapshot")?;
             let snapshot = manager.snapshot_save(&serial, name).await?;
             session.record_snapshot(&ctx.paths, "save", name, true, None)?;
             Ok(success(
@@ -1458,6 +1465,15 @@ pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<Com
             .with_device(serial))
         }
         SnapshotCommand::Load { name } => {
+            if ctx.dry_run {
+                return Ok(success(
+                    "snapshot.load",
+                    serde_json::json!({"dry_run": true, "name": name, "destructive": true, "requires_confirmation": true}),
+                    format!(
+                        "Would restore snapshot {name}; current emulator user data would be replaced and --yes is required\n"
+                    ),
+                ));
+            }
             if !ctx.yes {
                 return Err(ForgeError::new(
                     ErrorCode::InvalidArgument,
@@ -1465,15 +1481,7 @@ pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<Com
                 )
                 .with_suggestion("Save important state first or use a disposable AVD."));
             }
-            if ctx.dry_run {
-                return Ok(success(
-                    "snapshot.load",
-                    serde_json::json!({"dry_run": true, "name": name, "destructive": true}),
-                    format!(
-                        "Would restore snapshot {name}; current emulator user data would be replaced\n"
-                    ),
-                ));
-            }
+            ctx.ensure_physical_mutation_allowed(&device, "loading an emulator snapshot")?;
             let result = manager.snapshot_load(&serial, name, ctx.yes).await;
             match result {
                 Ok(snapshot) => {
@@ -1506,6 +1514,7 @@ pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<Com
                     format!("Would delete snapshot {name}\n"),
                 ));
             }
+            ctx.ensure_physical_mutation_allowed(&device, "deleting an emulator snapshot")?;
             let snapshot = manager.snapshot_delete(&serial, name).await?;
             session.record_snapshot(&ctx.paths, "delete", name, true, None)?;
             Ok(success(

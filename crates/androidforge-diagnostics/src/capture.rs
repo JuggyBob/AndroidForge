@@ -570,12 +570,17 @@ impl Recorder {
             Some("Android screen recording"),
             &std::fs::read(&local_path).unwrap_or_default(),
         )?;
+        let stopped_at = now_rfc3339();
+        let duration_ms = elapsed_since_rfc3339(&state.started_at, Utc::now())
+            .unwrap_or_else(|| started.elapsed().as_millis() as u64);
         let metadata = serde_json::json!({
             "schema_version": 1,
             "session_id": state.session_id.clone(),
             "serial": state.serial.clone(),
             "started_at": state.started_at.clone(),
-            "stopped_at": now_rfc3339(),
+            "stopped_at": stopped_at,
+            "duration_ms": duration_ms,
+            "stop_operation_ms": started.elapsed().as_millis() as u64,
             "requested_time_limit_secs": state.requested_time_limit_secs,
             "time_limit_secs": state.time_limit_secs,
             "bit_rate": state.bit_rate,
@@ -596,11 +601,20 @@ impl Recorder {
             artifact,
             local_path: local_path.to_string_lossy().into_owned(),
             size_bytes: size,
-            duration_ms: started.elapsed().as_millis() as u64,
+            duration_ms,
             remote_path: state.remote_path,
             notes,
         })
     }
+}
+
+fn elapsed_since_rfc3339(started_at: &str, now: chrono::DateTime<Utc>) -> Option<u64> {
+    let started_at = chrono::DateTime::parse_from_rfc3339(started_at).ok()?;
+    Some(
+        now.signed_duration_since(started_at.with_timezone(&Utc))
+            .num_milliseconds()
+            .max(0) as u64,
+    )
 }
 
 fn sanitize_key(value: &str) -> String {
@@ -627,6 +641,16 @@ fn truncate(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_duration_uses_the_recording_start_not_the_stop_operation() {
+        let started = "2026-01-01T00:00:00Z";
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:02:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(elapsed_since_rfc3339(started, now), Some(120_000));
+        assert_eq!(elapsed_since_rfc3339("not-a-time", now), None);
+    }
 
     #[test]
     fn png_dimensions_are_big_endian() {

@@ -496,6 +496,7 @@ A session is the unit of ownership and the most reliable way to target a device.
 
 ```powershell
 androidforge session start --avd androidforge_test --port 5560 --headless --owner MyAgent --prepare --json
+androidforge session start --avd androidforge_test --port 5560 --headless --owner MyAgent --snapshot-save --json
 androidforge session attach --serial emulator-5556 --owner MyAgent --json
 androidforge session claim --serial emulator-5556 --json
 androidforge session list --json
@@ -509,9 +510,13 @@ androidforge session stop --session ses-... --owner MyAgent --json
 
 `session use` writes `.androidforge/current-session` for the project. `ANDROIDFORGE_SESSION` is the environment alternative. `session release` releases ownership and restores prepared settings; `session stop` also stops an emulator the session owns, or an attached emulator with `--attached`. `session release --stop` stops an owned emulator; attached emulators additionally require `--stop-attached`. If you release an owned emulator without stopping it, the released tombstone can still be stopped with `session stop --session <ID>` as long as no new session owns the device. `session list --active` hides released/failed tombstones.
 
+`session status` and `session inspect` report the heartbeat and advisory lease. There is no standalone `session heartbeat` subcommand; use `session status --session <ID> --json` when an agent needs a liveness sample.
+
+AndroidForge-launched emulators default to `-no-snapshot-save` so test state is not silently preserved. Pass `--snapshot-save` to `session start` or `session ensure` when you intend to use `snapshot save|load`. Attached emulators keep whatever launch flags they already have.
+
 `session stop`, `session release` and `session restart` are owner-guarded. Pass the same `--owner` used at `session start` (or export `ANDROIDFORGE_OWNER`) or use `--force` for a deliberate takeover. Without a matching owner they return `E_SESSION_OWNERSHIP_MISMATCH` with both labels and do not touch the emulator. This is a coordination guard, not authentication: anyone who can read the local session file can still use `--force`.
 
-`session stop` is **not** `--yes`-guarded; ownership is the safety gate. `--yes` is reserved for data-clearing, restore and other destructive app operations.
+`session stop` is **not** `--yes`-guarded; ownership is the safety gate. `--yes` is reserved for app uninstall, data-clearing, restore and other destructive app operations.
 
 If another session owns the device, you get `E_DEVICE_BUSY`. Do not kill the emulator. Check `session list`; use `session gc --reclaim` only when the owner is genuinely dead. `session gc --help` also has `--stop` for stale owned emulators.
 
@@ -623,6 +628,15 @@ androidforge app info com.example.app --session <ID> --json
 
 `force-stop` removes the task/process and stops scheduled work. `kill` is the softer `am kill`. `clear-data` and `uninstall` are destructive and require `--yes`. `run-as` file operations require a debuggable build:
 
+AndroidForge protects physical devices by default. Data-changing commands such as `app install`,
+`app uninstall`, `app clear-data`, `app file-push`, `app data-restore`, `permissions grant|revoke`,
+`appops set|reset`, `doze force`, `standby set`, `battery unplug|reset`, `network` changes,
+`time set|restore`, `notifications clear` and `jobs run|cancel` return
+`E_PHYSICAL_DEVICE_MUTATION_BLOCKED` on a physical device unless `--allow-physical-mutation` is passed.
+Emulators do not need the flag. `--dry-run` remains available and shows `requires_physical_mutation`
+without changing anything. This is a safety guard, not authentication; a deliberate test can still
+opt in.
+
 ```powershell
 androidforge app file-push .\seed.json files/seed.json --package com.example.app.debug --session <ID> --json
 androidforge app file-pull files/seed.json .\pulled.json --package com.example.app.debug --session <ID> --json
@@ -652,8 +666,15 @@ androidforge ui clear --session <ID> --json
 androidforge ui back --session <ID> --hide-keyboard --json
 androidforge ui home --session <ID> --json
 androidforge ui keyevent KEYCODE_ENTER --session <ID> --json
-androidforge ui swipe --session <ID> --x1 500 --y1 1800 --x2 500 --y2 600 --json
+androidforge ui swipe 500 1800 500 600 --session <ID> --json
+androidforge ui dismiss-overlays --session <ID> --dry-run --json
+androidforge ui dismiss-overlays --session <ID> --max 3 --json
 ```
+
+`ui dismiss-overlays` handles the common SystemUI immersive "Viewing full screen / Got it" overlay
+that appears on a fresh AVD. It only taps clickable `com.android.systemui` nodes labelled `Got it`,
+`OK`, `Dismiss` or `Close`; it never taps app content or permission decisions. Use `--dry-run` to
+preview the candidates.
 
 Waiting and assertions:
 
@@ -676,6 +697,8 @@ Rules:
 - Taps use current device pixels and optionally a clickable ancestor.
 - Text entry verifies the focused editable field, clears with batched deletes when asked, re-reads and compares. Password fields report unverified.
 - `ui back` refuses while the IME is up unless `--hide-keyboard` is explicit.
+- On a fresh AVD, run `ui dismiss-overlays` before app assertions so the SystemUI immersive cling
+  cannot hide the app hierarchy.
 - Avoid fixed sleeps. Use `wait`, `settle` and `scroll-to`.
 - Compose test tags are not visible unless the app exposes them as accessibility resource IDs. Use instrumentation for internal tags.
 
@@ -808,7 +831,12 @@ androidforge report bundle <RUN_ID> --dry-run --json
 androidforge report bundle <RUN_ID> --markdown --json
 androidforge report bundle <RUN_ID> --format json --json
 androidforge report bundle <RUN_ID> --include-screenshots --include-recordings --json
+androidforge report bundle <RUN_ID> --metadata-only --format json --json
 ```
+
+`--metadata-only` emits the manifest, summary and explanation only; every run artifact is listed as
+excluded with the reason `metadata-only bundle requested`. Use it when the report may contain
+sensitive screen content and only workflow metadata is safe to share.
 
 The ZIP contains a summary, Markdown explanation, exact invocation argv when the run recorded it,
 selected evidence excerpts, bounded logcat, hierarchy XML, `manifest.json` checksums and excluded

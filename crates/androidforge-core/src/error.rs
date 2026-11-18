@@ -87,6 +87,7 @@ error_codes! {
     WirelessPairingFailed => ("E_WIRELESS_PAIRING_FAILED", 4, true),
     WirelessConnectFailed => ("E_WIRELESS_CONNECT_FAILED", 4, true),
     DeviceHealthUnavailable => ("E_DEVICE_HEALTH_UNAVAILABLE", 4, true),
+    PhysicalDeviceMutationBlocked => ("E_PHYSICAL_DEVICE_MUTATION_BLOCKED", 4, true),
     RetryNotAllowed => ("E_RETRY_NOT_ALLOWED", 2, true),
     MatrixTargetInvalid => ("E_MATRIX_TARGET_INVALID", 2, true),
     MatrixDuplicateTarget => ("E_MATRIX_DUPLICATE_TARGET", 2, true),

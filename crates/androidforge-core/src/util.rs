@@ -122,7 +122,28 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 
 /// Write a file atomically enough for evidence: a unique sibling is written and
 /// fsynced first, then renamed into place.
+fn path_write_lock(path: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LOCKS: OnceLock<Mutex<HashMap<std::path::PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    // Windows can transiently reject a replace when another thread still has
+    // the target open. Serialize writers to the same path in-process; the
+    // replace loop below handles cross-process sharing violations.
+    let write_lock = path_write_lock(path);
+    let _write_guard = write_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             ForgeError::new(
@@ -158,15 +179,13 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     drop(file);
 
-    // Windows refuses to rename over an existing file. Removing first leaves a
-    // very small window, but the completed temp file always exists first.
-    if path.exists() {
-        let _ = fs::remove_file(path);
-    }
-    for attempt in 0..5 {
-        match fs::rename(&temp, path) {
+    // Windows refuses to rename over an existing file. MoveFileExW replaces it
+    // atomically and writes through, so a crash cannot leave the target missing.
+    for attempt in 0..40 {
+        let result = replace_file(&temp, path);
+        match result {
             Ok(()) => return Ok(()),
-            Err(error) if attempt < 4 => {
+            Err(error) if attempt < 39 => {
                 std::thread::sleep(Duration::from_millis(25));
                 let _ = error;
             }
@@ -179,7 +198,41 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
             }
         }
     }
-    unreachable!("rename loop always returns")
+    unreachable!("replace loop always returns")
+}
+
+#[cfg(windows)]
+fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    let wide = |value: &Path| {
+        value
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let from = wide(temp);
+    let to = wide(path);
+    let result = unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
+    fs::rename(temp, path)
 }
 
 fn temp_path_for(path: &Path) -> PathBuf {
@@ -385,5 +438,54 @@ mod tests {
     #[test]
     fn tail_keeps_last_lines() {
         assert_eq!(tail_lines("a\nb\nc\n", 2), "b\nc\n");
+    }
+
+    #[test]
+    fn atomic_write_replaces_an_existing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.json");
+        write_json_atomic(&path, &serde_json::json!({"version": 1, "value": "old"})).unwrap();
+        write_json_atomic(&path, &serde_json::json!({"version": 2, "value": "new"})).unwrap();
+        let value: serde_json::Value = read_json(&path).unwrap();
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["value"], "new");
+    }
+
+    #[test]
+    fn concurrent_atomic_writes_leave_one_complete_json_value() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.json");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for index in 0..8 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                for round in 0..20 {
+                    write_json_atomic(
+                        &path,
+                        &serde_json::json!({"writer": index, "round": round, "payload": "x".repeat(4096)}),
+                    )
+                    .unwrap();
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let value: serde_json::Value = read_json(&path).unwrap();
+        assert!(value["writer"].as_u64().unwrap() < 8);
+        assert!(value["round"].as_u64().unwrap() < 20);
+        assert_eq!(value["payload"].as_str().unwrap().len(), 4096);
+    }
+
+    #[test]
+    fn truncated_json_is_rejected_with_a_structured_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("broken.json");
+        std::fs::write(&path, b"{\"partial\":").unwrap();
+        let error = read_json::<serde_json::Value>(&path).unwrap_err();
+        assert_eq!(error.code(), crate::error::ErrorCode::ConfigInvalid);
     }
 }

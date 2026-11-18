@@ -351,6 +351,7 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             ttl: args.ttl.clone(),
             port: None,
             headless: true,
+            snapshot_save: false,
             prepare: false,
         };
         let acquisition = match session::ensure(&ctx, &ensure_args).await {

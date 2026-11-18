@@ -30,18 +30,38 @@ pub async fn app(ctx: &CliContext, command: &AppCommand) -> Result<CommandSucces
             let package = ctx.package_or_config(args.package.as_deref())?;
             let local = local_path(ctx, &args.local);
             if ctx.dry_run {
-                return Ok(plan(
+                let mut result = serde_json::json!({
+                    "dry_run": true,
+                    "serial": device.serial,
+                    "package": package,
+                    "local": local,
+                    "remote": args.remote,
+                    "requires_confirmation": device.kind == androidforge_core::model::DeviceKind::Physical,
+                });
+                if device.kind == androidforge_core::model::DeviceKind::Physical {
+                    result["requires_physical_mutation"] = serde_json::json!(true);
+                }
+                return Ok(success(
                     "app.file-push",
-                    &device.serial,
-                    session.as_ref(),
+                    result,
                     format!(
-                        "Would push {} to {} on {}\n",
+                        "Would push {} to {} on {}{}\n",
                         local.display(),
                         args.remote,
-                        package
+                        package,
+                        if ctx.allow_physical_mutation {
+                            ""
+                        } else if device.kind == androidforge_core::model::DeviceKind::Physical {
+                            "; requires --allow-physical-mutation"
+                        } else {
+                            ""
+                        }
                     ),
-                ));
+                )
+                .with_optional_session(session_id(session.as_ref()))
+                .with_device(device.serial.clone()));
             }
+            ctx.ensure_physical_mutation_allowed(&device, "pushing files into an app")?;
             execute_in_run!(
                 ctx,
                 "app.file-push",
@@ -192,6 +212,38 @@ pub async fn app(ctx: &CliContext, command: &AppCommand) -> Result<CommandSucces
             .await
         }
         AppCommand::DataRestore(args) => {
+            let session = ctx.load_session(true)?;
+            let device = ctx.resolve_device(session.as_ref()).await?;
+            if ctx.dry_run {
+                let mut result = serde_json::json!({
+                    "dry_run": true,
+                    "serial": device.serial,
+                    "package": args.package,
+                    "path": args.path,
+                    "requires_confirmation": true,
+                });
+                if device.kind == androidforge_core::model::DeviceKind::Physical {
+                    result["requires_physical_mutation"] = serde_json::json!(true);
+                }
+                return Ok(success(
+                    "app.data-restore",
+                    result,
+                    format!(
+                        "Would restore {} data from {}; requires --yes{}\n",
+                        args.package,
+                        args.path.display(),
+                        if device.kind == androidforge_core::model::DeviceKind::Physical
+                            && !ctx.allow_physical_mutation
+                        {
+                            " and --allow-physical-mutation"
+                        } else {
+                            ""
+                        }
+                    ),
+                )
+                .with_optional_session(session_id(session.as_ref()))
+                .with_device(device.serial.clone()));
+            }
             if !ctx.yes {
                 return Err(ForgeError::new(
                     ErrorCode::InvalidArgument,
@@ -199,20 +251,7 @@ pub async fn app(ctx: &CliContext, command: &AppCommand) -> Result<CommandSucces
                 )
                 .with_suggestion("Back up the current data first where the app is debuggable."));
             }
-            let session = ctx.load_session(true)?;
-            let device = ctx.resolve_device(session.as_ref()).await?;
-            if ctx.dry_run {
-                return Ok(plan(
-                    "app.data-restore",
-                    &device.serial,
-                    session.as_ref(),
-                    format!(
-                        "Would restore {} data from {}\n",
-                        args.package,
-                        args.path.display()
-                    ),
-                ));
-            }
+            ctx.ensure_physical_mutation_allowed(&device, "restoring app data")?;
             let package = args.package.clone();
             let path = local_path(ctx, &args.path);
             execute_in_run!(
@@ -313,6 +352,10 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
         if options.fresh && !ctx.yes {
             result["install"]["requires_confirmation"] = serde_json::json!(true);
         }
+        if device.kind == androidforge_core::model::DeviceKind::Physical {
+            result["install"]["requires_physical_mutation"] =
+                serde_json::json!(!ctx.allow_physical_mutation);
+        }
         let mut human = format!(
             "Would install {} on {}{}{}\npackage: {}\nversion: {}\ncertificate: {}\nartifact: {}{}\n",
             source.display(),
@@ -347,6 +390,7 @@ pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<C
             .with_optional_session(session_id(session.as_ref()))
             .with_device(device.serial.clone()));
     }
+    ctx.ensure_physical_mutation_allowed(&device, "installing an app")?;
     let apk_display = source.display().to_string();
     let outcome = execute_in_run!(
         ctx,
@@ -443,13 +487,45 @@ async fn uninstall(ctx: &CliContext, args: &AppUninstallArgs) -> Result<CommandS
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
     if ctx.dry_run {
-        return Ok(plan(
+        let mut result = serde_json::json!({
+            "dry_run": true,
+            "serial": device.serial,
+            "package": args.package,
+            "keep_data": args.keep_data,
+            "requires_confirmation": true,
+        });
+        if device.kind == androidforge_core::model::DeviceKind::Physical {
+            result["requires_physical_mutation"] = serde_json::json!(!ctx.allow_physical_mutation);
+        }
+        return Ok(success(
             "app.uninstall",
-            &device.serial,
-            session.as_ref(),
-            format!("Would uninstall {} from {}\n", args.package, device.serial),
-        ));
+            result,
+            format!(
+                "Would uninstall {}{} from {}; requires --yes{}\n",
+                args.package,
+                if args.keep_data { " (kept data)" } else { "" },
+                device.serial,
+                if device.kind == androidforge_core::model::DeviceKind::Physical
+                    && !ctx.allow_physical_mutation
+                {
+                    " and --allow-physical-mutation"
+                } else {
+                    ""
+                }
+            ),
+        )
+        .with_optional_session(session_id(session.as_ref()))
+        .with_device(device.serial.clone()));
     }
+    if !ctx.yes {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            "uninstalling an app is destructive; pass --yes",
+        )
+        .with_suggestion("Use --keep-data when the app supports it, or back up data first.")
+        .with_suggestion("Use --dry-run to preview without confirmation."));
+    }
+    ctx.ensure_physical_mutation_allowed(&device, "uninstalling an app")?;
     let package = args.package.clone();
     let keep_data = args.keep_data;
     let outcome = execute_in_run!(
@@ -485,17 +561,29 @@ async fn clear_data(ctx: &CliContext, args: &AppPackageArgs) -> Result<CommandSu
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
     if ctx.dry_run {
+        let mut result = serde_json::json!({
+            "dry_run": true,
+            "serial": device.serial,
+            "package": args.package,
+            "requires_confirmation": true,
+        });
+        if device.kind == androidforge_core::model::DeviceKind::Physical {
+            result["requires_physical_mutation"] = serde_json::json!(!ctx.allow_physical_mutation);
+        }
         return Ok(success(
             "app.clear-data",
-            serde_json::json!({
-                "dry_run": true,
-                "serial": device.serial,
-                "package": args.package,
-                "requires_confirmation": true,
-            }),
+            result,
             format!(
-                "Would clear {} data on {}; requires --yes when executed\n",
-                args.package, device.serial
+                "Would clear {} data on {}; requires --yes when executed{}\n",
+                args.package,
+                device.serial,
+                if device.kind == androidforge_core::model::DeviceKind::Physical
+                    && !ctx.allow_physical_mutation
+                {
+                    " and --allow-physical-mutation"
+                } else {
+                    ""
+                }
             ),
         )
         .with_optional_session(session_id(session.as_ref()))
@@ -509,6 +597,7 @@ async fn clear_data(ctx: &CliContext, args: &AppPackageArgs) -> Result<CommandSu
         .with_suggestion("Back up data first where the application is debuggable.")
         .with_suggestion("Use --dry-run to preview without confirmation."));
     }
+    ctx.ensure_physical_mutation_allowed(&device, "clearing app data")?;
     let package = args.package.clone();
     execute_in_run!(
         ctx,

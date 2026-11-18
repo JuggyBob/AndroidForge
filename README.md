@@ -6,10 +6,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-> **Alpha `v0.9.3`.** AndroidForge is usable today for emulator-driven development and agent
+> **Alpha `v0.9.4`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows, but it is not a finished product. Windows is the tested host, and physical devices,
-> Maestro, instrumentation, snapshot restore and root-only operations are not yet validated. Read
-> [Project status](#project-status) before relying on it.
+> Maestro, instrumentation, snapshot restore and root-only operations are not yet fully validated.
+> Read [Project status](#project-status) before relying on it.
 
 AndroidForge is a local-first Rust toolkit: a single native CLI for automation plus an optional native
 desktop cockpit for humans. The CLI gives an AI coding agent a reliable way to acquire an Android
@@ -80,6 +80,20 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
+
+## What is new in v0.9.4
+
+- **Uninstall confirmation:** `app uninstall` now requires `--yes`, matching `clear-data` and `data-restore`. `--dry-run` still previews without confirmation.
+- **Physical-device safety:** data-changing commands refuse physical devices unless `--allow-physical-mutation` is passed. Protected operations include install, uninstall, clear-data, file-push, data-restore, permission/AppOps changes, Doze/standby/battery/network/time changes, notification clearing and job triggers. Dry-runs report the requirement.
+- **Full-spectrum receipt effects:** action receipts collect complete actionable/context lists before classifying an effect, so a text or state change outside the compact cap is no longer reported as `no_visible_change`.
+- **Overlay dismissal:** `ui dismiss-overlays` safely clears the SystemUI immersive "Got it" overlay on fresh AVDs without tapping app content or permission decisions.
+- **Snapshot reliability:** the emulator's tabular snapshot list is parsed correctly, and snapshot save now waits for the asynchronous save to appear instead of failing immediately. AndroidForge-launched emulators still default to `-no-snapshot-save`; pass `--snapshot-save` to allow manual snapshots.
+- **Correct recording duration:** `capture record stop` reports the actual recording duration, not the time spent stopping and pulling the file.
+- **Crash-safe state writes:** Windows atomic state replacement uses `MoveFileExW` with replace/write-through semantics instead of removing the old file first.
+- **Privacy gate:** `report bundle --metadata-only` emits the manifest, summary and explanation without any run artifact.
+- **Repeatable harnesses:** `tests/long-horizon.ps1`, `tests/real-device.ps1`, `tests/upgrade-rollback.ps1`, `tests/fault-injection.ps1` and `tests/supply-chain.ps1` turn the ad-hoc certification work into local release gates.
+- **Supply-chain policy:** `deny.toml` and a CI job check advisories, licenses, wildcard dependencies and unknown sources; workspace packages now declare the MIT license.
+- **Documentation:** `session heartbeat` is documented as part of `session status`, and the real-device and long-horizon procedures are recorded in `docs/`.
 
 ## What is new in v0.9.3
 
@@ -209,7 +223,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.9.3` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.9.4` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -257,7 +271,7 @@ androidforge --project .\examples\CalcSuite conformance run --session ses-... --
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-### Agent loop quick start (v0.9.3)
+### Agent loop quick start (v0.9.4)
 
 ```powershell
 # One snapshot instead of several discovery commands.
@@ -419,13 +433,14 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.9.3`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD matrix. v0.9.3 hardens the contracts and closes the certification
-coverage gap: formal schema validation, strict adapter fields, bounded observation retention with
-cross-process locking, empty-hierarchy recovery and a 13-page desktop render gate. The v0.9.2
-product fixes (full-observation refs, project-bound sessions, honest hooks, bounded logcat and
-receipt evidence) remain in place. See [VERIFICATION.md](VERIFICATION.md) and
-[case-studies/](case-studies/).
+**Alpha `v0.9.4`.** The CLI has been exercised against real apps on Android 16 and Android 14
+emulators, including a two-AVD matrix, and against a Xiaomi HyperOS device for read-only and safe
+UI paths. v0.9.4 adds physical-device mutation guardrails, correct uninstall confirmation, complete
+receipt effect classification, overlay dismissal, reliable emulator snapshots, crash-safe state
+writes, metadata-only bundles, repeatable long-horizon/real-device/upgrade/fault harnesses and a
+supply-chain policy. The v0.9.2/v0.9.3 product fixes remain in place. See
+[VERIFICATION.md](VERIFICATION.md), [docs/REAL_DEVICE_COMPATIBILITY.md](docs/REAL_DEVICE_COMPATIBILITY.md),
+[docs/LONG_HORIZON_TESTING.md](docs/LONG_HORIZON_TESTING.md) and [case-studies/](case-studies/).
 
 Validated:
 
@@ -473,13 +488,20 @@ Validated:
   cross-process locking, empty-hierarchy retry, and the 26 previously `NOT RUN` certification checks
   exercised on a clean API 36 AVD. The desktop smoke harness rendered all 13 pages with UI Automation
   and invoked Refresh.
+- v0.9.4 safety and repeatability validation: physical-device mutation refusal, uninstall `--yes`,
+  full-spectrum receipt effects, SystemUI overlay dismissal, snapshot save/load/delete, recording
+  duration, metadata-only bundles, crash-safe Windows state replacement, and the long-horizon,
+  real-device, upgrade/rollback, fault-injection and supply-chain harnesses.
 - Portable ZIP and per-user installer packaging; installer upgrade preserves user data outside the
   install directory.
 
 Not yet validated:
 
-- Physical devices and vendor ROMs (MIUI, Samsung, etc.). The Poco X4 GT / HyperOS 2 pass is
-  **BLOCKED** for v0.9.3 because the device was not connected; emulator coverage is not a substitute.
+- Physical devices and vendor ROMs (MIUI, Samsung, etc.). v0.9.4 adds a safe real-device harness and
+  records a Xiaomi HyperOS read-only pass. Physical-device debug install was blocked by
+  `INSTALL_FAILED_USER_RESTRICTED`; emulator coverage is not a substitute for vendor install testing.
+- Maestro and instrumentation execution remain `best-effort` and were not end-to-end validated in
+  this release.
 - Maestro execution and instrumentation test APKs.
 - Snapshot load/restore and root-only time changes.
 - macOS and Linux hosts (the desktop is Windows-validated; the CLI is not validated there either).

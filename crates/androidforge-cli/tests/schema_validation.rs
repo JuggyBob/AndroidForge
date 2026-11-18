@@ -292,7 +292,7 @@ fn representative_payloads_validate_against_their_schemas() {
             "schema_version": 1,
             "bundle_id": "bundle-0123456789ab",
             "created_at": "2026-01-01T00:00:00.000Z",
-            "tool_version": "0.9.3",
+            "tool_version": env!("CARGO_PKG_VERSION"),
             "run_id": "run-1",
             "project": "Example",
             "project_root": "A:/example",

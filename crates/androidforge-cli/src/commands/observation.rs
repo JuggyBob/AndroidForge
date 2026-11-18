@@ -965,6 +965,37 @@ pub async fn collect_observation(
     package_filter: Option<&str>,
     include_nodes: bool,
 ) -> Result<Observation> {
+    collect_observation_scoped(
+        ctx,
+        session,
+        device,
+        package_filter,
+        include_nodes,
+        include_nodes,
+    )
+    .await
+}
+
+/// Receipts need the complete actionable/context lists so a text or state
+/// change outside the compact cap is still classified correctly. They do not
+/// need the raw full hierarchy in their stored observations.
+pub async fn collect_receipt_observation(
+    ctx: &CliContext,
+    session: &Session,
+    device: &Device,
+    package_filter: Option<&str>,
+) -> Result<Observation> {
+    collect_observation_scoped(ctx, session, device, package_filter, false, true).await
+}
+
+async fn collect_observation_scoped(
+    ctx: &CliContext,
+    session: &Session,
+    device: &Device,
+    package_filter: Option<&str>,
+    include_nodes: bool,
+    include_all_nodes: bool,
+) -> Result<Observation> {
     let serial = device.serial.clone();
     let ui = ctx.ui_manager()?;
     let hierarchy = ui.dump(&serial).await?;
@@ -1001,11 +1032,11 @@ pub async fn collect_observation(
     visible_text.truncate(32);
     let actionable_total = actionable.len();
     let context_total = context.len();
-    let actionable_truncated = !include_nodes && actionable_total > 24;
+    let actionable_truncated = !include_all_nodes && actionable_total > 24;
     if actionable_truncated {
         actionable.truncate(24);
     }
-    let context_truncated = !include_nodes && context_total > 16;
+    let context_truncated = !include_all_nodes && context_total > 16;
     if context_truncated {
         context.truncate(16);
     }

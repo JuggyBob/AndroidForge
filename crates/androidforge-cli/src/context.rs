@@ -4,7 +4,7 @@ use androidforge_adb::AdbClient;
 use androidforge_app::{ApkInspector, AppManager};
 use androidforge_core::config::ForgeConfig;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
-use androidforge_core::model::{Device, DeviceState};
+use androidforge_core::model::{Device, DeviceKind, DeviceState};
 use androidforge_core::paths::ForgePaths;
 use androidforge_core::redact::Redactor;
 use androidforge_core::session::{
@@ -27,6 +27,7 @@ pub struct CliContext {
     pub quiet: bool,
     pub dry_run: bool,
     pub yes: bool,
+    pub allow_physical_mutation: bool,
     pub no_failure_capture: bool,
     pub session_arg: Option<String>,
     pub serial_arg: Option<String>,
@@ -64,6 +65,7 @@ impl CliContext {
             quiet: cli.quiet,
             dry_run: cli.dry_run,
             yes: cli.yes,
+            allow_physical_mutation: cli.allow_physical_mutation,
             no_failure_capture: cli.no_failure_capture,
             session_arg: cli.session.clone(),
             serial_arg: cli.serial.clone(),
@@ -308,6 +310,13 @@ impl CliContext {
         Ok(device)
     }
 
+    /// Refuse data-changing operations on physical devices unless the caller
+    /// explicitly opts in. Emulators and unknown targets keep their old
+    /// behavior; physical devices are the irreversible case.
+    pub fn ensure_physical_mutation_allowed(&self, device: &Device, operation: &str) -> Result<()> {
+        check_physical_mutation(device, self.allow_physical_mutation, operation)
+    }
+
     pub fn owner_for_serial(&self, serial: &str) -> Result<Option<Session>> {
         owner_of_serial(&self.paths, serial)
     }
@@ -332,9 +341,47 @@ impl CliContext {
     }
 }
 
+fn check_physical_mutation(device: &Device, allowed: bool, operation: &str) -> Result<()> {
+    if device.kind != DeviceKind::Physical || allowed {
+        return Ok(());
+    }
+    Err(ForgeError::new(
+        ErrorCode::PhysicalDeviceMutationBlocked,
+        format!(
+            "{operation} would change physical device {} ({}); pass --allow-physical-mutation to confirm",
+            device.serial,
+            device.model.as_deref().unwrap_or("unknown model")
+        ),
+    )
+    .with_suggestion(
+        "Physical devices are protected by default because their data is not disposable.",
+    )
+    .with_suggestion(
+        "Use a disposable emulator for destructive tests, or rerun with --allow-physical-mutation.",
+    )
+    .device(device.serial.clone()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::same_project_root;
+    use super::{check_physical_mutation, same_project_root};
+    use androidforge_core::error::ErrorCode;
+    use androidforge_core::model::{Device, DeviceKind, DeviceState};
+
+    #[test]
+    fn physical_mutations_require_an_explicit_flag() {
+        let mut device = Device::basic("R58M123456A", DeviceState::Device);
+        device.kind = DeviceKind::Physical;
+        device.model = Some("POCO X4 GT".to_string());
+
+        let error = check_physical_mutation(&device, false, "uninstalling an app").unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PhysicalDeviceMutationBlocked);
+        assert!(error.message().contains("--allow-physical-mutation"));
+        assert!(check_physical_mutation(&device, true, "uninstalling an app").is_ok());
+
+        device.kind = DeviceKind::Emulator;
+        assert!(check_physical_mutation(&device, false, "uninstalling an app").is_ok());
+    }
 
     #[test]
     fn project_roots_compare_slashes_and_windows_case() {

@@ -95,6 +95,7 @@ pub async fn notifications(
             .with_device(device.serial.clone()))
         }
         NotificationsCommand::Clear(args) => {
+            ctx.ensure_physical_mutation_allowed(&device, "clearing notifications")?;
             let selector = args.clone().into_selector();
             let cleared = notifications.clear(&device.serial, &selector).await?;
             Ok(success(
@@ -175,6 +176,7 @@ pub async fn jobs(ctx: &CliContext, command: &JobsCommand) -> Result<CommandSucc
             .with_device(device.serial.clone()))
         }
         JobsCommand::Run { package, job_id } => {
+            ctx.ensure_physical_mutation_allowed(&device, "triggering a JobScheduler job")?;
             let result = jobs.run(&device.serial, package, job_id).await?;
             Ok(success(
                 "jobs.run",
@@ -188,6 +190,7 @@ pub async fn jobs(ctx: &CliContext, command: &JobsCommand) -> Result<CommandSucc
             .with_device(device.serial.clone()))
         }
         JobsCommand::Cancel { package, job_id } => {
+            ctx.ensure_physical_mutation_allowed(&device, "cancelling a JobScheduler job")?;
             let result = jobs.cancel(&device.serial, package, job_id).await?;
             Ok(success(
                 "jobs.cancel",
@@ -317,11 +320,13 @@ pub async fn permissions(ctx: &CliContext, command: &PermissionsCommand) -> Resu
                 .await?
         }
         "grant" => {
+            ctx.ensure_physical_mutation_allowed(&device, "granting a permission")?;
             permissions
                 .grant(&device.serial, &package, &permission)
                 .await?
         }
         _ => {
+            ctx.ensure_physical_mutation_allowed(&device, "revoking a permission")?;
             permissions
                 .revoke(&device.serial, &package, &permission)
                 .await?
@@ -368,6 +373,7 @@ pub async fn appops(ctx: &CliContext, command: &AppOpsCommand) -> Result<Command
                 )
                 .with_device(device.serial.clone()));
             }
+            ctx.ensure_physical_mutation_allowed(&device, "changing an AppOps mode")?;
             let state = appops
                 .set(&device.serial, &package, operation, mode)
                 .await?;
@@ -381,6 +387,7 @@ pub async fn appops(ctx: &CliContext, command: &AppOpsCommand) -> Result<Command
         }
         AppOpsCommand::Reset { package, operation } => {
             let package = ctx.package_or_config(package.as_deref())?;
+            ctx.ensure_physical_mutation_allowed(&device, "resetting AppOps")?;
             let state = appops
                 .reset(&device.serial, &package, operation.as_deref())
                 .await?;
@@ -410,9 +417,13 @@ pub async fn doze(ctx: &CliContext, command: &DozeCommand) -> Result<CommandSucc
                 .with_optional_session(session.map(|session| session.id.clone()))
                 .with_device(device.serial.clone()));
             }
+            ctx.ensure_physical_mutation_allowed(&device, "forcing Doze")?;
             manager.force_doze(&device.serial, ctx.yes).await?
         }
-        DozeCommand::Unforce => manager.unforce_doze(&device.serial).await?,
+        DozeCommand::Unforce => {
+            ctx.ensure_physical_mutation_allowed(&device, "leaving Doze")?;
+            manager.unforce_doze(&device.serial).await?
+        }
     };
     Ok(success(
         "doze",
@@ -443,6 +454,7 @@ pub async fn standby(ctx: &CliContext, command: &StandbyCommand) -> Result<Comma
         }
         StandbyCommand::Set { package, bucket } => {
             let package = ctx.package_or_config(package.as_deref())?;
+            ctx.ensure_physical_mutation_allowed(&device, "changing a standby bucket")?;
             let state = manager
                 .set_standby(&device.serial, &package, bucket)
                 .await?;
@@ -462,8 +474,14 @@ pub async fn battery(ctx: &CliContext, command: &BatteryCommand) -> Result<Comma
     let manager = DeviceStateManager::new(ctx.adb()?);
     let state = match command {
         BatteryCommand::Status => manager.battery(&device.serial).await?,
-        BatteryCommand::Unplug => manager.battery_unplug(&device.serial).await?,
-        BatteryCommand::Reset => manager.battery_reset(&device.serial).await?,
+        BatteryCommand::Unplug => {
+            ctx.ensure_physical_mutation_allowed(&device, "changing battery state")?;
+            manager.battery_unplug(&device.serial).await?
+        }
+        BatteryCommand::Reset => {
+            ctx.ensure_physical_mutation_allowed(&device, "resetting battery state")?;
+            manager.battery_reset(&device.serial).await?
+        }
     };
     Ok(success(
         "battery",
@@ -484,16 +502,19 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
         NetworkCommand::Status => manager.network(&device.serial).await?,
         NetworkCommand::Airplane { enable, disable } => {
             let enabled = bool_switch(*enable, *disable, "airplane")?;
+            ctx.ensure_physical_mutation_allowed(&device, "changing airplane mode")?;
             manager
                 .set_airplane(&device.serial, enabled, ctx.yes)
                 .await?
         }
         NetworkCommand::Wifi { enable, disable } => {
             let enabled = bool_switch(*enable, *disable, "wifi")?;
+            ctx.ensure_physical_mutation_allowed(&device, "changing Wi-Fi state")?;
             manager.set_wifi(&device.serial, enabled).await?
         }
         NetworkCommand::Data { enable, disable } => {
             let enabled = bool_switch(*enable, *disable, "data")?;
+            ctx.ensure_physical_mutation_allowed(&device, "changing mobile data")?;
             manager.set_mobile_data(&device.serial, enabled).await?
         }
     };
@@ -579,6 +600,7 @@ async fn time_set(ctx: &CliContext, args: &TimeSetArgs) -> Result<CommandSuccess
         .with_session(session.id)
         .with_device(device.serial.clone()));
     }
+    ctx.ensure_physical_mutation_allowed(&device, "changing device time")?;
     let before = manager.time(&device.serial).await?;
     session.record_device_setting(
         &ctx.paths,
@@ -611,6 +633,7 @@ async fn time_set(ctx: &CliContext, args: &TimeSetArgs) -> Result<CommandSuccess
 async fn time_restore(ctx: &CliContext) -> Result<CommandSuccess> {
     let mut session = ctx.require_session()?;
     let device = ctx.resolve_device(Some(&session)).await?;
+    ctx.ensure_physical_mutation_allowed(&device, "restoring device time")?;
     let manager = DeviceStateManager::new(ctx.adb()?);
     let saved = session.device_settings.clone();
     let epoch = saved

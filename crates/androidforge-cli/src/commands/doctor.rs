@@ -1296,18 +1296,22 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
     add(
         "maestro",
         if has_maestro {
-            "supported"
+            "best-effort"
         } else {
             "unsupported"
         },
         &["maestro optional"],
-        "Optional local Maestro CLI; no Maestro Cloud, accounts or API keys.",
+        "Optional local Maestro CLI; no Maestro Cloud or accounts. Not end-to-end validated in this release.",
     );
     add(
         "instrumentation",
-        if has_adb { "supported" } else { "unsupported" },
-        &["adb"],
-        "Runs installed instrumentation; AndroidForge does not replace Gradle.",
+        if has_adb {
+            "best-effort"
+        } else {
+            "unsupported"
+        },
+        &["adb", "test APK"],
+        "Runs installed instrumentation; requires a test APK and does not replace Gradle. Not end-to-end validated in this release.",
     );
     add(
         "snapshots",
@@ -1316,8 +1320,24 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         } else {
             "unsupported"
         },
-        &["adb", "emulator"],
-        "Verified at runtime; loading always requires --yes.",
+        &["adb", "emulator", "--snapshot-save for manual saves"],
+        "Loading always requires --yes. AndroidForge-launched emulators default to -no-snapshot-save; pass --snapshot-save to permit manual snapshots.",
+    );
+    add(
+        "physical.safety",
+        "supported",
+        &["adb"],
+        "Data-changing commands refuse physical devices unless --allow-physical-mutation.",
+    );
+    add(
+        "ui.overlay_dismissal",
+        if has_adb {
+            "best-effort"
+        } else {
+            "unsupported"
+        },
+        &["adb", "uiautomator"],
+        "Dismisses only clickable SystemUI Got it/OK/Dismiss/Close overlays; never app content or permission decisions.",
     );
     add(
         "avd.cloning",

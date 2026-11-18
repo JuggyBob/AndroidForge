@@ -333,6 +333,22 @@ mod tests {
     }
 
     #[test]
+    fn failed_staged_update_restores_the_previous_cli() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("androidforge.exe");
+        let staged = temp.path().join("staged.exe");
+        std::fs::write(&target, b"previous-cli").unwrap();
+        std::fs::write(&staged, b"not-a-valid-executable").unwrap();
+
+        let result = install_staged_cli(&staged, &target);
+        assert!(
+            result.is_err(),
+            "invalid staged binaries must not be installed"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"previous-cli");
+    }
+
+    #[test]
     fn expects_the_documented_release_asset_names() {
         assert_eq!(CLI_ASSET, "androidforge-cli-windows-x86_64.zip");
         assert_eq!(DESKTOP_ASSET, "androidforge-desktop-windows-x86_64.zip");

@@ -8,6 +8,61 @@ within its alpha release line.
 
 No changes yet.
 
+## [0.9.4] - 2026-11-18
+
+Safety and repeatability release. Closes the v0.9.3 long-horizon certification finding and the
+follow-up recommendations made before final UI polish.
+
+### Added
+
+- `--allow-physical-mutation` (global). Data-changing commands now refuse physical devices by
+  default with `E_PHYSICAL_DEVICE_MUTATION_BLOCKED`; `--dry-run` reports
+  `requires_physical_mutation` without changing anything.
+- `ui dismiss-overlays` for the SystemUI immersive "Got it" overlay on fresh AVDs. It only taps
+  clickable `com.android.systemui` nodes labelled `Got it`, `OK`, `Dismiss` or `Close`.
+- `report bundle --metadata-only` excludes every run artifact while keeping the manifest, summary
+  and explanation.
+- `session start|ensure --snapshot-save` allows manual emulator snapshots by omitting the default
+  `-no-snapshot-save` flag.
+- `tests/long-horizon.ps1`, `tests/real-device.ps1`, `tests/upgrade-rollback.ps1`,
+  `tests/fault-injection.ps1` and `tests/supply-chain.ps1`, plus `tests/README.md`.
+- `deny.toml` and a CI `supply-chain` job for advisories, licenses, bans and sources.
+- `docs/LONG_HORIZON_TESTING.md`, `docs/REAL_DEVICE_COMPATIBILITY.md` and `docs/SUPPLY_CHAIN.md`.
+
+### Fixed
+
+- `app uninstall` now requires `--yes`, matching `clear-data` and `data-restore`.
+- Action receipts collect complete actionable/context lists before classification, so changes
+  outside the compact cap are not reported as `no_visible_change`.
+- `snapshot list` parses the emulator's tabular output; `snapshot save` polls for the asynchronous
+  snapshot to appear instead of failing immediately.
+- `capture record stop` reports the actual recording duration instead of the stop/pull duration.
+- Windows state replacement uses `MoveFileExW` with replace/write-through semantics, closing the
+  remove-before-rename crash window.
+- Empty and system-overlay hierarchies remain transient/retryable, and overlay dismissal is now an
+  explicit safe action.
+- Workspace packages declare `license = "MIT"` so the license inventory has no unlicensed entries.
+
+### Changed
+
+- `session status`/`session inspect` are documented as the heartbeat source; there is no standalone
+  `session heartbeat` subcommand.
+- Maestro and instrumentation are reported as `best-effort` and not end-to-end validated.
+- Snapshot support is documented as requiring `--snapshot-save` on AndroidForge-launched emulators.
+- Workspace, CLI, desktop, installer and compatibility version are `0.9.4`.
+
+### Validation
+
+- Full workspace tests, fmt, clippy and release build passed.
+- Long-horizon harness: 0 failures with screenshots, a recording, performance samples and a
+  checksum-verified bundle.
+- Real-device harness on Xiaomi HyperOS: 23 PASS, 0 FAIL, 1 N/A; debug install blocked by vendor
+  policy and recorded as BLOCKED.
+- Upgrade/rollback from 0.9.2 to 0.9.4: state and run history preserved; uninstall clean.
+- Fault injection: stale locks, corrupt session/report JSON, invalid adapter fields and concurrent
+  run writers all handled with structured outcomes.
+- Supply chain: 525 packages, 0 unlicensed; CI runs cargo-deny.
+
 ## [0.9.3] - 2026-11-17
 
 Contract and coverage release. All eight pre-UI hardening items were delivered together.
@@ -588,7 +643,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.4
 [0.9.3]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.3
 [0.9.2]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.2
 [0.9.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.1

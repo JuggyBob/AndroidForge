@@ -81,6 +81,7 @@ Pipeline-style commands may return a successful HTTP-style envelope with `status
 | `E_WIRELESS_PAIRING_FAILED` | 4 | yes | ADB rejected or could not complete pairing. Pairing codes are never logged. |
 | `E_WIRELESS_CONNECT_FAILED` | 4 | yes | ADB could not connect to or disconnect the wireless endpoint. |
 | `E_DEVICE_HEALTH_UNAVAILABLE` | 4 | yes | Health could not be collected for the target device. |
+| `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` | 4 | yes | A data-changing operation targeted a physical device without `--allow-physical-mutation`. |
 | `E_RETRY_NOT_ALLOWED` | 2 | yes | Retries were requested for a non-read-only operation. |
 | `E_MATRIX_TARGET_INVALID` | 2 | yes | A matrix AVD/serial is unknown or not connected. |
 | `E_MATRIX_DUPLICATE_TARGET` | 2 | yes | The same matrix target was requested more than once. |

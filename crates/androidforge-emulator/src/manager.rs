@@ -94,6 +94,7 @@ impl EmulatorManager {
         memory_mb: Option<u32>,
         cores: Option<u32>,
         cold_boot: bool,
+        snapshot_save: bool,
         extra_args: &[String],
         log_dir: &Path,
     ) -> Result<StartedEmulator> {
@@ -126,8 +127,10 @@ impl EmulatorManager {
             port.to_string(),
             "-no-audio".to_string(),
             "-no-boot-anim".to_string(),
-            "-no-snapshot-save".to_string(),
         ];
+        if !snapshot_save {
+            args.push("-no-snapshot-save".to_string());
+        }
         if headless {
             args.push("-no-window".to_string());
         }
@@ -380,19 +383,25 @@ impl EmulatorManager {
             .with_suggestion("Verify that the emulator supports snapshots and is not read-only.")
             .device(serial.to_string()));
         }
-        let snapshots = self.snapshot_list(serial).await?;
-        if !snapshots.iter().any(|snapshot| snapshot.name == name) {
-            return Err(ForgeError::new(
-                ErrorCode::UnsupportedOperation,
-                format!("snapshot '{name}' did not appear in the emulator snapshot list"),
-            )
-            .with_context_string("output", truncate(text.trim(), 3000))
-            .with_suggestion("Snapshot support varies with emulator version and AVD configuration.")
-            .device(serial.to_string()));
+        // The emulator can acknowledge the save before the snapshot is fully
+        // written and visible through the console. Poll briefly instead of
+        // reporting a false failure on a slow disk.
+        for _ in 0..60 {
+            let snapshots = self.snapshot_list(serial).await?;
+            if snapshots.iter().any(|snapshot| snapshot.name == name) {
+                return Ok(SnapshotInfo {
+                    name: name.to_string(),
+                });
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        Ok(SnapshotInfo {
-            name: name.to_string(),
-        })
+        Err(ForgeError::new(
+            ErrorCode::UnsupportedOperation,
+            format!("snapshot '{name}' did not appear in the emulator snapshot list"),
+        )
+        .with_context_string("output", truncate(text.trim(), 3000))
+        .with_suggestion("Snapshot support varies with emulator version and AVD configuration.")
+        .device(serial.to_string()))
     }
 
     pub async fn snapshot_load(
@@ -515,12 +524,20 @@ fn parse_snapshot_list(output: &str) -> Vec<SnapshotInfo> {
         {
             continue;
         }
-        let name = line
-            .strip_prefix("snapshot:")
-            .map(str::trim)
-            .unwrap_or(line)
-            .to_string();
+        let name = if let Some(name) = line.strip_prefix("snapshot:") {
+            name.trim().to_string()
+        } else {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            match fields.as_slice() {
+                // `adb emu avd snapshot list` is tabular:
+                // ID  TAG  VM SIZE  DATE  VM CLOCK
+                // --  clean-install  68M  2026-...  00:00:20
+                [id, name, ..] if *id == "--" => (*name).to_string(),
+                _ => line.to_string(),
+            }
+        };
         if !name.is_empty()
+            && !name.eq_ignore_ascii_case("TAG")
             && name
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
@@ -555,6 +572,24 @@ mod tests {
         let snapshots = parse_snapshot_list("OK\nclean-install\nwork-state\nKO\n");
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].name, "clean-install");
+    }
+
+    #[test]
+    fn snapshot_list_parses_the_emulator_table() {
+        let snapshots = parse_snapshot_list(
+            "List of snapshots present on all disks:\n\
+             ID        TAG                 VM SIZE                DATE       VM CLOCK\n\
+             --        default_boot            68M 2026-11-18 07:02:20   00:00:25.205\n\
+             --        af_snapshot_probe       68M 2026-11-18 07:03:23   00:00:23.973\n\
+             OK\n",
+        );
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["default_boot", "af_snapshot_probe"]
+        );
     }
 
     #[test]

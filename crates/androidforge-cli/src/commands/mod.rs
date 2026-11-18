@@ -319,6 +319,7 @@ fn ui_name(command: &UiCommand) -> &'static str {
         UiCommand::Clear(_) => "clear",
         UiCommand::Wait(_) => "wait",
         UiCommand::Assert(_) => "assert",
+        UiCommand::DismissOverlays(_) => "dismiss-overlays",
         UiCommand::Settle(_) => "settle",
         UiCommand::Scroll(_) => "scroll",
         UiCommand::ScrollTo(_) => "scroll-to",

@@ -7,9 +7,9 @@ use androidforge_ui::{Selector, UiHierarchy};
 use std::time::Instant;
 
 use crate::cli::{
-    PostconditionArgs, SelectorArgs, UiCommand, UiDumpArgs, UiInspectArgs, UiKeyEventArgs,
-    UiScrollArgs, UiScrollToArgs, UiSelectorArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs,
-    UiWaitArgs,
+    PostconditionArgs, SelectorArgs, UiCommand, UiDismissOverlaysArgs, UiDumpArgs, UiInspectArgs,
+    UiKeyEventArgs, UiScrollArgs, UiScrollToArgs, UiSelectorArgs, UiSettleArgs, UiSwipeArgs,
+    UiTextArgs, UiWaitArgs,
 };
 use crate::commands::common::{require_selector, success};
 use crate::commands::observation;
@@ -179,9 +179,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 resolved_node: Some(node_value.clone()),
                                 validation: "validated".to_string(),
                             });
-                            let before = match observation::collect_observation(
-                                ctx, session, &device, None, false,
-                            )
+                            let before = match observation::collect_receipt_observation(ctx, session, &device, None)
                             .await
                             {
                                 Ok(observation) => observation,
@@ -324,8 +322,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 session,
                                 &device,
                             );
-                            let before = match observation::collect_observation(
-                                ctx, session, &device, None, false,
+                            let before = match observation::collect_receipt_observation(
+                                ctx, session, &device, None,
                             )
                             .await
                             {
@@ -436,8 +434,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 session,
                                 &device,
                             );
-                            let before = match observation::collect_observation(
-                                ctx, session, &device, None, false,
+                            let before = match observation::collect_receipt_observation(
+                                ctx, session, &device, None,
                             )
                             .await
                             {
@@ -616,9 +614,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 resolved_node: Some(node_value.clone()),
                                 validation: "validated".to_string(),
                             });
-                            let before = match observation::collect_observation(
-                                ctx, session, &device, None, false,
-                            )
+                            let before = match observation::collect_receipt_observation(ctx, session, &device, None)
                             .await
                             {
                                 Ok(observation) => observation,
@@ -749,8 +745,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             session,
                             &device,
                         );
-                        let before = match observation::collect_observation(
-                            ctx, session, &device, None, false,
+                        let before = match observation::collect_receipt_observation(
+                            ctx, session, &device, None,
                         )
                         .await
                         {
@@ -845,6 +841,9 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
         }
         UiCommand::Text(args) => text(ctx, session.as_ref(), &device, args).await,
         UiCommand::Clear(args) => clear(ctx, session.as_ref(), &device, args).await,
+        UiCommand::DismissOverlays(args) => {
+            dismiss_overlays(ctx, session.as_ref(), &device, args).await
+        }
         UiCommand::Wait(args) | UiCommand::Assert(args) => {
             wait_or_assert(
                 ctx,
@@ -973,6 +972,138 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             .await
         }
     }
+}
+
+const SYSTEM_OVERLAY_LABELS: &[&str] = &["got it", "ok", "dismiss", "close"];
+
+fn system_overlay_label(node: &androidforge_ui::UiNode) -> Option<String> {
+    let package = node.package.as_deref().unwrap_or("");
+    if package != "com.android.systemui" || !node.visible() || !node.clickable {
+        return None;
+    }
+    let label = node
+        .text
+        .as_deref()
+        .or(node.content_desc.as_deref())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    SYSTEM_OVERLAY_LABELS
+        .contains(&label.as_str())
+        .then_some(label)
+}
+
+async fn dismiss_overlays(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiDismissOverlaysArgs,
+) -> Result<CommandSuccess> {
+    execute_in_run!(
+        ctx,
+        "ui.dismiss-overlays",
+        Some("ui dismiss-overlays"),
+        session,
+        Some(device),
+        true,
+        |_run| async {
+            let ui = ctx.ui_manager()?;
+            let hierarchy = ui.dump(&device.serial).await?;
+            let mut candidates = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for node in &hierarchy.nodes {
+                let Some(label) = system_overlay_label(node) else {
+                    continue;
+                };
+                let key = node
+                    .resource_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{}:{label}", node.path));
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                candidates.push(serde_json::json!({
+                    "label": label,
+                    "resource_id": node.resource_id,
+                    "package": node.package,
+                    "path": node.path,
+                    "clickable": node.clickable,
+                    "key": key,
+                }));
+            }
+            let limit = args.max.max(1);
+            let selected = candidates
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect::<Vec<_>>();
+            if !ctx.dry_run {
+                for candidate in &selected {
+                    let selector = if let Some(resource_id) =
+                        candidate.get("resource_id").and_then(|value| value.as_str())
+                    {
+                        Selector {
+                            resource_id: Some(resource_id.to_string()),
+                            clickable: Some(true),
+                            visible: Some(true),
+                            ..Selector::default()
+                        }
+                    } else {
+                        Selector {
+                            text: candidate
+                                .get("label")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string),
+                            clickable: Some(true),
+                            visible: Some(true),
+                            ..Selector::default()
+                        }
+                    };
+                    ui.tap(&device.serial, &selector).await?;
+                    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                }
+            }
+            let remaining = if ctx.dry_run {
+                candidates.len().saturating_sub(selected.len())
+            } else {
+                let after = ui.dump(&device.serial).await?;
+                after
+                    .nodes
+                    .iter()
+                    .filter(|node| system_overlay_label(node).is_some())
+                    .count()
+            };
+            let result = serde_json::json!({
+                "dry_run": ctx.dry_run,
+                "serial": device.serial,
+                "candidates": candidates,
+                "dismissed": if ctx.dry_run { Vec::<serde_json::Value>::new() } else { selected.clone() },
+                "selected": selected.len(),
+                "remaining_overlays": remaining,
+            });
+            let human = if ctx.dry_run {
+                format!(
+                    "Would dismiss {} known SystemUI overlay(s); {} candidate(s) remain.\n",
+                    selected.len(),
+                    remaining
+                )
+            } else {
+                format!(
+                    "Dismissed {} known SystemUI overlay(s); {} visible overlay(s) remain.\n",
+                    selected.len(),
+                    remaining
+                )
+            };
+            Ok(success(
+                "ui.dismiss-overlays",
+                result,
+                human,
+            )
+            .with_optional_session(session.map(|session| session.id.clone()))
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
 }
 
 async fn inspect(
@@ -1222,28 +1353,30 @@ async fn text(
                         validation: "validated".to_string(),
                     });
                 }
-                let before =
-                    match observation::collect_observation(ctx, session, device, None, false).await
-                    {
-                        Ok(observation) => observation,
-                        Err(error) => {
-                            let receipt = builder.finish(
-                                receipt::DispatchState::NotDispatched,
-                                false,
-                                None,
-                                None,
-                                None,
-                                None,
-                                Some(error.message().to_string()),
-                                full,
-                            );
-                            return Err(receipt_error(
-                                error,
-                                &receipt,
-                                "before observation failed; the action was not dispatched",
-                            ));
-                        }
-                    };
+                let before = match observation::collect_receipt_observation(
+                    ctx, session, device, None,
+                )
+                .await
+                {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        let receipt = builder.finish(
+                            receipt::DispatchState::NotDispatched,
+                            false,
+                            None,
+                            None,
+                            None,
+                            None,
+                            Some(error.message().to_string()),
+                            full,
+                        );
+                        return Err(receipt_error(
+                            error,
+                            &receipt,
+                            "before observation failed; the action was not dispatched",
+                        ));
+                    }
+                };
                 builder.set_before(before);
                 let result = match &resolved {
                     Some(resolved) => {
@@ -1591,28 +1724,30 @@ async fn scroll(
                         validation: "validated".to_string(),
                     });
                 }
-                let before =
-                    match observation::collect_observation(ctx, session, device, None, false).await
-                    {
-                        Ok(observation) => observation,
-                        Err(error) => {
-                            let receipt = builder.finish(
-                                receipt::DispatchState::NotDispatched,
-                                false,
-                                None,
-                                None,
-                                None,
-                                None,
-                                Some(error.message().to_string()),
-                                full,
-                            );
-                            return Err(receipt_error(
-                                error,
-                                &receipt,
-                                "before observation failed; the action was not dispatched",
-                            ));
-                        }
-                    };
+                let before = match observation::collect_receipt_observation(
+                    ctx, session, device, None,
+                )
+                .await
+                {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        let receipt = builder.finish(
+                            receipt::DispatchState::NotDispatched,
+                            false,
+                            None,
+                            None,
+                            None,
+                            None,
+                            Some(error.message().to_string()),
+                            full,
+                        );
+                        return Err(receipt_error(
+                            error,
+                            &receipt,
+                            "before observation failed; the action was not dispatched",
+                        ));
+                    }
+                };
                 builder.set_before(before);
                 let result = match &resolved {
                     Some(resolved) => {
@@ -2137,7 +2272,7 @@ async fn evaluate_postconditions(
         if satisfied {
             let observation = match session {
                 Some(session) => {
-                    observation::collect_observation(ctx, session, device, None, false)
+                    observation::collect_receipt_observation(ctx, session, device, None)
                         .await
                         .ok()
                 }
@@ -2157,7 +2292,7 @@ async fn evaluate_postconditions(
         if started.elapsed() >= timeout {
             let observation = match session {
                 Some(session) => {
-                    observation::collect_observation(ctx, session, device, None, false)
+                    observation::collect_receipt_observation(ctx, session, device, None)
                         .await
                         .ok()
                 }
@@ -2312,7 +2447,7 @@ async fn complete_receipt(
     let outcome = evaluate_postconditions(ctx, Some(session), device, selector, post).await;
     let after = match outcome.observation.clone() {
         Some(observation) => Some(observation),
-        None => observation::collect_observation(ctx, session, device, None, false)
+        None => observation::collect_receipt_observation(ctx, session, device, None)
             .await
             .ok(),
     };

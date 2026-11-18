@@ -69,6 +69,9 @@ pub struct Session {
     pub port: Option<u16>,
     #[serde(default)]
     pub headless: bool,
+    /// Whether the emulator was launched with manual snapshot support.
+    #[serde(default)]
+    pub snapshot_save: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,6 +128,7 @@ impl Session {
             avd,
             port,
             headless,
+            snapshot_save: false,
             profile: None,
             emulator_pid: None,
             emulator_args: Vec::new(),
@@ -938,12 +942,17 @@ fn device_lock_path(paths: &ForgePaths, serial: &str) -> Result<PathBuf> {
 /// Process-wide state lock. It serializes session metadata, observation-store
 /// writes and other multi-file state transitions across independent CLI
 /// processes. The lock is released when this guard is dropped.
+#[derive(Debug)]
 pub struct StateLock {
     file: std::fs::File,
 }
 
 impl StateLock {
     pub fn acquire(paths: &ForgePaths) -> Result<Self> {
+        Self::acquire_with_timeout(paths, Duration::from_secs(10))
+    }
+
+    pub fn acquire_with_timeout(paths: &ForgePaths, timeout: Duration) -> Result<Self> {
         let locks = paths.locks_dir();
         ensure_dir(&locks)?;
         let path = locks.join(".global.lock");
@@ -963,7 +972,7 @@ impl StateLock {
         loop {
             match file.try_lock_exclusive() {
                 Ok(()) => break,
-                Err(_) if started.elapsed() < Duration::from_secs(10) => {
+                Err(_) if started.elapsed() < timeout => {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(error) => {
@@ -1012,6 +1021,25 @@ mod tests {
         .unwrap();
         paths.state_dir = temp.path().join("state");
         paths
+    }
+
+    #[test]
+    fn state_lock_excludes_a_second_holder_and_ignores_stale_contents() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        std::fs::create_dir_all(paths.locks_dir()).unwrap();
+        std::fs::write(paths.locks_dir().join(".global.lock"), b"stale contents").unwrap();
+
+        let lock = StateLock::acquire(&paths).unwrap();
+        let contender = paths.clone();
+        let handle = std::thread::spawn(move || {
+            StateLock::acquire_with_timeout(&contender, Duration::from_millis(200))
+        });
+        let error = handle.join().unwrap().unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        drop(lock);
+
+        let _reacquired = StateLock::acquire_with_timeout(&paths, Duration::from_secs(1)).unwrap();
     }
 
     #[test]

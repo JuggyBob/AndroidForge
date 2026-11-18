@@ -1,9 +1,183 @@
 # Verification record
 
-This document records what was actually run for the `0.9.3` contract and coverage release, the `0.9.2`
-patch, the `0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the
-`0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android
-validation, desktop workflow validation and packaging validation from areas that were not exercised.
+This document records what was actually run for the `0.9.4` safety and repeatability release, the
+`0.9.3` contract and coverage release, the `0.9.2` patch, the `0.9.1` patch, the `0.9.0` Alpha
+delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and
+`0.3.0` records. It separates automated checks, real Android validation, desktop workflow validation
+and packaging validation from areas that were not exercised.
+
+## v0.9.4 verification (2026-11-18)
+
+### Scope
+
+Closes the v0.9.3 long-horizon certification finding and the pre-UI recommendations:
+
+- F-01 `app uninstall` without `--yes`;
+- full-spectrum receipt effect classification;
+- SystemUI overlay handling;
+- physical-device mutation guardrails;
+- metadata-only bundles;
+- snapshot list/save reliability and `--snapshot-save`;
+- recording duration;
+- crash-safe Windows state replacement;
+- repeatable long-horizon, real-device, upgrade/rollback, fault-injection and supply-chain harnesses;
+- deterministic/regression tests and documentation.
+
+### Automated checks
+
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `cargo test --workspace` reported **316 passed, 0 failed** across **18 test executables**.
+- `cargo build --workspace --release` passed; both binaries report `0.9.4`.
+- The 24 schema documents still compile and representative payloads validate.
+- New regression tests cover:
+  - physical-device mutation refusal and the opt-in flag;
+  - `uninstall` requiring `--yes` (unit path plus emulator verification below);
+  - a receipt text change at node 25 of 30;
+  - the emulator's tabular snapshot list parser;
+  - recording duration computed from the recording start time;
+  - metadata-only bundle exclusion;
+  - concurrent atomic JSON writes and truncated-state rejection;
+  - staged CLI update rollback when validation fails.
+
+### F-01 fix verification
+
+On a disposable emulator with the release `0.9.4` binary:
+
+- `app uninstall com.calcsuite` returned `E_INVALID_ARGUMENT: uninstalling an app is destructive; pass --yes`.
+- `app uninstall com.calcsuite --yes` succeeded.
+- The APK was reinstalled and reported version `3.0.3`.
+- `--dry-run` reports `requires_confirmation: true` without changing state.
+
+### Physical-device safety
+
+- Unit test `physical_mutations_require_an_explicit_flag` passes.
+- Data-changing commands listed in the release notes return
+  `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` on a physical device without
+  `--allow-physical-mutation`; dry-runs expose the requirement.
+- `tests/real-device.ps1` on the connected Xiaomi ran without any mutation command.
+- The device was left on Home, online, with the same model/build fingerprint; the harness records a
+  signed non-destruction statement.
+
+### Receipt and overlay fixes
+
+- `text_change_outside_the_compact_cap_is_classified` passes; receipts collect complete
+  actionable/context lists while returning the compact diff.
+- `ui dismiss-overlays` detected and dismissed the SystemUI immersive "Got it" overlay on a fresh
+  long-horizon AVD; it never taps app content or permission decisions.
+- The long-horizon release run reported `dismissed=0 remaining=0` after setup, and no overlay blocked
+  assertions.
+
+### Snapshot save/load/delete
+
+- `snapshot list` now parses the emulator's tabular output:
+  `--  default_boot  68M  2026-...  00:00:25.205`.
+- `snapshot save` polls for up to 30 seconds because the emulator acknowledges the save before it is
+  visible in the list.
+- On the release `0.9.4` binary with `session ensure --snapshot-save`:
+  - save succeeded;
+  - list contained `af_snapshot_test` and `default_boot`;
+  - load with `--yes` succeeded;
+  - delete succeeded;
+  - the leftover `af_snapshot_probe` from the direct emulator probe was also deleted.
+- Without `--snapshot-save`, AndroidForge-launched emulators still pass `-no-snapshot-save`.
+
+### Recording and atomic writes
+
+- `capture record stop` reported `duration=16098ms` for a 15-second recording; the previous
+  implementation reported the stop/pull duration.
+- The recording metadata now records actual `duration_ms` and separate `stop_operation_ms`.
+- Windows `write_atomic` uses `MoveFileExW` with replace/write-through, a per-path in-process mutex
+  and bounded retries for sharing violations.
+- `concurrent_atomic_writes_leave_one_complete_json_value` (8 threads x 20 writes) passes
+  repeatedly; truncated JSON returns the structured `E_CONFIG_INVALID`.
+
+### Privacy gate
+
+- `metadata_only_bundle_excludes_run_artifacts` imports a passing JUnit run, creates a
+  `--metadata-only --format json` bundle and asserts that no evidence/screenshot/recording/logcat/
+  hierarchy entry is present and that exclusions name `metadata-only`.
+- Text payloads remain redacted; media remains opt-in and is explicitly labelled as not
+  pixel-redacted.
+
+### Long-horizon harness (release binary)
+
+`tests/long-horizon.ps1` against the release `0.9.4` binary on `af_cert_clean` (API 36):
+
+- 3 cycles, 61 seconds, 35 commands, 3 screenshots, 1 recording, 0 failures.
+- 16 PASS, 0 FAIL, 1 N/A (cycle cap reached before the 10-minute target; reported honestly).
+- Recording: 914,898 bytes, 16,098 ms.
+- Report bundle: 3 entries, `verified=true`.
+- Session remained `ready`; observation count was capped; no orphan processes.
+- A second run without recording: 2 cycles, 0 failures, bundle `verified=true`.
+
+### Real-device harness (release binary)
+
+`tests/real-device.ps1` on Xiaomi `22041216G` / HyperOS OS2.0 / Android 14 / SDK 34:
+
+- 28 PASS, 0 FAIL, 1 N/A (test APK not requested), 3 safe soak cycles.
+- 3 screenshots at 1080x2460, Settings launch/swipe/Back/Home, observe, diagnostics collect and an
+  8-second bounded logcat capture all passed.
+- Device remained online; model and build fingerprint unchanged; non-destruction statement signed.
+- The earlier v0.9.3 attempt to install a debug APK was blocked by
+  `INSTALL_FAILED_USER_RESTRICTED`; v0.9.4 records that as a vendor policy BLOCKED, not a pass.
+
+### Upgrade and rollback
+
+`tests/upgrade-rollback.ps1` from the published v0.9.3 installer to the local v0.9.4 installer:
+
+- 14 PASS, 0 FAIL.
+- A run report created under 0.9.3 remained readable with status `passed` under 0.9.4.
+- Project config remained valid; `ANDROIDFORGE_HOME` state survived the upgrade.
+- The uninstaller removed the install directory and left user state outside it intact.
+
+### Fault injection
+
+`tests/fault-injection.ps1` against the release binary:
+
+- 8 PASS, 0 FAIL, 2 N/A.
+- Unknown nested adapter field: `E_CONFIG_INVALID`.
+- Invalid retention: `valid=false`, exit 8.
+- Stale `.global.lock` contents did not block a new command.
+- Corrupt session JSON did not crash `session list`.
+- Two concurrent `run start` writers produced distinct run IDs.
+- A corrupt run report produced `E_CONFIG_INVALID`; a later run still worked.
+- Disk-full and read-only-state ACL simulation are explicitly N/A; the atomic-write and
+  truncated-state tests cover the failure shape.
+
+### Desktop render gate
+
+`desktop/tests/smoke.ps1` on the release `0.9.4` binaries: **13/13 pages passed**, 0 failed. Every page
+had a non-blank screenshot and a UI Automation tree (38-244 elements); Refresh was invoked on
+overview. This remains launch/render/tree coverage, not full interactive or pixel-regression coverage.
+
+### Supply chain
+
+- `tests/supply-chain.ps1`: 525 packages, 0 unlicensed, 1 warning (32 duplicate-version groups),
+  cargo-deny PASS, cargo-audit BLOCKED locally (the same advisories are covered by cargo-deny).
+- `cargo deny check advisories bans licenses sources` on this host: **advisories ok, bans ok,
+  licenses ok, sources ok**. Four unmaintained-advisory exceptions are documented in
+  `docs/SUPPLY_CHAIN.md` (chrono and three transitive accesskit/zbus crates; no known
+  vulnerabilities).
+- `deny.toml` defines advisories, licenses, bans and sources; CI runs the same command.
+- Workspace crates now declare `license.workspace = true` (MIT).
+- CI result is recorded after publication.
+
+### Packaging and release (local, pre-publication)
+
+- Local package:
+  - CLI ZIP 5,240,244 bytes /
+    `463409656099ff7f519e746acbb4017565bb07f167784ee255fb205a5a8a774d`;
+  - desktop ZIP 12,009,438 bytes /
+    `03a8790e808fc1ff054dd6a07bb3e63f5f3d9bbdc53f1ec3f19e4a2b55e11e8c`;
+  - installer 9,825,977 bytes /
+    `a5f72671c66d46ca9ac8bde212cf76ee9acbaf6492a560aefabb80dad58b81ad`.
+- Computed hashes matched `dist/SHA256SUMS.txt`.
+- Portable CLI/desktop reported `0.9.4`; `doctor --json` reported `0.9.4 (report schema 1)`.
+- The local installer installed both binaries as `0.9.4` and uninstalled cleanly with the install
+  directory removed.
+- The Scoop manifest points at `v0.9.4` and carries the desktop ZIP hash above.
+- Publication details are recorded after the release workflow completes.
 
 ## v0.9.3 verification (2026-11-17)
 

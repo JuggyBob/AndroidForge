@@ -56,8 +56,11 @@ Device-modifying commands:
 Potentially destructive commands (require `--yes` or an explicit confirmation flag):
 
 - `app install --fresh --yes` deletes application data.
-- `app clear-data`, `app uninstall`, `app data-restore`, `snapshot load`, `session prune`, `session
-  gc --reclaim --stop`, and `maintenance clean`.
+- `app clear-data`, `app uninstall` (now `--yes`-guarded), `app data-restore`, `snapshot load`,
+  `session prune`, `session gc --reclaim --stop`, and `maintenance clean`.
+- On a physical device, data-changing commands are refused by default with
+  `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` unless `--allow-physical-mutation` is passed. Use an emulator
+  for destructive tests.
 - `agent test` never passes `--fresh`, never clears data and never uninstalls. It installs only when
   `--install` is supplied and only with a normal, data-preserving install.
 
@@ -473,6 +476,8 @@ androidforge session start --avd <AVD> --port 5556 --headless --owner <AgentName
 - `session release` releases ownership but keeps an owned emulator running; a later `session stop
   --session <ID>` can still stop that released tombstone if no new session owns the device.
 - `session list --active` hides released/failed/abandoned tombstones.
+- `session status` and `session inspect` report the heartbeat and advisory lease. There is no
+  standalone `session heartbeat` subcommand.
 - `session stop`, `session release` and `session restart` verify the session's `owner` label. Pass the
   same `--owner` used at start (or export `ANDROIDFORGE_OWNER`) or use `--force` for a deliberate
   takeover. This blocks one agent from stopping another agent's emulator by ID; the owner is a
@@ -697,7 +702,9 @@ started emulator. Never assume these are safe because a JSON envelope came back.
 - `E_SELECTOR_NOT_FOUND` — `ui dump`, use `--contains` or a more specific resource ID; `ui wait` if loading.
 - `E_SELECTOR_AMBIGUOUS` — inspect candidates and pass `--index N`.
 - `E_COMMAND_TIMEOUT` — inspect device state and retry with a larger explicit timeout; do not loop forever.
-- `E_DEVICE_OFFLINE` / `E_DEVICE_DISCONNECTED` — reconnect or restart only an emulator you own.
+- `E_DEVICE_OFFLINE` / `E_DEVICE_DISCONNECTED` - reconnect or restart only an emulator you own.
+- `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` - a data-changing command targeted a physical device; use an
+  emulator or pass `--allow-physical-mutation` only after confirming the device is disposable.
 - `E_INSTALL_SIGNATURE_MISMATCH` — read the diagnosis; do not auto-uninstall.
 - `E_SESSION_EXPIRED` — start/attach a new session.
 - `E_UNSUPPORTED_OPERATION` — read the capability matrix; use the suggested alternative.

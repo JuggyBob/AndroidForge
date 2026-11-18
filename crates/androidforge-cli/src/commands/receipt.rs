@@ -567,6 +567,26 @@ mod tests {
     }
 
     #[test]
+    fn text_change_outside_the_compact_cap_is_classified() {
+        let nodes = (0..30)
+            .map(|index| {
+                node(
+                    &format!("0.{index}"),
+                    &format!("n{index}"),
+                    "android.widget.TextView",
+                    false,
+                    (0, index * 10, 100, index * 10 + 10),
+                )
+            })
+            .collect::<Vec<_>>();
+        let before = observation("obs-1", "com.example", ".Main", nodes);
+        let mut after = before.clone_with_token("obs-2");
+        after.actionable[25].text = Some("changed-beyond-the-cap".to_string());
+        let (effect, _) = classify_between(before, after);
+        assert_eq!(effect, Effect::ContentChanged);
+    }
+
+    #[test]
     fn no_change_is_reported() {
         let before = observation(
             "obs-1",

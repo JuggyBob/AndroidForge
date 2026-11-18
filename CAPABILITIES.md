@@ -23,9 +23,10 @@
 | `ui.postconditions` | supported | adb, uiautomator | One action plus observation polling; no hidden action retries. |
 | `ui.receipts` | supported | adb, uiautomator | Before/after tokens, semantic diff, deterministic effect classification and explicit completeness. |
 | `ui.element_refs` | supported | adb, uiautomator | Opaque refs scoped to one observation token, with strict identity validation and no fallback for tap, long-press, text, clear, scroll, wait and assert. |
+| `ui.overlay_dismissal` | best-effort | adb, uiautomator | `ui dismiss-overlays` handles only clickable SystemUI nodes labelled Got it, OK, Dismiss or Close; it never taps app content or permission decisions. |
 | `diagnosis.explain` | supported | local reports | Deterministic categories, confidence, evidence, stable fingerprints and exact argv next actions. No LLM. |
 | `diagnosis.recurrence` | supported | local reports | Project-scoped new/recurring/regressed/unknown memory derived from existing run reports; no second database. |
-| `diagnostics.bundle` | supported | local reports | Redacted, size-bounded, checksummed ZIP plus Markdown/JSON evidence summaries and dry-run preview. |
+| `diagnostics.bundle` | supported | local reports | Redacted, size-bounded, checksummed ZIP plus Markdown/JSON evidence summaries and dry-run preview. `--metadata-only` excludes every run artifact. |
 | `devices.health` | supported | adb | Read-only battery/thermal/storage/memory/network/screen/uptime report with unknown reasons. |
 | `devices.wireless` | supported | adb | Standard pair/connect/disconnect wrappers; pairing codes are never logged or returned. |
 | `retry.read_only` | supported | none | Opt-in bounded retries (max 5, 20s window) for observe/diff/logcat reads only. |
@@ -38,7 +39,8 @@
 | `apk.verify` | supported | aapt2, apksigner, Java | Local signature verification. No signing automation. |
 | `apk.resolve` | supported | aapt2, project config | Deterministic newest valid variant output; never runs Gradle; ambiguity is explicit. |
 | `apk.diff` | supported | adb, aapt2 | Pulls the installed base APK and reports same/different/unknown including split limitations. |
-| `app.install` | supported | adb | Signature-aware diagnostics; `--only-if-changed` requires proven equivalence; never auto-uninstalls. |
+| `app.install` | supported | adb | Signature-aware diagnostics; `--only-if-changed` requires proven equivalence; never auto-uninstalls. Physical devices require `--allow-physical-mutation`. |
+| `app.uninstall` | supported | adb | Requires `--yes`; `--keep-data` keeps app data. Physical devices require `--allow-physical-mutation` too. |
 | `ui.uiautomator` | supported | adb, uiautomator | Compose semantics only when exposed through accessibility. |
 | `capture.screenshot` | supported | adb | Binary PNG via `exec-out`; no console redirection. |
 | `capture.recording` | best-effort | adb, screenrecord | Android's 180-second limit; no audio. |
@@ -48,9 +50,10 @@
 | `diagnostics.notifications` | best-effort | adb, dumpsys notification | Formatting varies by Android version. |
 | `diagnostics.doze.time` | best-effort | adb, device privileges | Time changes usually require root; AndroidForge never roots. |
 | `fixtures` | supported | project adapter | Explicit project hooks and fixture scripts; never automatic. |
-| `maestro` | unsupported unless installed | optional Maestro CLI | Local only; no Maestro Cloud, accounts or API keys. |
-| `instrumentation` | supported | adb, test APK | Runs installed instrumentation; does not replace Gradle. |
-| `snapshots` | best-effort | adb, emulator | Verified at runtime; loading always requires `--yes`. |
+| `maestro` | best-effort when installed | optional Maestro CLI | Local only; no Maestro Cloud, accounts or API keys. Not end-to-end validated in this release; missing Maestro returns `E_MAESTRO_NOT_FOUND`. |
+| `instrumentation` | best-effort | adb, test APK | Runs installed instrumentation; does not replace Gradle. Requires a test APK and was not end-to-end validated in this release. |
+| `snapshots` | best-effort | adb, emulator | Loading always requires `--yes`. AndroidForge-launched emulators default to `-no-snapshot-save`; pass `session start|ensure --snapshot-save` to permit manual snapshots. Save waits for the emulator's asynchronous snapshot list. |
+| `physical.safety` | supported | adb | Data-changing commands refuse physical devices unless `--allow-physical-mutation`; dry-runs report the requirement. |
 | `avd.cloning` | unsupported | none | Not implemented; a renamed profile would not provide isolation. |
 | `html.reports` | unsupported | none | JSON and raw artifacts are the primary evidence. |
 | `visual.diff` | unsupported | none | Screenshot evidence is supported; automated comparison is deferred. |
@@ -109,7 +112,7 @@
 
 ### UI
 
-- `ui dump|inspect|observe|diff|find|tap|long-press|text|clear|wait|assert|settle|scroll|scroll-to|swipe|back|home|keyevent|hide-keyboard|focused`.
+- `ui dump|inspect|observe|diff|find|tap|long-press|text|clear|wait|assert|dismiss-overlays|settle|scroll|scroll-to|swipe|back|home|keyevent|hide-keyboard|focused`.
 - `ui observe` returns compact semantics, a session/boot-scoped token and stable `ref` values; `ui diff` compares tokens.
 - `tap`, `long-press`, `text` and `scroll` accept `--wait-for-text`, `--wait-for-absent-text`,
   `--wait-for-value`, `--wait-for-package`, `--wait-for-activity` and `--timeout` postconditions.
