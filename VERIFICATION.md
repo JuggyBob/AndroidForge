@@ -149,12 +149,33 @@ Latency, packet loss and bandwidth shaping are not implemented and are not repor
 
 ### Packaging and publication
 
-- `packaging/package.ps1` produced the CLI ZIP, portable desktop ZIP, checksum file and, when Inno
-  Setup is available, the per-user installer.
+- `packaging/package.ps1` produced the CLI ZIP, portable desktop ZIP, checksum file and the per-user
+  installer.
+- Published asset hashes:
+  - `androidforge-cli-windows-x86_64.zip`:
+    `ab057d1461088f35455cc0424d60fda312dac4a5d8ec200baba24ea1e79e1b12`;
+  - `androidforge-desktop-windows-x86_64.zip`:
+    `d1bbff83bcf10fcd419e5fc34d1395c61b1c4a8ed949776ba8be5503c0f62012`;
+  - `androidforge-windows-x86_64-setup.exe`:
+    `16f8e15f08c9337b278ef772f6f0e1d9a88c668a1dc0825d7bc4e764503cfb77`.
 - The portable archive contains `androidforge.exe`, `androidforge-desktop.exe`, `LICENSE`,
   `README.md`, `USER_GUIDE.md`, `CHANGELOG.md` and `PORTABLE.txt`.
-- The downloaded-asset check, tag, release title and Scoop hash are recorded in the release
-  section below after publication.
+- The downloaded portable CLI passed the same MCP smoke test: **10/10 PASS**, 31 tools, 29 resources,
+  version `0.10.0`.
+- The installer ran with `/VERYSILENT` into a temporary directory, both installed binaries reported
+  `0.10.0`, and `unins000.exe /VERYSILENT` exited `0` and removed the directory.
+- The Scoop manifest points at `v0.10.0` and carries the published desktop ZIP hash
+  `d1bbff83bcf10fcd419e5fc34d1395c61b1c4a8ed949776ba8be5503c0f62012`.
+
+### Publication
+
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.10.0>; title
+  `AndroidForge v0.10.0 - Agent Surface`; not a draft; not a prerelease; marked **Latest**.
+- Tag: annotated `v0.10.0`, tag object `7cec5e3592d99ee37fadc4ae053955c2d649c7ac`, commit
+  `0c2e7f99af2d551629d901e51d2b47d4671c31ae`.
+- Assets present: CLI ZIP, desktop ZIP, installer and `SHA256SUMS.txt`.
+- Re-downloaded assets matched the published `SHA256SUMS.txt` byte-for-byte, and the downloaded
+  portable binaries reported `androidforge 0.10.0` and `androidforge-desktop 0.10.0`.
 
 ### Not validated
 
