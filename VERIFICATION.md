@@ -151,21 +151,22 @@ Latency, packet loss and bandwidth shaping are not implemented and are not repor
 
 - `packaging/package.ps1` produced the CLI ZIP, portable desktop ZIP, checksum file and the per-user
   installer.
-- Published asset hashes:
+- The local package and the Release workflow rebuild produced different binary bytes, as expected.
+  The published assets are the CI-built ones, with these hashes:
   - `androidforge-cli-windows-x86_64.zip`:
-    `ab057d1461088f35455cc0424d60fda312dac4a5d8ec200baba24ea1e79e1b12`;
+    `75c33e0aac7c560b928119a7fab5d450921a8c97e69543bec68ddfdb6fe2cae7`;
   - `androidforge-desktop-windows-x86_64.zip`:
-    `d1bbff83bcf10fcd419e5fc34d1395c61b1c4a8ed949776ba8be5503c0f62012`;
+    `2b14952cccee4410a3d43de2ae5d88bd4f099f5cb68b8969ca0c47daca73dbc2`;
   - `androidforge-windows-x86_64-setup.exe`:
-    `16f8e15f08c9337b278ef772f6f0e1d9a88c668a1dc0825d7bc4e764503cfb77`.
+    `d63ad6950b8e4285cb124fdcca3cb744ed1bdf3f2e7339eb2c45cc007f5971c4`.
 - The portable archive contains `androidforge.exe`, `androidforge-desktop.exe`, `LICENSE`,
   `README.md`, `USER_GUIDE.md`, `CHANGELOG.md` and `PORTABLE.txt`.
-- The downloaded portable CLI passed the same MCP smoke test: **10/10 PASS**, 31 tools, 29 resources,
-  version `0.10.0`.
-- The installer ran with `/VERYSILENT` into a temporary directory, both installed binaries reported
-  `0.10.0`, and `unins000.exe /VERYSILENT` exited `0` and removed the directory.
+- The CI-built downloaded portable CLI passed the same MCP smoke test: **10/10 PASS**, 31 tools,
+  29 resources, version `0.10.0`.
+- The CI-built installer ran with `/VERYSILENT` into a temporary directory, the installed CLI
+  reported `0.10.0`, and `unins000.exe /VERYSILENT` exited `0` and removed the directory.
 - The Scoop manifest points at `v0.10.0` and carries the published desktop ZIP hash
-  `d1bbff83bcf10fcd419e5fc34d1395c61b1c4a8ed949776ba8be5503c0f62012`.
+  `2b14952cccee4410a3d43de2ae5d88bd4f099f5cb68b8969ca0c47daca73dbc2`.
 
 ### Publication
 
@@ -176,6 +177,13 @@ Latency, packet loss and bandwidth shaping are not implemented and are not repor
 - Assets present: CLI ZIP, desktop ZIP, installer and `SHA256SUMS.txt`.
 - Re-downloaded assets matched the published `SHA256SUMS.txt` byte-for-byte, and the downloaded
   portable binaries reported `androidforge 0.10.0` and `androidforge-desktop 0.10.0`.
+- CI workflow `CI` completed successfully for both the release commit and the verification-record
+  commit.
+- Release workflow `Release` completed successfully for tag `v0.10.0` and created the published
+  assets as a prerelease; the release was then edited to the final title, marked non-prerelease and
+  set as Latest.
+- The Release workflow was made idempotent after this run: future reruns update an existing release
+  with `gh release upload --clobber` instead of failing on `gh release create`.
 
 ### Not validated
 
