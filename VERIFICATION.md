@@ -176,8 +176,29 @@ overview. This remains launch/render/tree coverage, not full interactive or pixe
 - Portable CLI/desktop reported `0.9.4`; `doctor --json` reported `0.9.4 (report schema 1)`.
 - The local installer installed both binaries as `0.9.4` and uninstalled cleanly with the install
   directory removed.
-- The Scoop manifest points at `v0.9.4` and carries the desktop ZIP hash above.
-- Publication details are recorded after the release workflow completes.
+- The Scoop manifest points at `v0.9.4` and carries the published desktop ZIP hash.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.4>; title
+  `AndroidForge v0.9.4 - Safety and Repeatability`; not a prerelease; marked latest.
+- Tag: annotated `v0.9.4`, tag object `b40f4be445bcc7637023c02fc4d09fbb100bb9f0`, commit
+  `d1de5d589652eb719977c472822bb693716542db`; Release workflow `44251426392` passed.
+- The first CI run for the release commit failed only in the new supply-chain job because the
+  cargo-deny action receives `arguments` before `command`; workflow commit `7b7d620` corrected the
+  invocation. CI `44252367360` then passed, including `supply-chain`.
+- Downloaded assets matched the published `SHA256SUMS.txt`:
+  - `androidforge-cli-windows-x86_64.zip` (5,239,481 bytes),
+    `f92aa5274dda5d85b0a201de839aab2a758ae586296542a556d3a433bae514f2`.
+  - `androidforge-desktop-windows-x86_64.zip` (12,009,534 bytes),
+    `c493a3cabd61ad3958cee86669e20e7db874d35a4931f02c9f2c7e7ae734b654`.
+  - `androidforge-windows-x86_64-setup.exe` (9,826,205 bytes),
+    `dd2e82ddc9a45544f0d0f0423aaeb49c202792d55de294890432ce23cc46083e`.
+- The downloaded portable ZIP reported CLI/desktop `0.9.4`; `doctor --json` reported
+  `0.9.4 (report schema 1)`. The downloaded installer installed both binaries as `0.9.4` and
+  uninstalled cleanly with the install directory removed.
+- The downloaded desktop package passed `desktop/tests/smoke.ps1`: 13/13 pages, UI Automation
+  available, Refresh invoked.
+- The local desktop shortcut points to `C:\Users\Ivan\Desktop\AndroidForge 0.9.4\androidforge-desktop.exe`.
+- v0.6.0-v0.9.3 releases, tags and assets remain intact; v0.9.3 still resolves to commit
+  `5b13dc7584e373f75506727d3a4474091a2ae640`.
 
 ## v0.9.3 verification (2026-11-17)
 
