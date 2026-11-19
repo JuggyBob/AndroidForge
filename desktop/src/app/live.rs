@@ -153,6 +153,12 @@ impl App {
     }
 
     pub fn refresh_inspector(&mut self, ctx: &egui::Context) {
+        // Auto-refresh can already have a capture/dump in flight. Starting a
+        // second UIAutomator dump concurrently makes the device-side service
+        // temporarily unavailable, so coalesce manual refreshes.
+        if self.inspector.frame_loading || self.inspector.hierarchy_loading {
+            return;
+        }
         self.request_frame(ctx);
         self.request_hierarchy(ctx);
     }

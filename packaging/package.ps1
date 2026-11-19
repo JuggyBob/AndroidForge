@@ -58,6 +58,14 @@ $desktopZip = 'dist\androidforge-desktop-windows-x86_64.zip'
 if (Test-Path $desktopZip) { Remove-Item $desktopZip -Force }
 Compress-Archive -Path (Join-Path $portable '*') -DestinationPath $desktopZip -Force
 
+# Versioned UI screenshot gallery, when present.
+$screenshotsDir = "docs\screenshots\v$version"
+$screenshotsZip = "dist\androidforge-screenshots-v$version.zip"
+if (Test-Path $screenshotsDir) {
+    if (Test-Path $screenshotsZip) { Remove-Item $screenshotsZip -Force }
+    Compress-Archive -Path (Join-Path $screenshotsDir '*') -DestinationPath $screenshotsZip -Force
+}
+
 if (-not $SkipInstaller) {
     $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
     if (-not $iscc) {
@@ -82,6 +90,7 @@ if (-not $SkipInstaller) {
 $assets = @(
     $cliZip,
     $desktopZip,
+    $screenshotsZip,
     'dist\androidforge-windows-x86_64-setup.exe'
 ) | Where-Object { Test-Path $_ }
 

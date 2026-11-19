@@ -61,15 +61,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         small(
             ui,
-            "Every target gets its own session. Existing sessions are never stolen or released. Emulators are not stopped automatically. Parallel execution is intentionally unavailable until independently validated.",
+            "Every target gets its own session. Existing sessions are never stolen or released. Emulators are not stopped automatically. Parallel workers run one independent child matrix per target.",
         );
     });
     let Some(result) = app.matrix.result.clone() else {
         return;
     };
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     summary(ui, &result);
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     target_table(ui, &result);
 }
 

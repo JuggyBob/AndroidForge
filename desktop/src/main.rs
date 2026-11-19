@@ -8,7 +8,7 @@ fn main() -> eframe::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "AndroidForge desktop {}\n\nUsage:\n  androidforge-desktop.exe [--page <name>]\n\nOptions:\n  --page <name>    Open a page: setup, overview, context, devices, sessions,\n                   matrix, ownership, runs, triage, compare, logcat, inspector, maintenance\n  -h, --help       Print this help and exit\n  -V, --version    Print the desktop version and exit\n\nThe desktop is a GUI; all AndroidForge operations go through the adjacent\nandroidforge.exe CLI sidecar.",
+            "AndroidForge desktop {}\n\nUsage:\n  androidforge-desktop.exe [--page <name>]\n\nOptions:\n  --page <name>    Open a page: setup, overview, context, devices, sessions,\n                   matrix, ownership, runs, triage, compare, logcat, inspector, maintenance, settings\n  -h, --help       Print this help and exit\n  -V, --version    Print the desktop version and exit\n\nThe desktop is a GUI; all AndroidForge operations go through the adjacent\nandroidforge.exe CLI sidecar.",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -67,6 +67,7 @@ fn parse_page(value: &str) -> androidforge_desktop::state::Page {
         "logcat" => androidforge_desktop::state::Page::Logcat,
         "inspector" => androidforge_desktop::state::Page::Inspector,
         "maintenance" => androidforge_desktop::state::Page::Maintenance,
+        "settings" => androidforge_desktop::state::Page::Settings,
         other => {
             eprintln!(
                 "androidforge-desktop: unknown page '{other}'; use --help to list page names"

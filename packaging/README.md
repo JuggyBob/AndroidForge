@@ -12,8 +12,9 @@ cargo build --workspace --release
 - `dist/androidforge-cli-windows-x86_64.zip` — CLI only; also used by the desktop update/repair path.
 - `dist/androidforge-desktop-windows-x86_64.zip` — portable desktop + CLI + LICENSE, README, USER_GUIDE,
   CHANGELOG and PORTABLE.txt.
-- `dist/androidforge-windows-x86_64-setup.exe` — per-user Inno Setup installer.
-- `dist/SHA256SUMS.txt` — SHA-256 for every published asset.
+- `dist/androidforge-windows-x86_64-setup.exe` - per-user Inno Setup installer.
+- `dist/androidforge-screenshots-v<version>.zip` - versioned UI screenshot gallery, when present.
+- `dist/SHA256SUMS.txt` - SHA-256 for every published asset.
 
 The installer requires Inno Setup 6 or 7 (`iscc.exe`). CI installs it with Chocolatey. `package.ps1`
 searches `PATH`, `%LOCALAPPDATA%\Programs\Inno Setup 6|7`, and the usual Program Files locations.
@@ -25,7 +26,7 @@ searches `PATH`, `%LOCALAPPDATA%\Programs\Inno Setup 6|7`, and the usual Program
 - Start Menu shortcuts, optional desktop shortcut and uninstaller.
 - User configuration (`%APPDATA%\AndroidForge`, `%LOCALAPPDATA%\AndroidForge`) and project artifacts are
   outside `{app}` and are preserved by upgrade and uninstall.
-- Version metadata is `0.9.2` for this release.
+- Version metadata is `0.11.0` for this release.
 
 ## Signing
 

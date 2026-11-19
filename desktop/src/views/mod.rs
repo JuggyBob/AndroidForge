@@ -11,6 +11,7 @@ pub mod ownership;
 pub mod run_details;
 pub mod runs;
 pub mod sessions;
+pub mod settings;
 pub mod setup;
 pub mod triage;
 
@@ -20,6 +21,16 @@ use crate::app::App;
 use crate::state::Page;
 
 pub fn page(app: &mut App, ui: &mut egui::Ui) {
+    // A short slide-up and fade makes page changes feel deliberate instead of
+    // snapping. The animation only runs for a quarter of a second.
+    let elapsed = app.page_animation_started.elapsed().as_secs_f32();
+    let progress = (elapsed / 0.26).clamp(0.0, 1.0);
+    if progress < 1.0 {
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        ui.add_space((1.0 - eased) * 22.0);
+        ui.set_opacity(0.2 + 0.8 * eased);
+        ui.ctx().request_repaint();
+    }
     match app.page {
         Page::Setup => setup::show(app, ui),
         Page::Overview => overview::show(app, ui),
@@ -34,6 +45,10 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
         Page::Logcat => logcat::show(app, ui),
         Page::Inspector => inspector::show(app, ui),
         Page::Maintenance => maintenance::show(app, ui),
+        Page::Settings => settings::show(app, ui),
+    }
+    if progress < 1.0 {
+        ui.set_opacity(1.0);
     }
 }
 

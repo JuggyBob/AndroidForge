@@ -9,7 +9,6 @@ use crate::state::*;
 use crate::theme;
 
 pub fn dialogs(app: &mut App, ctx: &egui::Context) {
-    settings_dialog(app, ctx);
     install_dialog(app, ctx);
     session_start_dialog(app, ctx);
     attach_dialog(app, ctx);
@@ -963,17 +962,25 @@ pub fn toasts(app: &mut App, ctx: &egui::Context) {
     if app.toasts.is_empty() {
         return;
     }
-    egui::Area::new(egui::Id::unique("androidforge-toasts"))
-        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
-        .interactable(false)
-        .show(ctx, |ui| {
-            for toast in &app.toasts {
-                let color = match toast.level {
-                    ToastLevel::Info => theme::BLUE,
-                    ToastLevel::Success => theme::GREEN,
-                    ToastLevel::Warning => theme::YELLOW,
-                    ToastLevel::Error => theme::RED,
-                };
+    let mut dismiss = None;
+    for (index, toast) in app.toasts.iter().enumerate() {
+        let color = match toast.level {
+            ToastLevel::Info => theme::BLUE,
+            ToastLevel::Success => theme::GREEN,
+            ToastLevel::Warning => theme::YELLOW,
+            ToastLevel::Error => theme::RED,
+        };
+        let area_id = egui::Id::unique(("androidforge-toast", index, toast.created));
+        egui::Area::new(area_id)
+            .anchor(
+                egui::Align2::RIGHT_TOP,
+                egui::vec2(-18.0 + toast.slide_offset(), 64.0 + index as f32 * 62.0),
+            )
+            .order(egui::Order::Foreground)
+            .interactable(true)
+            .show(ctx, |ui| {
+                ui.set_opacity(toast.opacity());
+                ui.set_max_width(430.0);
                 egui::Frame::new()
                     .fill(if ctx.style_of(ctx.theme()).visuals.dark_mode {
                         theme::DARK_SURFACE
@@ -981,13 +988,55 @@ pub fn toasts(app: &mut App, ctx: &egui::Context) {
                         theme::LIGHT_PANEL
                     })
                     .stroke(Stroke::new(1.0, color))
-                    .corner_radius(7)
-                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(&toast.text).size(10.5).color(color));
+                        ui.horizontal(|ui| {
+                            let (dot, _) = ui
+                                .allocate_exact_size(egui::Vec2::splat(9.0), egui::Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 3.5, color);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&toast.text).size(11.0).color(color),
+                                )
+                                .wrap(),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let close = ui.add(
+                                        egui::Button::new(
+                                            RichText::new("×")
+                                                .size(16.0)
+                                                .color(egui::Color32::from_rgb(255, 158, 158)),
+                                        )
+                                        .fill(egui::Color32::TRANSPARENT)
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(6)
+                                        .min_size(egui::Vec2::splat(22.0)),
+                                    );
+                                    if close.on_hover_text("Dismiss notification").clicked() {
+                                        dismiss = Some(index);
+                                    }
+                                },
+                            );
+                        });
                     });
-                ui.add_space(4.0);
-            }
-        });
-    ctx.request_repaint_after(Duration::from_secs(1));
+            });
+    }
+    if let Some(index) = dismiss {
+        if let Some(toast) = app.toasts.get_mut(index) {
+            toast.dismiss();
+        }
+        ctx.request_repaint();
+    }
+    let animating = app
+        .toasts
+        .iter()
+        .any(|toast| toast.created.elapsed() < Duration::from_millis(300) || toast.closing());
+    ctx.request_repaint_after(if animating {
+        Duration::from_millis(16)
+    } else {
+        Duration::from_millis(250)
+    });
 }

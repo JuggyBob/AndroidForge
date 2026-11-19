@@ -62,6 +62,7 @@ jobs:
           path: |
             dist/androidforge-cli-windows-x86_64.zip
             dist/androidforge-desktop-windows-x86_64.zip
+            dist/androidforge-screenshots-*.zip
             dist/androidforge-windows-x86_64-setup.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
@@ -80,15 +81,17 @@ jobs:
             "dist/androidforge-windows-x86_64-setup.exe"
             "dist/SHA256SUMS.txt"
           )
+          $screenshots = Get-ChildItem "dist/androidforge-screenshots-*.zip" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+          $assets += $screenshots
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
             # A release may already exist when a tag is published manually or a
             # workflow is rerun. Replace its assets instead of failing the job.
             gh release upload $tag @assets --clobber
             if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
-            gh release edit $tag --title "AndroidForge $tag" --prerelease @notesArg
+            gh release edit $tag --title "AndroidForge $tag Beta" --prerelease @notesArg
             if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
           } else {
-            gh release create $tag @assets --title "AndroidForge $tag" --prerelease @notesArg
+            gh release create $tag @assets --title "AndroidForge $tag Beta" --prerelease @notesArg
             if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
           }

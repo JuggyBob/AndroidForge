@@ -323,7 +323,7 @@ pub enum AgentCommand {
     /// Run the transparent ensure/inspect/install/conformance/explain pipeline.
     #[command(alias = "t")]
     Test(AgentTestArgs),
-    /// Run the same flow against multiple independent AVDs or serials, sequentially.
+    /// Run the same flow against multiple independent AVDs or serials.
     Matrix(AgentMatrixArgs),
 }
 
@@ -352,10 +352,11 @@ pub struct AgentMatrixArgs {
     pub ttl: Option<String>,
     #[arg(long)]
     pub install: bool,
-    /// Stop after the first target failure.
+    /// Stop after the first target failure. In parallel mode, already-running
+    /// targets finish and queued targets may still start.
     #[arg(long)]
     pub fail_fast: bool,
-    /// Parallel workers. Only 1 (sequential) is currently validated.
+    /// Number of parallel workers (1-32). 1 is sequential.
     #[arg(long, default_value_t = 1)]
     pub parallel: usize,
     /// Keep matrix-created sessions after the run instead of releasing them.

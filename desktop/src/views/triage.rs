@@ -1,6 +1,5 @@
 use eframe::egui;
 use egui::RichText;
-use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
 use crate::components::*;
@@ -68,22 +67,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .size(10.0)
         .color(theme::MUTED),
     );
-    ui.add_space(8.0);
+    ui.add_space(theme::PAGE_GAP);
     ui.columns(2, |columns| {
         failure_panel(app, &mut columns[0], &report, &path);
         signals_panel(app, &mut columns[1], &report);
     });
-    ui.add_space(12.0);
+    ui.add_space(theme::PAGE_GAP);
     diagnosis_panel(app, ui);
-    ui.add_space(12.0);
+    ui.add_space(theme::PAGE_GAP);
     receipt_panel(ui, &report);
-    ui.add_space(12.0);
+    ui.add_space(theme::PAGE_GAP);
     recurrence_panel(app, ui);
-    ui.add_space(12.0);
+    ui.add_space(theme::PAGE_GAP);
     bundle_panel(app, ui);
-    ui.add_space(12.0);
+    ui.add_space(theme::PAGE_GAP);
     artifacts_panel(app, ui, &report, &path);
-    ui.add_space(12.0);
+    ui.add_space(theme::PAGE_GAP);
     if let Some(flaky) = app.triage.flaky.clone() {
         flaky_panel(ui, &flaky);
     } else if app.triage.flaky_loading {
@@ -97,7 +96,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn failure_panel(app: &mut App, ui: &mut egui::Ui, report: &crate::models::RunReport, path: &str) {
-    card(ui, |ui| {
+    card_fixed_height(ui, 320.0, "triage-failure-panel", |ui| {
         section_title(ui, "Failure");
         if let Some(failure) = &report.failure {
             error_banner(ui, &format!("{}: {}", failure.code, failure.message));
@@ -677,7 +676,7 @@ fn bundle_panel(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn signals_panel(app: &mut App, ui: &mut egui::Ui, report: &crate::models::RunReport) {
-    card(ui, |ui| {
+    card_fixed_height(ui, 320.0, "triage-signals", |ui| {
         section_title(ui, "Signals");
         let failure_count = report
             .steps
@@ -810,43 +809,44 @@ fn flaky_panel(ui: &mut egui::Ui, flaky: &crate::models::FlakyReport) {
         .iter()
         .map(|step| (*step).clone())
         .collect::<Vec<_>>();
-    TableBuilder::new(ui)
-        .striped(false)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::remainder().at_least(200.0))
-        .column(Column::initial(90.0))
-        .column(Column::initial(80.0))
-        .column(Column::initial(100.0))
-        .header(24.0, |mut header| {
-            for name in ["Step", "Classification", "Pass / fail", "Runs"] {
-                header.col(|ui| {
-                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(28.0, steps.len(), |mut row| {
-                let step = &steps[row.index()];
-                row.col(|ui| {
-                    ui.label(RichText::new(&step.step_name).size(10.0));
-                });
-                row.col(|ui| {
-                    status_pill(
-                        ui,
-                        &step.classification,
-                        theme::status_color(&step.classification),
-                    );
-                });
-                row.col(|ui| {
-                    ui.label(
-                        RichText::new(format!("{} / {}", step.successes, step.failures)).size(10.0),
-                    );
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(step.executions.to_string()).size(10.0));
-                });
+    let width = ui.available_width();
+    let widths = proportional_widths(width, &[0.55, 0.17, 0.14, 0.14], 10.0);
+    let step_width = widths[0];
+    let classification_width = widths[1];
+    let pass_fail_width = widths[2];
+    let runs_width = widths[3];
+    table_header(
+        ui,
+        &[
+            ("Step", step_width),
+            ("Classification", classification_width),
+            ("Pass / fail", pass_fail_width),
+            ("Runs", runs_width),
+        ],
+    );
+    for step in &steps {
+        selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+            row_cell(ui, step_width, |ui| {
+                ui.add(egui::Label::new(RichText::new(&step.step_name).size(10.0)).truncate());
+            });
+            row_cell(ui, classification_width, |ui| {
+                status_pill(
+                    ui,
+                    &step.classification,
+                    theme::status_color(&step.classification),
+                );
+            });
+            row_cell(ui, pass_fail_width, |ui| {
+                ui.label(
+                    RichText::new(format!("{} / {}", step.successes, step.failures)).size(10.0),
+                );
+            });
+            row_cell(ui, runs_width, |ui| {
+                ui.label(RichText::new(step.executions.to_string()).size(10.0));
             });
         });
+        ui.add_space(2.0);
+    }
 }
 
 fn icon_for_kind(kind: &str) -> &'static str {

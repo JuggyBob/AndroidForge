@@ -1,8 +1,8 @@
-//! Sequential multi-device matrix execution.
+//! Multi-device matrix execution, sequential or parallel.
 //!
 //! Each target gets its own owned session and runs the existing `agent test`
-//! pipeline as a child process. Parallel execution is deliberately not shipped
-//! until independent-device isolation is validated.
+//! pipeline as a child process. Parallel mode launches one independent child
+//! matrix per target with late-binding, cross-process port allocation.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -268,8 +268,9 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             "agent.matrix",
             result,
             format!(
-                "Matrix dry run: {} sequential target(s), flow {:?}; no device or session was changed.\n",
+                "Matrix dry run: {} target(s) with {} worker(s), flow {:?}; no device or session was changed.\n",
                 plan.len(),
+                args.parallel,
                 args.flow
             ),
         ));

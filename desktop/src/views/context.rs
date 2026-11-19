@@ -28,7 +28,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ghost_button(ui, "Open project").clicked()
+            if secondary_button(ui, "Open project").clicked()
                 && let Some(project) = &app.project_path
             {
                 let _ = open::that(project);
@@ -48,22 +48,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         return;
     };
-    ui.add_space(8.0);
+    ui.add_space(theme::PAGE_GAP);
     ui.columns(2, |columns| {
         project_card(&mut columns[0], &snapshot);
         session_card(&mut columns[1], &snapshot);
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     ui.columns(2, |columns| {
         device_card(&mut columns[0], &snapshot);
         app_card(&mut columns[1], &snapshot);
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     ui.columns(2, |columns| {
         screen_card(&mut columns[0], &snapshot);
         last_run_card(&mut columns[1], &snapshot);
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     actions_panel(app, ui, &snapshot);
     warnings_panel(ui, &snapshot);
 }
@@ -86,13 +86,23 @@ fn text(value: &Value, path: &[&str]) -> Option<String> {
 }
 
 fn show_row(ui: &mut egui::Ui, key: &str, value: Option<String>) {
-    ui.label(RichText::new(key).size(9.5).color(theme::MUTED));
-    ui.label(RichText::new(value.unwrap_or_else(|| "unavailable".to_string())).size(10.0));
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [132.0, 18.0],
+            egui::Label::new(RichText::new(key).size(9.5).color(theme::MUTED)),
+        );
+        ui.add(
+            egui::Label::new(
+                RichText::new(value.unwrap_or_else(|| "unavailable".to_string())).size(10.0),
+            )
+            .truncate(),
+        );
+    });
 }
 
 fn project_card(ui: &mut egui::Ui, snapshot: &Value) {
     let project = &snapshot["project"];
-    card(ui, |ui| {
+    card_fixed_height(ui, 260.0, "context-project", |ui| {
         section_title(ui, "Project");
         show_row(ui, "Name", text(project, &["name"]));
         show_row(ui, "Root", text(project, &["root"]));
@@ -106,7 +116,7 @@ fn project_card(ui: &mut egui::Ui, snapshot: &Value) {
 
 fn session_card(ui: &mut egui::Ui, snapshot: &Value) {
     let session = &snapshot["session"];
-    card(ui, |ui| {
+    card_fixed_height(ui, 260.0, "context-session", |ui| {
         section_title(ui, "Session and ownership");
         if session["available"].as_bool() != Some(true) {
             warning_banner(
@@ -140,7 +150,7 @@ fn session_card(ui: &mut egui::Ui, snapshot: &Value) {
 
 fn device_card(ui: &mut egui::Ui, snapshot: &Value) {
     let device = &snapshot["device"];
-    card(ui, |ui| {
+    card_fixed_height(ui, 260.0, "context-device", |ui| {
         section_title(ui, "Device");
         if device["available"].as_bool() != Some(true) {
             warning_banner(
@@ -163,7 +173,7 @@ fn device_card(ui: &mut egui::Ui, snapshot: &Value) {
 
 fn app_card(ui: &mut egui::Ui, snapshot: &Value) {
     let app = &snapshot["app"];
-    card(ui, |ui| {
+    card_fixed_height(ui, 260.0, "context-app", |ui| {
         section_title(ui, "Application");
         if app["available"].as_bool() != Some(true) {
             warning_banner(
@@ -186,7 +196,7 @@ fn app_card(ui: &mut egui::Ui, snapshot: &Value) {
 
 fn screen_card(ui: &mut egui::Ui, snapshot: &Value) {
     let screen = &snapshot["screen"];
-    card(ui, |ui| {
+    card_fixed_height(ui, 320.0, "context-screen", |ui| {
         section_title(ui, "Current screen");
         if screen["available"].as_bool() == Some(false) {
             warning_banner(
@@ -270,7 +280,7 @@ fn screen_card(ui: &mut egui::Ui, snapshot: &Value) {
 
 fn last_run_card(ui: &mut egui::Ui, snapshot: &Value) {
     let last = &snapshot["last-run"];
-    card(ui, |ui| {
+    card_fixed_height(ui, 320.0, "context-last-run", |ui| {
         section_title(ui, "Last run");
         if last["available"].as_bool() != Some(true) {
             warning_banner(

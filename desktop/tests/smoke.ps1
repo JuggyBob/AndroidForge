@@ -17,7 +17,9 @@ param(
     [string]$DesktopPath = "",
     [string]$CliPath = "",
     [string]$EvidenceDir = "",
-    [int]$PageTimeoutSeconds = 15
+    [int]$PageTimeoutSeconds = 15,
+    [int]$SettleMilliseconds = 900,
+    [switch]$UseExistingHome
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,7 +63,8 @@ $pages = @(
     "compare",
     "logcat",
     "inspector",
-    "maintenance"
+    "maintenance",
+    "settings"
 )
 
 Add-Type -AssemblyName System.Drawing
@@ -201,9 +204,11 @@ function Invoke-AutomationButton {
 
 $oldHome = $env:ANDROIDFORGE_HOME
 $oldExe = $env:ANDROIDFORGE_EXE
-$env:ANDROIDFORGE_HOME = Join-Path $EvidenceDir "home"
 $env:ANDROIDFORGE_EXE = $CliPath
-New-Item -ItemType Directory -Force -Path $env:ANDROIDFORGE_HOME | Out-Null
+if (-not $UseExistingHome) {
+    $env:ANDROIDFORGE_HOME = Join-Path $EvidenceDir "home"
+    New-Item -ItemType Directory -Force -Path $env:ANDROIDFORGE_HOME | Out-Null
+}
 
 $results = @()
 try {
@@ -233,10 +238,33 @@ try {
                 $reason = "no main window appeared within $PageTimeoutSeconds seconds"
             }
             else {
-                Start-Sleep -Milliseconds 600
+                # A window handle can exist before the first frame is painted,
+                # especially when the real state contains many sessions/runs.
+                # Wait for a title, then retry blank captures before failing.
+                $titleDeadline = (Get-Date).AddSeconds(5)
+                while (((Get-Date) -lt $titleDeadline) -and [string]::IsNullOrWhiteSpace($process.MainWindowTitle) -and (-not $process.HasExited)) {
+                    Start-Sleep -Milliseconds 200
+                    $process.Refresh()
+                }
+                Start-Sleep -Milliseconds $SettleMilliseconds
                 $process.Refresh()
                 $title = $process.MainWindowTitle
                 $captured = Save-WindowScreenshot -Handle $process.MainWindowHandle -Path $screenshot
+                $attempt = 1
+                while ($captured -and (Test-Path $screenshot)) {
+                    $size = (Get-Item $screenshot).Length
+                    $renderScore = Get-RenderScore -Path $screenshot
+                    if ($size -ge 1024 -and $renderScore -ge 3) {
+                        break
+                    }
+                    if ($attempt -ge 4) {
+                        break
+                    }
+                    $attempt += 1
+                    Start-Sleep -Milliseconds 700
+                    $process.Refresh()
+                    $captured = Save-WindowScreenshot -Handle $process.MainWindowHandle -Path $screenshot
+                }
                 if (-not $captured -or -not (Test-Path $screenshot)) {
                     $status = "FAIL"
                     $reason = "window screenshot could not be captured"

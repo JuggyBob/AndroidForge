@@ -326,8 +326,9 @@ reports and evidence.
 
 On startup it looks for the CLI in this order: the executable beside the desktop, an explicit path saved
 in Settings, the workspace `target/debug` or `target/release` build, then `PATH`. The top bar shows the
-resolved CLI version and connection state. Settings lets you change the CLI path, workspace, owner and
-light/dark/system theme.
+resolved CLI version and connection state. The Settings page lets you change the CLI path, workspace,
+owner, light/dark/system theme, accent color, and UI font. It is a normal page in the main window, not
+a separate dialog.
 
 If the CLI is offline, run `androidforge doctor --json` in the same environment. The desktop refuses a
 CLI with an unknown report schema rather than guessing. A missing or incompatible CLI is shown in the
@@ -340,8 +341,10 @@ Overview error banner and in Settings.
   app, current screen, last run, warnings and copyable next commands. Observed nodes expose stable
   `ref` values with copyable `ui tap --ref ... --expect-token ...` commands. Refresh is explicit and the
   snapshot age is shown.
-- **Matrix** — run a sequential conformance matrix against one or more AVDs entered on separate lines,
-  with owner, install, fail-fast and result/health/cleanup display. Parallel mode is not offered.
+- **Matrix** - run a sequential or parallel conformance matrix against one or more AVDs entered on
+  separate lines, with owner, install, fail-fast, worker count and result/health/cleanup display.
+  `--parallel` and the desktop worker field use one independent child matrix per target; `--fail-fast`
+  is best-effort because already-running targets finish.
 - **Devices** — selectable device table with serial, model, Android version, state, battery and owner;
   details include boot state, AVD, port, architecture, resolution, read-only health and wireless
   pair/connect/disconnect controls. Pairing codes are password fields sent through stdin and cleared
@@ -359,9 +362,26 @@ Overview error banner and in Settings.
   reference validation), plus a diagnostic-bundle inclusion preview and ZIP creation. Category,
   confidence, summary, fingerprint, curated evidence and copyable next-action commands are shown. The
   commands are never executed by the desktop.
-- **Setup** - the environment section builds the same read-only `doctor fix --plan` result as the CLI,
-  lists blocking/recommended/optional issues and offers copyable repair commands without changing the
-  environment.
+- **Setup** - the full eight-step wizard: welcome, CLI, environment, project, device, updates, finish
+  summary and **Agent Handoff**. Agent Handoff shows the full paths to the agent/user/capability/readme/
+  exit-code/project-adapter documentation, the CLI executable and workspace, and a copyable prompt with
+  the recommended agent loop and safety rules. Section changes fade/slide and the step highlight glides.
+- **Compare** - compatible run comparison with per-step current/baseline status, duration delta and
+  change classification.
+- **Logcat** - bounded local log view with filters, clean rows and a `Follow latest` button that eases
+  to the newest line instead of jumping abruptly.
+- **Inspector** - periodic device preview plus a recursive semantic hierarchy: top-level rows expand
+  into cards of child rows, children expand further, whole-row activation works and collapsing returns
+  to the initial list. Node details and actions remain available.
+- **Maintenance** - storage summary, cleanup preview and terminal-session/run inspection.
+- **Settings** - connection, left-aligned CLI path, color wheel with visible brightness slider,
+  searchable 33-font catalog with embedded JetBrains Mono and `Lorem Ipsum` previews, theme mode, update
+  checks and About information. Settings fills the content area like every other page.
+
+The cockpit uses GitHub-dark and light palettes, consistent card gutters, raised rounded row cards,
+thin status pills with larger text, solid right-side scrollbars, a sliding sidebar highlight and a short
+slide-up page transition. The native Windows caption bar is colored to match the active theme where DWM
+supports it.
 
 The project picker refreshes discovered adapters. Use `Refresh` or wait for the automatic interval; a
 stale timestamp is shown when the last refresh failed.

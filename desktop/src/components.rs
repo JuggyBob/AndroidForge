@@ -13,12 +13,13 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
         .id_salt("sidebar-nav")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.add_space(8.0);
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.add(egui::Image::new((app.icon.id(), Vec2::splat(26.0))));
                 ui.add_space(4.0);
+                ui.add(egui::Image::new((app.icon.id(), Vec2::splat(28.0))));
+                ui.add_space(7.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("AndroidForge").size(14.0).strong());
+                    ui.label(RichText::new("AndroidForge").size(14.5).strong());
                     ui.label(
                         RichText::new(format!("Desktop {}", env!("CARGO_PKG_VERSION")))
                             .size(9.5)
@@ -26,7 +27,38 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
                     );
                 });
             });
-            ui.add_space(8.0);
+            ui.add_space(12.0);
+
+            // The highlight glides between nav rows. Rects are recorded from
+            // the previous frame; the 0.28 easing hides the one-frame lag.
+            if let Some(target) = app.nav_rects.get(&app.page).map(|rect| rect.center().y) {
+                let current = app.nav_highlight_y.unwrap_or(target);
+                let next = current + (target - current) * 0.28;
+                app.nav_highlight_y = Some(next);
+                if (target - next).abs() > 0.4 {
+                    ui.ctx().request_repaint();
+                }
+                let x = ui.max_rect().left() + 4.0;
+                let width = (ui.available_width() - 8.0).max(40.0);
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(x, next - 15.0),
+                    egui::pos2(x + width, next + 15.0),
+                );
+                let fill = if ui.style().visuals.dark_mode {
+                    Color32::from_rgb(31, 38, 47)
+                } else {
+                    Color32::from_rgb(234, 239, 246)
+                };
+                ui.painter().rect_filled(rect, theme::ROW_RADIUS, fill);
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + 2.0, rect.top() + 7.0),
+                        Vec2::new(3.0, rect.height() - 14.0),
+                    ),
+                    2.0,
+                    theme::accent(),
+                );
+            }
             nav_group(ui, "WORKSPACE", &mut |ui| {
                 nav(app, ui, Page::Setup, theme::NavIcon::Setup, "Setup", None);
                 nav(
@@ -125,73 +157,111 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
                     "Maintenance",
                     None,
                 );
+                nav(
+                    app,
+                    ui,
+                    Page::Settings,
+                    theme::NavIcon::Settings,
+                    "Settings",
+                    None,
+                );
             });
             ui.add_space(10.0);
             let dark = ui.style().visuals.dark_mode;
-            let frame = egui::Frame::new()
-                .fill(if dark {
-                    theme::DARK_SURFACE
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), Sense::click());
+            let fill = if response.hovered() {
+                if dark {
+                    theme::DARK_SURFACE_ALT
                 } else {
-                    theme::LIGHT_SURFACE
-                })
-                .stroke(Stroke::new(1.0, theme::border_color(ui)))
-                .corner_radius(8)
-                .inner_margin(egui::Margin::symmetric(10, 8));
-            frame.show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let connected = app.cli.info.is_some();
-                    let color = if connected { theme::GREEN } else { theme::RED };
-                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                    ui.painter().circle_filled(rect.center(), 3.0, color);
-                    ui.label(
-                        RichText::new(if connected {
-                            "CLI connected"
-                        } else {
-                            "CLI disconnected"
-                        })
-                        .size(10.0)
-                        .color(color),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let version = app
-                            .cli
-                            .info
-                            .as_ref()
-                            .map(|info| info.version.as_str())
-                            .unwrap_or("-");
-                        ui.label(
-                            RichText::new(version)
-                                .size(9.5)
-                                .monospace()
-                                .color(theme::MUTED),
-                        );
-                    });
-                });
-                let detail = app
-                    .cli
-                    .resolution
-                    .as_ref()
-                    .map(|resolution| {
-                        format!(
-                            "{} · {}",
-                            resolution.source.label(),
-                            resolution.path.display()
-                        )
-                    })
-                    .unwrap_or_else(|| "Run setup to connect the CLI".to_string());
-                ui.add(
-                    egui::Label::new(RichText::new(detail).size(9.0).color(theme::MUTED))
-                        .truncate(),
-                );
+                    Color32::from_rgb(235, 239, 244)
+                }
+            } else if dark {
+                theme::DARK_SURFACE
+            } else {
+                theme::LIGHT_SURFACE
+            };
+            ui.painter().rect_filled(rect, theme::ROW_RADIUS, fill);
+            ui.painter().rect_stroke(
+                rect,
+                theme::ROW_RADIUS,
+                Stroke::new(1.0, theme::border_color(ui)),
+                StrokeKind::Inside,
+            );
+            let connected = app.cli.info.is_some();
+            let color = if connected { theme::GREEN } else { theme::RED };
+            let header_y = rect.top() + 13.0;
+            let dot_center = egui::pos2(rect.left() + 13.0, header_y);
+            ui.painter().circle_filled(dot_center, 3.0, color);
+            ui.painter().text(
+                egui::pos2(rect.left() + 22.0, header_y),
+                egui::Align2::LEFT_CENTER,
+                if connected {
+                    "CLI connected"
+                } else {
+                    "CLI disconnected"
+                },
+                egui::FontId::proportional(10.5),
+                color,
+            );
+            let version = app
+                .cli
+                .info
+                .as_ref()
+                .map(|info| info.version.as_str())
+                .unwrap_or("-");
+            ui.painter().text(
+                egui::pos2(rect.right() - 10.0, header_y),
+                egui::Align2::RIGHT_CENTER,
+                version,
+                egui::FontId::monospace(9.5),
+                theme::MUTED,
+            );
+            let detail = app
+                .cli
+                .resolution
+                .as_ref()
+                .map(|resolution| resolution.path.display().to_string())
+                .unwrap_or_else(|| "Run setup to connect the CLI".to_string());
+            let detail_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 10.0, rect.top() + 22.0),
+                egui::pos2(rect.right() - 10.0, rect.top() + 36.0),
+            );
+            let max_chars = ((detail_rect.width() / 5.0).floor() as usize).clamp(8, 60);
+            ui.painter().with_clip_rect(detail_rect).text(
+                detail_rect.left_center(),
+                egui::Align2::LEFT_CENTER,
+                truncate_middle(&detail, max_chars),
+                egui::FontId::monospace(8.5),
+                theme::MUTED,
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    ui.is_enabled(),
+                    "Open the AndroidForge CLI",
+                )
             });
-            ui.add_space(6.0);
+            if response
+                .on_hover_text(format!("Open the AndroidForge CLI\n{detail}"))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                app.open_cli();
+            }
         });
 }
 
 fn nav_group(ui: &mut egui::Ui, title: &str, add: &mut dyn FnMut(&mut egui::Ui)) {
-    ui.add_space(5.0);
-    ui.label(RichText::new(title).size(9.0).strong().color(theme::MUTED));
-    ui.add_space(1.0);
+    ui.add_space(8.0);
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(title)
+            .size(9.0)
+            .strong()
+            .color(theme::nav_muted(ui)),
+    );
+    ui.add_space(2.0);
     add(ui);
 }
 
@@ -203,7 +273,9 @@ fn nav(
     label: &str,
     badge: Option<String>,
 ) {
-    if nav_row(ui, app.page == page, icon, label, badge).clicked() {
+    let (response, rect) = nav_row(ui, app.page == page, icon, label, badge);
+    app.nav_rects.insert(page, rect);
+    if response.clicked() {
         app.set_page(page);
     }
 }
@@ -214,56 +286,48 @@ fn nav_row(
     icon: theme::NavIcon,
     label: &str,
     badge: Option<String>,
-) -> egui::Response {
-    let desired = Vec2::new(ui.available_width(), 27.0);
+) -> (egui::Response, egui::Rect) {
+    let desired = Vec2::new(ui.available_width(), 30.0);
     let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
     let dark = ui.style().visuals.dark_mode;
-    if selected {
+    if !selected && response.hovered() {
         let fill = if dark {
-            Color32::from_rgb(35, 45, 59)
-        } else {
-            Color32::from_rgb(234, 239, 246)
-        };
-        ui.painter()
-            .rect_filled(rect.shrink2(Vec2::new(4.0, 1.0)), 6.0, fill);
-        let bar = egui::Rect::from_min_size(
-            rect.left_top() + Vec2::new(0.0, 5.0),
-            Vec2::new(2.5, rect.height() - 10.0),
-        );
-        ui.painter().rect_filled(bar, 2.0, theme::ACCENT);
-    } else if response.hovered() {
-        let fill = if dark {
-            Color32::from_rgb(25, 33, 43)
+            Color32::from_rgb(24, 31, 39)
         } else {
             Color32::from_rgb(242, 245, 249)
         };
         ui.painter()
-            .rect_filled(rect.shrink2(Vec2::new(4.0, 1.0)), 6.0, fill);
+            .rect_filled(rect.shrink2(Vec2::new(4.0, 1.0)), theme::ROW_RADIUS, fill);
     }
     let color = if selected {
-        ui.style().visuals.text_color()
+        theme::text_color(ui)
     } else {
-        theme::MUTED
+        theme::nav_muted(ui)
     };
-    let icon_rect = egui::Rect::from_min_size(rect.min + Vec2::new(14.0, 6.0), Vec2::splat(15.0));
-    theme::paint_nav_icon(ui.painter(), icon_rect, icon, color);
+    let icon_rect = egui::Rect::from_min_size(rect.min + Vec2::new(16.0, 7.5), Vec2::splat(15.0));
+    theme::paint_nav_icon(
+        ui.painter(),
+        icon_rect,
+        icon,
+        if selected { theme::accent() } else { color },
+    );
     ui.painter().text(
-        rect.left_center() + Vec2::new(42.0, 0.0),
+        rect.left_center() + Vec2::new(44.0, 0.0),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(12.0),
-        if selected { theme::TEXT } else { color },
+        egui::FontId::proportional(12.5),
+        color,
     );
     if let Some(badge) = badge {
         ui.painter().text(
-            rect.right_center() - Vec2::new(14.0, 0.0),
+            rect.right_center() - Vec2::new(16.0, 0.0),
             egui::Align2::RIGHT_CENTER,
             badge,
             egui::FontId::monospace(9.5),
-            theme::MUTED,
+            theme::nav_muted(ui),
         );
     }
-    response
+    (response, rect)
 }
 
 pub fn topbar(app: &mut App, ui: &mut egui::Ui) {
@@ -305,39 +369,41 @@ pub fn topbar(app: &mut App, ui: &mut egui::Ui) {
         }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if settings_button(ui).clicked() {
-                app.open_settings();
-            }
             if app
                 .update
                 .value
                 .as_ref()
                 .is_some_and(|update| update.update_available)
             {
+                let accent = theme::accent();
                 if ui
                     .add(
                         egui::Button::new(
-                            RichText::new("Update available")
-                                .size(10.0)
-                                .color(theme::ACCENT),
+                            RichText::new("Update available").size(10.0).color(accent),
                         )
-                        .fill(Color32::from_rgba_unmultiplied(240, 166, 50, 28))
+                        .fill(Color32::from_rgba_unmultiplied(
+                            accent.r(),
+                            accent.g(),
+                            accent.b(),
+                            28,
+                        ))
                         .stroke(Stroke::new(
                             1.0,
-                            Color32::from_rgba_unmultiplied(240, 166, 50, 95),
-                        )),
+                            Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 95),
+                        ))
+                        .corner_radius(theme::ROW_RADIUS)
+                        .min_size(Vec2::new(0.0, 26.0)),
                     )
                     .clicked()
                 {
-                    app.set_page(Page::Setup);
-                    app.setup.section = SetupSection::Updates;
+                    app.open_setup(SetupSection::Updates);
                 }
             }
-            if icon_text_button(ui, "Refresh", "↻").clicked() {
+            if refresh_button(ui).clicked() {
                 app.manual_refresh(ui.ctx());
             }
             let connected = app.cli.info.is_some();
-            status_pill(
+            topbar_status_pill(
                 ui,
                 if connected { "Online" } else { "Offline" },
                 if connected { theme::GREEN } else { theme::RED },
@@ -421,13 +487,128 @@ pub fn card_min_height(ui: &mut egui::Ui, min_height: f32, add: impl FnOnce(&mut
             theme::LIGHT_PANEL
         })
         .stroke(Stroke::new(1.0, theme::border_color(ui)))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .corner_radius(theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::symmetric(16, 14))
         .show(ui, |ui| {
+            let width = (ui.available_width() - theme::PAGE_GAP).max(0.0);
+            ui.set_min_width(width);
+            ui.set_max_width(width);
             if min_height > 0.0 {
                 ui.set_min_height(min_height);
             }
             add(ui);
+        });
+}
+
+/// A full-width rounded list row with a single hover/selection treatment.
+/// It draws the background before the content, so child widgets stay readable.
+pub fn selectable_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    height: f32,
+    add: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    let full_width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(full_width, height), Sense::click());
+    let hovered = response.hovered();
+    let dark = ui.style().visuals.dark_mode;
+    let (fill, stroke) = if selected {
+        (theme::accent_soft(), theme::accent())
+    } else if hovered {
+        (
+            theme::row_hover_fill(ui),
+            if dark {
+                Color32::from_rgb(72, 79, 88)
+            } else {
+                Color32::from_rgb(170, 184, 200)
+            },
+        )
+    } else {
+        (theme::row_fill(ui), theme::border_color(ui))
+    };
+    ui.painter().rect_filled(rect, theme::ROW_RADIUS, fill);
+    ui.painter().rect_stroke(
+        rect,
+        theme::ROW_RADIUS,
+        Stroke::new(1.0, stroke),
+        StrokeKind::Inside,
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(Vec2::new(12.0, 2.0)))
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    add(&mut child);
+    response
+}
+
+pub fn row_cell(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, ui.available_height()),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.set_min_width(width);
+            add(ui);
+        },
+    );
+}
+
+/// Split the usable row width into proportional columns. The row itself has
+/// 12px inner padding on both sides and 10px between cells; headers use the
+/// same values so they always line up.
+pub fn proportional_widths(total: f32, ratios: &[f32], gap: f32) -> Vec<f32> {
+    let gaps = gap * ratios.len().saturating_sub(1) as f32;
+    let usable = (total - 24.0 - gaps).max(160.0);
+    ratios.iter().map(|ratio| usable * ratio).collect()
+}
+
+pub fn table_header(ui: &mut egui::Ui, columns: &[(&str, f32)]) {
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        for (label, width) in columns {
+            ui.allocate_ui_with_layout(
+                Vec2::new(*width, 20.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_min_width(*width);
+                    ui.label(RichText::new(*label).size(9.5).strong().color(theme::MUTED));
+                },
+            );
+        }
+    });
+    ui.add_space(3.0);
+}
+
+/// A card with a fixed outer height and an internal scroll area. Used for
+/// side-by-side panels that must stay the same height regardless of content.
+pub fn card_fixed_height(
+    ui: &mut egui::Ui,
+    height: f32,
+    id: &str,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    let dark = ui.style().visuals.dark_mode;
+    egui::Frame::new()
+        .fill(if dark {
+            theme::DARK_SURFACE
+        } else {
+            theme::LIGHT_PANEL
+        })
+        .stroke(Stroke::new(1.0, theme::border_color(ui)))
+        .corner_radius(theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::symmetric(16, 13))
+        .show(ui, |ui| {
+            let inner = egui::Vec2::new(
+                (ui.available_width() - theme::PAGE_GAP).max(0.0),
+                (height - 26.0).max(80.0),
+            );
+            ui.allocate_ui_with_layout(inner, egui::Layout::top_down(egui::Align::Min), |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt(id)
+                    .max_height(inner.y)
+                    .auto_shrink([false, false])
+                    .show(ui, add);
+            });
         });
 }
 
@@ -481,15 +662,163 @@ pub fn status_pill(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Respo
             Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 90),
         ))
         .corner_radius(9)
-        .inner_margin(egui::Margin::symmetric(7, 2))
+        .inner_margin(egui::Margin::symmetric(8, 1))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(format!("● {}", theme::status_label(text)))
-                    .size(9.5)
+                    .size(10.5)
                     .color(color),
             );
         })
         .response
+}
+
+/// The topbar connection tag is explicitly sized to the same height as the
+/// Refresh control, which keeps the two header actions visually balanced.
+pub fn topbar_status_pill(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
+    let dark = ui.style().visuals.dark_mode;
+    let label = theme::status_label(text);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label, egui::FontId::proportional(10.0), color);
+    let dot = 6.0;
+    let gap = 5.0;
+    let padding = 10.0;
+    let width = padding * 2.0 + dot + gap + galley.size().x;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::hover());
+    let bg = if dark {
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 24)
+    } else {
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 18)
+    };
+    let stroke = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 90);
+    ui.painter()
+        .rect(rect, 9, bg, Stroke::new(1.0, stroke), StrokeKind::Inside);
+    let dot_center = egui::pos2(rect.left() + padding + dot / 2.0, rect.center().y);
+    ui.painter().circle_filled(dot_center, 2.5, color);
+    let text_pos = egui::pos2(
+        dot_center.x + dot / 2.0 + gap,
+        rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter().galley(text_pos, galley, color);
+    response
+}
+
+/// A rounded secondary button with a hand-painted refresh glyph. The glyph is
+/// drawn with shapes because the bundled UI fonts do not contain the Unicode
+/// refresh symbols. The label and icon are laid out explicitly so the button
+/// stays compact instead of inheriting awkward leading spaces.
+pub fn refresh_button(ui: &mut egui::Ui) -> egui::Response {
+    let font = egui::FontId::proportional(11.0);
+    let label = "Refresh";
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, theme::text_color(ui));
+    let padding = 8.0;
+    let icon = 13.0;
+    let gap = 5.0;
+    let width = padding * 2.0 + icon + gap + galley.size().x;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::click());
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect(
+        rect,
+        theme::ROW_RADIUS,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        StrokeKind::Inside,
+    );
+    let icon_center = egui::pos2(rect.left() + padding + icon / 2.0, rect.center().y);
+    paint_refresh_icon(ui.painter(), icon_center, 5.0, visuals.fg_stroke.color);
+    let text_pos = egui::pos2(
+        icon_center.x + icon / 2.0 + gap,
+        rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter()
+        .galley(text_pos, galley, visuals.fg_stroke.color);
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Refresh"));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+fn paint_refresh_icon(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: Color32) {
+    use std::f32::consts::{PI, TAU};
+    let stroke = Stroke::new(1.4, color);
+    let start = 5.0 * PI / 3.0;
+    let end = 3.0 * PI / 2.0 + TAU;
+    let steps = 20;
+    let point = |angle: f32| center + egui::vec2(angle.cos() * radius, angle.sin() * radius);
+    let mut previous = point(start);
+    for step in 1..=steps {
+        let angle = start + (end - start) * step as f32 / steps as f32;
+        let next = point(angle);
+        painter.line_segment([previous, next], stroke);
+        previous = next;
+    }
+    let tangent = egui::vec2(-end.sin(), end.cos());
+    let normal = egui::vec2(end.cos(), end.sin());
+    let head = 4.0;
+    let spread = 2.2;
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            previous,
+            previous - tangent * head + normal * spread,
+            previous - tangent * head - normal * spread,
+        ],
+        color,
+        Stroke::NONE,
+    ));
+}
+
+/// A compact secondary action with the same rounded shape as the larger
+/// buttons, used for Copy/Open and other inline row actions.
+pub fn compact_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    // Let egui use the themed inactive/hovered widget visuals so the button
+    // highlights on hover instead of being pinned to one fill color.
+    ui.add(
+        egui::Button::new(RichText::new(text).size(10.5))
+            .corner_radius(theme::ROW_RADIUS)
+            .min_size(Vec2::new(0.0, 24.0)),
+    )
+}
+
+/// A left-aligned path with a real background and compact Copy/Open actions.
+pub fn path_block(ui: &mut egui::Ui, path: &str) {
+    let dark = ui.style().visuals.dark_mode;
+    egui::Frame::new()
+        .fill(if dark {
+            Color32::from_rgb(8, 11, 15)
+        } else {
+            Color32::from_rgb(246, 248, 251)
+        })
+        .stroke(Stroke::new(1.0, theme::border_color(ui)))
+        .corner_radius(theme::ROW_RADIUS)
+        .inner_margin(egui::Margin::symmetric(10, 7))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 220.0).max(120.0);
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::hover());
+                let display = truncate_middle(path, 90);
+                ui.painter().with_clip_rect(rect).text(
+                    rect.left_center(),
+                    egui::Align2::LEFT_CENTER,
+                    display,
+                    egui::FontId::monospace(9.5),
+                    theme::MUTED,
+                );
+                response.on_hover_text(path);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if secondary_button(ui, "Open").clicked() {
+                        let _ = open::that(path);
+                    }
+                    if secondary_button(ui, "Copy").clicked() {
+                        ui.ctx().copy_text(path.to_string());
+                    }
+                });
+            });
+        });
 }
 
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
@@ -500,35 +829,46 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
         Color32::from_rgb(25, 20, 10)
     };
     ui.add(
-        egui::Button::new(RichText::new(text).size(11.0).strong().color(text_color))
-            .fill(theme::ACCENT)
-            .stroke(Stroke::new(1.0, theme::ACCENT))
-            .min_size(Vec2::new(0.0, 28.0)),
+        egui::Button::new(RichText::new(text).size(11.5).strong().color(text_color))
+            .fill(theme::accent())
+            .stroke(Stroke::new(1.0, theme::accent()))
+            .corner_radius(theme::ROW_RADIUS)
+            .min_size(Vec2::new(0.0, theme::CONTROL_HEIGHT)),
     )
 }
 
 pub fn secondary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    // Do not pin the fill/stroke here: the theme already defines inactive,
+    // hovered and active widget visuals, and an explicit fill would suppress
+    // the hover highlight on Refresh, Copy/Open and every other secondary
+    // action.
     ui.add(
-        egui::Button::new(RichText::new(text).size(11.0))
-            .fill(theme::surface_fill(ui))
-            .stroke(Stroke::new(1.0, theme::border_color(ui)))
-            .min_size(Vec2::new(0.0, 28.0)),
+        egui::Button::new(RichText::new(text).size(11.5))
+            .corner_radius(theme::ROW_RADIUS)
+            .min_size(Vec2::new(0.0, theme::CONTROL_HEIGHT)),
     )
 }
 
 pub fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(egui::Button::new(RichText::new(text).size(10.0).color(theme::MUTED)).frame(false))
+    ui.add(
+        egui::Button::new(RichText::new(text).size(11.0).color(theme::MUTED))
+            .fill(Color32::TRANSPARENT)
+            .stroke(Stroke::NONE)
+            .corner_radius(theme::ROW_RADIUS)
+            .min_size(Vec2::new(0.0, theme::CONTROL_HEIGHT - 2.0)),
+    )
 }
 
 pub fn danger_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
-        egui::Button::new(RichText::new(text).size(11.0).color(theme::RED))
+        egui::Button::new(RichText::new(text).size(11.5).color(theme::RED))
             .fill(Color32::from_rgba_unmultiplied(255, 107, 107, 18))
             .stroke(Stroke::new(
                 1.0,
                 Color32::from_rgba_unmultiplied(255, 107, 107, 90),
             ))
-            .min_size(Vec2::new(0.0, 28.0)),
+            .corner_radius(theme::ROW_RADIUS)
+            .min_size(Vec2::new(0.0, theme::CONTROL_HEIGHT)),
     )
 }
 
@@ -604,7 +944,7 @@ pub fn kv_grid(ui: &mut egui::Ui, id: &str, rows: &[(&str, String)]) {
 }
 
 pub fn copy_button(ui: &mut egui::Ui, value: &str, label: &str) {
-    if ui.small_button(label).clicked() {
+    if compact_button(ui, label).clicked() {
         ui.ctx().copy_text(value.to_string());
     }
 }
@@ -616,31 +956,30 @@ pub fn truncated_text(ui: &mut egui::Ui, value: &str, max: usize) {
 }
 
 pub fn path_row(ui: &mut egui::Ui, path: &str) {
-    let reserve = 112.0;
+    let reserve = 142.0;
     ui.horizontal(|ui| {
         let width = (ui.available_width() - reserve).max(60.0);
-        ui.add_sized(
-            [width, 18.0],
-            egui::Label::new(
-                RichText::new(path)
-                    .size(9.5)
-                    .monospace()
-                    .color(theme::MUTED),
-            )
-            .truncate(),
-        )
-        .on_hover_text(path);
-        if ui.small_button("Copy").clicked() {
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::hover());
+        let display = truncate_middle(path, 90);
+        ui.painter().with_clip_rect(rect).text(
+            rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            display,
+            egui::FontId::monospace(9.5),
+            theme::MUTED,
+        );
+        response.on_hover_text(path);
+        if compact_button(ui, "Copy").clicked() {
             ui.ctx().copy_text(path.to_string());
         }
-        if ui.small_button("Open").clicked() {
+        if compact_button(ui, "Open").clicked() {
             let _ = open::that(path);
         }
     });
 }
 
 pub fn path_button(ui: &mut egui::Ui, path: &str) {
-    if ui.small_button("Open").on_hover_text(path).clicked() {
+    if compact_button(ui, "Open").on_hover_text(path).clicked() {
         let _ = open::that(path);
     }
 }
@@ -697,12 +1036,13 @@ pub fn metric(ui: &mut egui::Ui, label: &str, value: &str, color: Color32, detai
             theme::LIGHT_PANEL
         })
         .stroke(Stroke::new(1.0, theme::border_color(ui)))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(12, 9))
+        .corner_radius(theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::symmetric(16, 13))
         .show(ui, |ui| {
-            ui.set_min_width(140.0);
+            ui.set_min_width((ui.available_width() - theme::PAGE_GAP).max(140.0));
+            ui.set_min_height(60.0);
             ui.label(RichText::new(label).size(9.5).color(theme::MUTED));
-            ui.label(RichText::new(value).size(20.0).strong().color(color));
+            ui.label(RichText::new(value).size(22.0).strong().color(color));
             ui.label(RichText::new(detail).size(9.0).color(theme::MUTED));
         });
 }
@@ -886,7 +1226,7 @@ pub fn segmented(ui: &mut egui::Ui, options: &[(&str, bool)], mut on_click: impl
                 for (index, (label, active)) in options.iter().enumerate() {
                     let response = ui.add(
                         egui::Button::new(RichText::new(*label).size(10.0).color(if *active {
-                            theme::TEXT
+                            theme::text_color(ui)
                         } else {
                             theme::MUTED
                         }))

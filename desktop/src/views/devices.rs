@@ -1,6 +1,5 @@
 use eframe::egui;
 use egui::RichText;
-use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
 use crate::components::*;
@@ -37,68 +36,83 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     let devices = app.devices.value.devices.clone();
     let mut select = None;
-    TableBuilder::new(ui)
-        .sense(egui::Sense::click())
-        .striped(false)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(150.0).at_least(110.0))
-        .column(Column::remainder().at_least(120.0))
-        .column(Column::initial(85.0))
-        .column(Column::initial(75.0))
-        .column(Column::initial(180.0))
-        .column(Column::initial(58.0))
-        .header(24.0, |mut header| {
-            for name in ["Serial", "Model", "State", "Android", "Owner", ""] {
-                header.col(|ui| {
-                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(28.0, devices.len(), |mut row| {
-                let device = &devices[row.index()];
-                row.set_selected(app.selected_device.as_deref() == Some(device.serial.as_str()));
-                row.col(|ui| {
-                    ui.add(
-                        egui::Label::new(RichText::new(&device.serial).size(10.0).monospace())
-                            .truncate(),
+    let width = ui.available_width();
+    let widths = proportional_widths(width, &[0.15, 0.28, 0.09, 0.08, 0.32, 0.08], 10.0);
+    let serial_width = widths[0];
+    let model_width = widths[1];
+    let state_width = widths[2];
+    let android_width = widths[3];
+    let owner_width = widths[4];
+    let select_width = widths[5];
+    table_header(
+        ui,
+        &[
+            ("Serial", serial_width),
+            ("Model", model_width),
+            ("State", state_width),
+            ("Android", android_width),
+            ("Owner", owner_width),
+            ("", select_width),
+        ],
+    );
+    for device in &devices {
+        let selected = app.selected_device.as_deref() == Some(device.serial.as_str());
+        let response = selectable_row(ui, selected, theme::ROW_HEIGHT, |ui| {
+            row_cell(ui, serial_width, |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(&device.serial).size(10.0).monospace())
+                        .truncate(),
+                )
+                .on_hover_text(&device.serial);
+            });
+            row_cell(ui, model_width, |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(device.model.as_deref().unwrap_or("-")).size(10.5),
                     )
-                    .on_hover_text(&device.serial);
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(device.model.as_deref().unwrap_or("-")).size(10.5));
-                });
-                row.col(|ui| {
-                    status_pill(ui, &device.state, theme::status_color(&device.state));
-                });
-                row.col(|ui| {
-                    ui.label(
-                        RichText::new(device.android_version.as_deref().unwrap_or("-")).size(10.0),
-                    );
-                });
-                row.col(|ui| {
-                    let owner = device
-                        .owner
-                        .as_ref()
-                        .map(|owner| format!("{} · {}", owner.owner, owner.session_id))
-                        .unwrap_or_else(|| "unowned".to_string());
-                    ui.add(egui::Label::new(RichText::new(owner).size(10.0)).truncate());
-                });
-                row.col(|ui| {
-                    if ui.small_button("Select").clicked() {
-                        select = Some(device.serial.clone());
-                    }
-                });
-                if row.response().clicked() {
-                    select = Some(device.serial.clone());
+                    .truncate(),
+                );
+            });
+            row_cell(ui, state_width, |ui| {
+                status_pill(ui, &device.state, theme::status_color(&device.state));
+            });
+            row_cell(ui, android_width, |ui| {
+                ui.label(
+                    RichText::new(device.android_version.as_deref().unwrap_or("-")).size(10.0),
+                );
+            });
+            row_cell(ui, owner_width, |ui| {
+                let owner = device
+                    .owner
+                    .as_ref()
+                    .map(|owner| format!("{} · {}", owner.owner, owner.session_id))
+                    .unwrap_or_else(|| "unowned".to_string());
+                ui.add(egui::Label::new(RichText::new(owner).size(10.0)).truncate());
+            });
+            row_cell(ui, select_width, |ui| {
+                if secondary_button(ui, if selected { "Clear" } else { "Select" }).clicked() {
+                    select = Some(if selected {
+                        None
+                    } else {
+                        Some(device.serial.clone())
+                    });
                 }
             });
         });
+        if response.clicked() {
+            select = Some(if selected {
+                None
+            } else {
+                Some(device.serial.clone())
+            });
+        }
+        ui.add_space(2.0);
+    }
     if let Some(serial) = select {
-        app.selected_device = Some(serial);
+        app.selected_device = serial;
     }
     if let Some(device) = app.selected_device_info() {
-        ui.add_space(8.0);
+        ui.add_space(theme::PAGE_GAP);
         details(app, ui, &device);
     }
 }
@@ -321,7 +335,7 @@ fn details(app: &mut App, ui: &mut egui::Ui, device: &crate::models::Device) {
             }
         }
     });
-    ui.add_space(8.0);
+    ui.add_space(theme::PAGE_GAP);
     card(ui, |ui| {
         section_title(ui, "Wireless ADB");
         ui.horizontal(|ui| {

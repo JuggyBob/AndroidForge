@@ -34,10 +34,11 @@ pub enum Page {
     Logcat,
     Inspector,
     Maintenance,
+    Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 13] = [
+    pub const ALL: [Page; 14] = [
         Page::Setup,
         Page::Overview,
         Page::Context,
@@ -51,6 +52,7 @@ impl Page {
         Page::Logcat,
         Page::Inspector,
         Page::Maintenance,
+        Page::Settings,
     ];
 
     pub fn label(self) -> &'static str {
@@ -68,6 +70,7 @@ impl Page {
             Page::Logcat => "Logcat",
             Page::Inspector => "Inspector",
             Page::Maintenance => "Maintenance",
+            Page::Settings => "Settings",
         }
     }
 }
@@ -113,6 +116,8 @@ pub struct DesktopSettings {
     pub project: Option<String>,
     pub owner: String,
     pub theme: ThemeMode,
+    pub accent: [u8; 3],
+    pub font: Option<String>,
     pub onboarding_completed: bool,
     pub logcat_lines: usize,
     pub preview_interval_ms: u64,
@@ -132,6 +137,8 @@ impl Default for DesktopSettings {
                 .or_else(|| std::env::var("USERNAME").ok())
                 .unwrap_or_else(|| "Desktop User".to_string()),
             theme: ThemeMode::System,
+            accent: [240, 166, 50],
+            font: None,
             onboarding_completed: false,
             logcat_lines: default_logcat_lines(),
             preview_interval_ms: default_preview_interval_ms(),
@@ -406,10 +413,11 @@ pub enum SetupSection {
     Device,
     Updates,
     Finish,
+    Agent,
 }
 
 impl SetupSection {
-    pub const ALL: [SetupSection; 7] = [
+    pub const ALL: [SetupSection; 8] = [
         SetupSection::Welcome,
         SetupSection::Cli,
         SetupSection::Environment,
@@ -417,6 +425,7 @@ impl SetupSection {
         SetupSection::Device,
         SetupSection::Updates,
         SetupSection::Finish,
+        SetupSection::Agent,
     ];
 
     pub fn label(self) -> &'static str {
@@ -428,6 +437,7 @@ impl SetupSection {
             Self::Device => "Device",
             Self::Updates => "Updates",
             Self::Finish => "Finish",
+            Self::Agent => "Agent Handoff",
         }
     }
 
@@ -439,6 +449,9 @@ impl SetupSection {
 #[derive(Default)]
 pub struct SetupState {
     pub section: SetupSection,
+    pub section_animation_started: Option<Instant>,
+    pub highlight_y: Option<f32>,
+    pub step_rects: Vec<(usize, egui::Rect)>,
     pub create_name: String,
     pub create_package: String,
     pub create_avd: String,
@@ -578,6 +591,7 @@ pub struct LogcatState {
     pub last_capture: Option<Instant>,
     pub exported: Option<String>,
     pub max_lines: usize,
+    pub scroll_offset: f32,
 }
 
 impl Default for LogcatState {
@@ -598,6 +612,7 @@ impl Default for LogcatState {
             last_capture: None,
             exported: None,
             max_lines: 4000,
+            scroll_offset: 0.0,
         }
     }
 }
@@ -716,6 +731,7 @@ pub struct Toast {
     pub text: String,
     pub level: ToastLevel,
     pub created: Instant,
+    pub dismissed: Option<Instant>,
 }
 
 impl Toast {
@@ -724,12 +740,58 @@ impl Toast {
             text: text.into(),
             level,
             created: Instant::now(),
+            dismissed: None,
+        }
+    }
+
+    pub fn dismiss(&mut self) {
+        if self.dismissed.is_none() {
+            self.dismissed = Some(Instant::now());
         }
     }
 
     pub fn expired(&self) -> bool {
-        self.created.elapsed() > Duration::from_secs(8)
+        self.dismissed
+            .map(|dismissed| dismissed.elapsed() > Duration::from_millis(260))
+            .unwrap_or_else(|| self.created.elapsed() > Duration::from_millis(8260))
     }
+
+    pub fn closing(&self) -> bool {
+        self.dismissed.is_some() || self.created.elapsed() > Duration::from_secs(8)
+    }
+
+    pub fn slide_offset(&self) -> f32 {
+        let enter = (self.created.elapsed().as_secs_f32() / 0.24).clamp(0.0, 1.0);
+        let enter_offset = (1.0 - ease_out_cubic(enter)) * 34.0;
+        let leave = if let Some(dismissed) = self.dismissed {
+            (dismissed.elapsed().as_secs_f32() / 0.24).clamp(0.0, 1.0)
+        } else if self.created.elapsed() > Duration::from_secs(8) {
+            ((self.created.elapsed().as_secs_f32() - 8.0) / 0.24).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        enter_offset + ease_in_cubic(leave) * 34.0
+    }
+
+    pub fn opacity(&self) -> f32 {
+        let enter = (self.created.elapsed().as_secs_f32() / 0.24).clamp(0.0, 1.0);
+        let leave = if let Some(dismissed) = self.dismissed {
+            (dismissed.elapsed().as_secs_f32() / 0.24).clamp(0.0, 1.0)
+        } else if self.created.elapsed() > Duration::from_secs(8) {
+            ((self.created.elapsed().as_secs_f32() - 8.0) / 0.24).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (enter * (1.0 - leave)).clamp(0.0, 1.0)
+    }
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn ease_in_cubic(t: f32) -> f32 {
+    t.powi(3)
 }
 
 #[derive(Debug, Clone, Default)]

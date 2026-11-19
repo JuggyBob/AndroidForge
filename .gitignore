@@ -16,6 +16,9 @@
 case-studies/*/*-run/
 case-studies/*/*.json
 
+# Local-only specification drafts (kept on disk, not published)
+/SPEC-v*.md
+
 # Local release packaging
 /dist/
 

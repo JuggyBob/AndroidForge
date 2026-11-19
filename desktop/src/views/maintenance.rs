@@ -27,7 +27,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             &mut columns[0],
             "Total",
             &format_bytes(summary.total_bytes),
-            theme::ACCENT,
+            theme::accent(),
             "AndroidForge state + artifacts",
         );
         metric(
@@ -70,19 +70,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             "ownership records needing review",
         );
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     card(ui, |ui| {
         section_label(ui, "Managed paths");
         path_row(ui, &summary.state_dir);
         path_row(ui, &summary.artifacts_dir);
         small(ui, "Nothing outside these managed directories is removed.");
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     ui.columns(2, |columns| {
         cleanup_controls(app, &mut columns[0]);
         cleanup_preview(app, &mut columns[1]);
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     ui.columns(2, |columns| {
         sessions_table(app, &mut columns[0], &summary);
         runs_table(app, &mut columns[1], &summary);
@@ -212,57 +212,67 @@ fn cleanup_preview(app: &mut App, ui: &mut egui::Ui) {
                 ),
             ],
         );
-        ui.add_space(4.0);
-        egui::ScrollArea::vertical()
-            .id_salt("cleanup-session-list")
-            .max_height(110.0)
-            .show(ui, |ui| {
-                for entry in &session_entries {
-                    let id = entry
-                        .get("id")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("-");
-                    let state = entry
-                        .get("state")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("-");
-                    ui.horizontal(|ui| {
-                        status_pill(ui, state, theme::status_color(state));
-                        ui.label(RichText::new(id).size(9.5).monospace());
+        if session_entries.is_empty() && run_entries.is_empty() {
+            ui.add_space(4.0);
+            small(ui, "No session tombstones or historical runs match.");
+        } else {
+            if !session_entries.is_empty() {
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("cleanup-session-list")
+                    .max_height(110.0)
+                    .show(ui, |ui| {
+                        for entry in &session_entries {
+                            let id = entry
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-");
+                            let state = entry
+                                .get("state")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-");
+                            ui.horizontal(|ui| {
+                                status_pill(ui, state, theme::status_color(state));
+                                ui.label(RichText::new(id).size(9.5).monospace());
+                            });
+                        }
                     });
-                }
-                if session_entries.is_empty() {
-                    small(ui, "No session tombstones match.");
-                }
-            });
-        ui.add_space(4.0);
-        egui::ScrollArea::vertical()
-            .id_salt("cleanup-run-list")
-            .max_height(110.0)
-            .show(ui, |ui| {
-                for run in &run_entries {
-                    if let Some(run) = run.as_str() {
-                        ui.label(RichText::new(run).size(9.5).monospace());
-                    }
-                }
-                if run_entries.is_empty() {
-                    small(ui, "No historical runs match.");
-                }
-            });
+            }
+            if !run_entries.is_empty() {
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("cleanup-run-list")
+                    .max_height(110.0)
+                    .show(ui, |ui| {
+                        for run in &run_entries {
+                            if let Some(run) = run.as_str() {
+                                ui.label(RichText::new(run).size(9.5).monospace());
+                            }
+                        }
+                    });
+            }
+        }
     });
 }
 
 fn sessions_table(_app: &mut App, ui: &mut egui::Ui, summary: &crate::models::MaintenanceSummary) {
-    card(ui, |ui| {
+    card_fixed_height(ui, 310.0, "maintenance-sessions", |ui| {
         section_title(ui, "Terminal sessions");
         if summary.terminal_sessions.is_empty() {
             muted(ui, "No released, failed or abandoned sessions.");
             return;
         }
         for session in summary.terminal_sessions.iter().take(8) {
-            ui.horizontal(|ui| {
-                status_pill(ui, &session.state, theme::status_color(&session.state));
-                ui.label(RichText::new(&session.id).size(9.5).monospace());
+            selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+                row_cell(ui, 82.0, |ui| {
+                    status_pill(ui, &session.state, theme::status_color(&session.state));
+                });
+                row_cell(ui, 150.0, |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(&session.id).size(9.5).monospace())
+                            .truncate(),
+                    );
+                });
                 small(
                     ui,
                     format!(
@@ -277,20 +287,27 @@ fn sessions_table(_app: &mut App, ui: &mut egui::Ui, summary: &crate::models::Ma
 }
 
 fn runs_table(app: &mut App, ui: &mut egui::Ui, summary: &crate::models::MaintenanceSummary) {
-    card(ui, |ui| {
+    card_fixed_height(ui, 310.0, "maintenance-runs", |ui| {
         section_title(ui, "Largest runs");
         if summary.largest_runs.is_empty() {
             muted(ui, "No run artifacts are recorded.");
             return;
         }
         for run in summary.largest_runs.iter().take(8) {
-            ui.horizontal(|ui| {
-                status_pill(ui, &run.status, theme::status_color(&run.status));
-                ui.label(RichText::new(&run.run_id).size(9.5).monospace());
+            selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+                row_cell(ui, 82.0, |ui| {
+                    status_pill(ui, &run.status, theme::status_color(&run.status));
+                });
+                row_cell(ui, 210.0, |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(&run.run_id).size(9.5).monospace())
+                            .truncate(),
+                    );
+                });
                 small(ui, format_bytes(run.bytes));
             });
         }
-        if ui.small_button("Open runs").clicked() {
+        if secondary_button(ui, "Open runs").clicked() {
             app.set_page(Page::Runs);
         }
     });

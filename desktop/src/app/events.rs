@@ -311,10 +311,21 @@ impl App {
                 match result {
                     Ok(value) => {
                         let hierarchy = value.hierarchy;
+                        let first_load = self.inspector.hierarchy.is_none();
                         if let Some(selected) = self.inspector.selected_node
                             && !hierarchy.nodes.iter().any(|node| node.id == selected)
                         {
                             self.inspector.selected_node = None;
+                        }
+                        if first_load {
+                            // Start with the tree collapsed so the inspector
+                            // opens as a readable list of top-level objects.
+                            self.inspector.collapsed = hierarchy
+                                .nodes
+                                .iter()
+                                .filter(|node| !node.children.is_empty())
+                                .map(|node| node.id)
+                                .collect();
                         }
                         self.inspector.hierarchy = Some(hierarchy);
                         self.inspector.hierarchy_error = None;

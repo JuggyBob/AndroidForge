@@ -1,6 +1,5 @@
 use eframe::egui;
-use egui::RichText;
-use egui_extras::{Column, TableBuilder};
+use egui::{Align, Layout, RichText};
 
 use crate::app::App;
 use crate::components::*;
@@ -51,14 +50,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .iter()
         .filter(|session| session.operation_active)
         .count();
-    ui.add_space(8.0);
+    ui.add_space(theme::PAGE_GAP);
     ui.columns(4, |columns| {
         metric_card(&mut columns[0], "Active sessions", active, theme::GREEN);
         metric_card(&mut columns[1], "Device owners", active, theme::BLUE);
         metric_card(&mut columns[2], "Stale active", stale, theme::YELLOW);
         metric_card(&mut columns[3], "Tombstones", tombstones, theme::MUTED);
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     card(ui, |ui| {
         section_title(ui, "Sessions and leases");
         if sessions.is_empty() {
@@ -66,83 +65,94 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
         let rows = sessions.clone();
-        TableBuilder::new(ui)
-            .striped(false)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(150.0).at_least(120.0))
-            .column(Column::initial(110.0))
-            .column(Column::initial(110.0))
-            .column(Column::initial(90.0))
-            .column(Column::remainder().at_least(140.0))
-            .column(Column::initial(150.0))
-            .header(24.0, |mut header| {
-                for name in ["Session", "Owner", "Device", "State", "Lease", "Project"] {
-                    header.col(|ui| {
-                        ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(30.0, rows.len(), |mut row| {
-                    let session = &rows[row.index()];
-                    row.col(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&session.id).size(9.5).monospace());
-                            if session.stale && is_active(session) {
-                                status_pill(ui, "stale", theme::YELLOW);
-                            }
-                            if session.operation_active {
-                                status_pill(ui, "busy", theme::ACCENT);
-                            }
-                        });
-                    });
-                    row.col(|ui| {
-                        ui.label(RichText::new(&session.owner).size(10.0));
-                    });
-                    row.col(|ui| {
-                        ui.label(
+        let width = ui.available_width();
+        let widths = proportional_widths(width, &[0.18, 0.12, 0.14, 0.12, 0.22, 0.22], 10.0);
+        let session_width = widths[0];
+        let owner_width = widths[1];
+        let device_width = widths[2];
+        let state_width = widths[3];
+        let lease_width = widths[4];
+        let project_width = widths[5];
+        table_header(
+            ui,
+            &[
+                ("Session", session_width),
+                ("Owner", owner_width),
+                ("Device", device_width),
+                ("State", state_width),
+                ("Lease", lease_width),
+                ("Project", project_width),
+            ],
+        );
+        for session in &rows {
+            selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+                row_cell(ui, session_width, |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(&session.id).size(9.5).monospace())
+                            .truncate(),
+                    );
+                    if session.stale && is_active(session) {
+                        status_pill(ui, "stale", theme::YELLOW);
+                    }
+                    if session.operation_active {
+                        status_pill(ui, "busy", theme::accent());
+                    }
+                });
+                row_cell(ui, owner_width, |ui| {
+                    ui.add(egui::Label::new(RichText::new(&session.owner).size(10.0)).truncate());
+                });
+                row_cell(ui, device_width, |ui| {
+                    ui.add(
+                        egui::Label::new(
                             RichText::new(session.serial.as_deref().unwrap_or("-"))
                                 .size(9.5)
                                 .monospace(),
-                        );
-                    });
-                    row.col(|ui| {
-                        status_pill(ui, &session.state, theme::status_color(&session.state));
-                    });
-                    row.col(|ui| {
-                        let lease = session
-                            .lease_expires_at
-                            .as_deref()
-                            .map(|expires| {
-                                if session.lease_expired {
-                                    format!("expired ({expires})")
-                                } else {
-                                    expires.to_string()
-                                }
-                            })
-                            .unwrap_or_else(|| "no lease".to_string());
-                        ui.label(
-                            RichText::new(lease)
-                                .size(9.5)
-                                .color(if session.lease_expired {
-                                    theme::RED
-                                } else {
-                                    theme::MUTED
-                                }),
-                        );
-                    });
-                    row.col(|ui| {
-                        ui.label(
+                        )
+                        .truncate(),
+                    );
+                });
+                row_cell(ui, state_width, |ui| {
+                    status_pill(ui, &session.state, theme::status_color(&session.state));
+                });
+                row_cell(ui, lease_width, |ui| {
+                    let lease = session
+                        .lease_expires_at
+                        .as_deref()
+                        .map(|expires| {
+                            if session.lease_expired {
+                                format!("expired ({expires})")
+                            } else {
+                                expires.to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "no lease".to_string());
+                    ui.add(
+                        egui::Label::new(RichText::new(lease).size(9.5).color(
+                            if session.lease_expired {
+                                theme::RED
+                            } else {
+                                theme::MUTED
+                            },
+                        ))
+                        .truncate(),
+                    );
+                });
+                row_cell(ui, project_width, |ui| {
+                    ui.add(
+                        egui::Label::new(
                             RichText::new(
                                 session.project_root.as_deref().unwrap_or("unknown project"),
                             )
                             .size(9.0)
                             .color(theme::MUTED),
                         )
-                        .on_hover_text(session.project_root.as_deref().unwrap_or("-"));
-                    });
+                        .truncate(),
+                    )
+                    .on_hover_text(session.project_root.as_deref().unwrap_or("-"));
                 });
             });
+            ui.add_space(2.0);
+        }
     });
     ui.add_space(10.0);
     card(ui, |ui| {
@@ -152,9 +162,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
         for device in &devices {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(&device.serial).size(10.0).monospace());
-                status_pill(ui, &device.state, theme::status_color(&device.state));
+            selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+                row_cell(ui, 170.0, |ui| {
+                    ui.label(RichText::new(&device.serial).size(10.0).monospace());
+                });
+                row_cell(ui, 80.0, |ui| {
+                    status_pill(ui, &device.state, theme::status_color(&device.state));
+                });
                 ui.label(
                     RichText::new(format!(
                         "{} {} · API {}",
@@ -168,21 +182,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .size(9.5)
                     .color(theme::MUTED),
                 );
-                if let Some(owner) = &device.owner {
-                    status_pill(
-                        ui,
-                        &format!("{}: {}", owner.owner, owner.session_id),
-                        theme::BLUE,
-                    );
-                } else {
-                    status_pill(ui, "unowned", theme::MUTED);
-                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(owner) = &device.owner {
+                        status_pill(
+                            ui,
+                            &format!("{}: {}", owner.owner, owner.session_id),
+                            theme::BLUE,
+                        );
+                    } else {
+                        status_pill(ui, "unowned", theme::MUTED);
+                    }
+                });
             });
+            ui.add_space(2.0);
         }
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     safe_alternatives(ui, &sessions);
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     card(ui, |ui| {
         section_title(ui, "Ownership safety");
         small(
@@ -200,7 +217,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn metric_card(ui: &mut egui::Ui, label: &str, value: usize, color: egui::Color32) {
-    card(ui, |ui| {
+    card_min_height(ui, 78.0, |ui| {
         ui.label(RichText::new(label).size(9.5).color(theme::MUTED));
         ui.label(
             RichText::new(value.to_string())

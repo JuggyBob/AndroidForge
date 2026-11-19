@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui::{RichText, Vec2};
+use egui::{Color32, RichText, Vec2};
 
 use crate::app::App;
 use crate::components::*;
@@ -21,14 +21,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         );
         ui.separator();
         ui.add_space(14.0);
-        ui.vertical(|ui| match app.setup.section {
-            SetupSection::Welcome => welcome(app, ui),
-            SetupSection::Cli => cli(app, ui),
-            SetupSection::Environment => environment(app, ui),
-            SetupSection::Project => project(app, ui),
-            SetupSection::Device => device(app, ui),
-            SetupSection::Updates => updates(app, ui),
-            SetupSection::Finish => finish(app, ui),
+        ui.vertical(|ui| {
+            let elapsed = app
+                .setup
+                .section_animation_started
+                .map(|started| started.elapsed().as_secs_f32())
+                .unwrap_or(1.0);
+            let progress = (elapsed / 0.24).clamp(0.0, 1.0);
+            if progress < 1.0 {
+                let eased = 1.0 - (1.0 - progress).powi(3);
+                ui.add_space((1.0 - eased) * 16.0);
+                ui.set_opacity(0.2 + 0.8 * eased);
+                ui.ctx().request_repaint();
+            }
+            match app.setup.section {
+                SetupSection::Welcome => welcome(app, ui),
+                SetupSection::Cli => cli(app, ui),
+                SetupSection::Environment => environment(app, ui),
+                SetupSection::Project => project(app, ui),
+                SetupSection::Device => device(app, ui),
+                SetupSection::Updates => updates(app, ui),
+                SetupSection::Finish => finish(app, ui),
+                SetupSection::Agent => agent_handoff(app, ui),
+            }
+            if progress < 1.0 {
+                ui.set_opacity(1.0);
+            }
         });
     });
 }
@@ -40,7 +58,7 @@ pub fn footer(app: &mut App, ui: &mut egui::Ui) {
     let position = app.setup.section.position();
     ui.horizontal_centered(|ui| {
         if position > 0 && secondary_button(ui, "Back").clicked() {
-            app.setup.section = sections[position - 1];
+            app.set_setup_section(sections[position - 1]);
         }
         ui.label(
             RichText::new(format!("Step {} of {}", position + 1, sections.len()))
@@ -50,7 +68,7 @@ pub fn footer(app: &mut App, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if position + 1 < sections.len() {
                 if primary_button(ui, "Continue").clicked() {
-                    app.setup.section = sections[position + 1];
+                    app.set_setup_section(sections[position + 1]);
                 }
             } else if primary_button(ui, "Finish setup").clicked() {
                 app.finish_onboarding(ui.ctx());
@@ -67,36 +85,94 @@ fn step_rail(app: &mut App, ui: &mut egui::Ui, sections: &[SetupSection]) {
             .color(theme::MUTED),
     );
     ui.add_space(6.0);
+
+    let dark = ui.style().visuals.dark_mode;
+    let active_position = app.setup.section.position();
+    let first_top = ui.cursor().top();
+    let pitch = 30.0 + ui.spacing().item_spacing.y;
+    let target_rect = app
+        .setup
+        .step_rects
+        .iter()
+        .find(|(position, _)| *position == active_position)
+        .map(|(_, rect)| *rect)
+        .unwrap_or_else(|| {
+            egui::Rect::from_min_size(
+                egui::pos2(
+                    ui.cursor().left(),
+                    first_top + 15.0 + active_position as f32 * pitch,
+                ),
+                Vec2::new(160.0, 30.0),
+            )
+        });
+    let current = app.setup.highlight_y.unwrap_or(target_rect.center().y);
+    let next = current + (target_rect.center().y - current) * 0.28;
+    app.setup.highlight_y = Some(next);
+    if (target_rect.center().y - next).abs() > 0.4 {
+        ui.ctx().request_repaint();
+    }
+    let highlight = egui::Rect::from_min_max(
+        egui::pos2(target_rect.left(), next - 15.0),
+        egui::pos2(target_rect.right(), next + 15.0),
+    );
+    ui.painter().rect_filled(
+        highlight,
+        theme::ROW_RADIUS,
+        if dark {
+            theme::DARK_SURFACE_ALT
+        } else {
+            theme::LIGHT_SURFACE
+        },
+    );
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(highlight.left() + 2.0, highlight.top() + 7.0),
+            Vec2::new(3.0, highlight.height() - 14.0),
+        ),
+        2.0,
+        theme::accent(),
+    );
+
+    let mut rects = Vec::with_capacity(sections.len());
     for section in sections {
         let active = app.setup.section == *section;
         let done = section.position() < app.setup.section.position();
         let label = if done { "✓" } else { "•" };
-        let response = ui.add(
-            egui::Button::new(
-                RichText::new(format!("{label}  {}", section.label()))
-                    .size(11.0)
-                    .color(if active { theme::TEXT } else { theme::MUTED }),
-            )
-            .fill(if active {
-                if ui.style().visuals.dark_mode {
-                    theme::DARK_SURFACE_ALT
-                } else {
-                    theme::LIGHT_SURFACE
-                }
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(160.0, 30.0), egui::Sense::click());
+        if !active && response.hovered() {
+            let fill = if dark {
+                Color32::from_rgb(24, 31, 39)
             } else {
-                egui::Color32::TRANSPARENT
-            })
-            .stroke(if active {
-                egui::Stroke::new(1.0, theme::ACCENT)
-            } else {
-                egui::Stroke::NONE
-            })
-            .min_size(Vec2::new(160.0, 30.0)),
-        );
-        if response.clicked() {
-            app.setup.section = *section;
+                Color32::from_rgb(242, 245, 249)
+            };
+            ui.painter().rect_filled(rect, theme::ROW_RADIUS, fill);
         }
+        ui.painter().text(
+            rect.left_center() + Vec2::new(12.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            format!("{label}  {}", section.label()),
+            egui::FontId::proportional(11.0),
+            if active {
+                theme::text_color(ui)
+            } else {
+                theme::nav_muted(ui)
+            },
+        );
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if response.clicked() {
+            app.set_setup_section(*section);
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                ui.is_enabled(),
+                format!("Setup section: {}", section.label()),
+            )
+        });
+        rects.push((section.position(), rect));
     }
+    app.setup.step_rects = rects;
+
     ui.add_space(10.0);
     divider(ui);
     let cli_ok = app.cli.info.is_some();
@@ -192,7 +268,7 @@ fn welcome(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(10.0);
     if primary_button(ui, "Start setup").clicked() {
-        app.setup.section = SetupSection::Cli;
+        app.set_setup_section(SetupSection::Cli);
     }
 }
 
@@ -293,8 +369,8 @@ fn environment(app: &mut App, ui: &mut egui::Ui) {
         egui::Frame::new()
             .fill(theme::surface_fill(ui))
             .stroke(egui::Stroke::new(1.0, theme::border_color(ui)))
-            .corner_radius(7)
-            .inner_margin(egui::Margin::symmetric(10, 7))
+            .corner_radius(theme::ROW_RADIUS)
+            .inner_margin(egui::Margin::symmetric(12, 7))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     status_pill(ui, &check.status, color);
@@ -506,15 +582,20 @@ fn device(app: &mut App, ui: &mut egui::Ui) {
         muted(ui, "No device is currently connected.");
     } else {
         for device in &app.devices.value.devices {
-            ui.horizontal(|ui| {
-                status_pill(ui, &device.state, theme::status_color(&device.state));
-                ui.label(RichText::new(&device.serial).monospace().size(10.5));
+            selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+                row_cell(ui, 80.0, |ui| {
+                    status_pill(ui, &device.state, theme::status_color(&device.state));
+                });
+                row_cell(ui, 160.0, |ui| {
+                    ui.label(RichText::new(&device.serial).monospace().size(10.5));
+                });
                 ui.label(
                     RichText::new(device.model.as_deref().unwrap_or("-"))
                         .size(10.0)
                         .color(theme::MUTED),
                 );
             });
+            ui.add_space(2.0);
         }
     }
 }
@@ -652,10 +733,181 @@ fn finish(app: &mut App, ui: &mut egui::Ui) {
         "Setup does not pretend a missing device works. You can finish and configure the device later.",
     );
     ui.add_space(6.0);
-    if primary_button(ui, "Finish setup").clicked() {
-        app.finish_onboarding(ui.ctx());
-    }
+    muted(
+        ui,
+        "Continue to the agent handoff page to copy a ready-to-send prompt with the full documentation paths.",
+    );
     if secondary_button(ui, "Start over").clicked() {
         app.restart_onboarding();
     }
+}
+
+fn agent_handoff(app: &mut App, ui: &mut egui::Ui) {
+    ui.label(RichText::new("Setup complete").size(20.0).strong());
+    ui.add_space(4.0);
+    muted(
+        ui,
+        "Give the prompt below to your coding agent. It contains the full paths to the AndroidForge documentation, the CLI executable and the recommended agent loop.",
+    );
+    ui.add_space(12.0);
+
+    let root = documentation_root(app);
+    let docs = [
+        ("Agent guide", "AGENT_GUIDE.md"),
+        ("User guide and commands", "USER_GUIDE.md"),
+        ("Capability coverage", "CAPABILITIES.md"),
+        ("How it works", "README.md"),
+        ("Exit codes and JSON", "EXIT_CODES.md"),
+        ("Project adapters", "PROJECT_ADAPTER.md"),
+    ];
+
+    card(ui, |ui| {
+        section_title(ui, "Documentation");
+        muted(
+            ui,
+            "These are the files the agent should read before using AndroidForge.",
+        );
+        ui.add_space(4.0);
+        for (label, file) in docs {
+            let path = root.join(file);
+            ui.horizontal(|ui| {
+                status_pill(
+                    ui,
+                    if path.is_file() { "found" } else { "missing" },
+                    if path.is_file() {
+                        theme::GREEN
+                    } else {
+                        theme::YELLOW
+                    },
+                );
+                ui.label(RichText::new(label).size(10.5).strong());
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(path.display().to_string())
+                            .size(9.0)
+                            .monospace()
+                            .color(theme::MUTED),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(path.display().to_string());
+            });
+        }
+        ui.add_space(4.0);
+        if secondary_button(ui, "Open documentation folder").clicked() {
+            let _ = open::that(&root);
+        }
+    });
+
+    ui.add_space(theme::PAGE_GAP);
+    let prompt = agent_prompt(app, &root);
+    card(ui, |ui| {
+        ui.horizontal(|ui| {
+            section_title(ui, "Agent handoff prompt");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if primary_button(ui, "Copy agent prompt").clicked() {
+                    ui.ctx().copy_text(prompt.clone());
+                }
+                if let Some(path) = cli_path(app)
+                    && secondary_button(ui, "Copy CLI path").clicked()
+                {
+                    ui.ctx().copy_text(path);
+                }
+            });
+        });
+        muted(
+            ui,
+            "Paste this into your agent before asking it to test an app.",
+        );
+        ui.add_space(6.0);
+        let dark = ui.style().visuals.dark_mode;
+        egui::Frame::new()
+            .fill(if dark {
+                Color32::from_rgb(8, 11, 15)
+            } else {
+                Color32::from_rgb(246, 248, 251)
+            })
+            .stroke(egui::Stroke::new(1.0, theme::border_color(ui)))
+            .corner_radius(theme::ROW_RADIUS)
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                let mut display = prompt.clone();
+                ui.add(
+                    egui::TextEdit::multiline(&mut display)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(22)
+                        .frame(egui::Frame::new())
+                        .interactive(false),
+                );
+            });
+    });
+
+    ui.add_space(theme::PAGE_GAP);
+    success_banner(
+        ui,
+        "You can finish setup now. The prompt will remain available from this page if you need it again.",
+    );
+}
+
+fn cli_path(app: &App) -> Option<String> {
+    app.cli
+        .resolution
+        .as_ref()
+        .map(|resolution| resolution.path.display().to_string())
+        .or_else(|| {
+            app.cli
+                .configured_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+        })
+}
+
+fn documentation_root(app: &App) -> std::path::PathBuf {
+    let workspace = app.workspace();
+    if workspace.join("AGENT_GUIDE.md").is_file() {
+        return workspace;
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        for ancestor in executable.ancestors().skip(1).take(5) {
+            if ancestor.join("AGENT_GUIDE.md").is_file() {
+                return ancestor.to_path_buf();
+            }
+        }
+    }
+    workspace
+}
+
+fn agent_prompt(app: &App, root: &std::path::Path) -> String {
+    let workspace = app.workspace().display().to_string();
+    let cli = cli_path(app).unwrap_or_else(|| "not connected".to_string());
+    let docs = |file: &str| root.join(file).display().to_string();
+    format!(
+        "AndroidForge is a CLI tool built for agents to test Android apps through an AVD emulator or a connected device. Use it instead of raw adb whenever it covers the operation.\n\n\
+         Read these files first (full paths):\n\
+         - Agent guide and safety rules: {agent_guide}\n\
+         - Full user guide and command reference: {user_guide}\n\
+         - Capability and command coverage: {capabilities}\n\
+         - Overview and how it works: {readme}\n\
+         - Exit codes and JSON envelopes: {exit_codes}\n\
+         - Project adapters and configuration: {project_adapter}\n\n\
+         CLI executable:\n{cli}\n\n\
+         Workspace:\n{workspace}\n\n\
+         The complete command list, every flag and the safety classes are in USER_GUIDE.md. CAPABILITIES.md lists every command area and its status.\n\n\
+         Start with this loop:\n\
+         androidforge doctor --json\n\
+         androidforge agent brief --project \"{workspace}\" --json\n\
+         androidforge session ensure --project \"{workspace}\" --avd <AVD_NAME> --owner <AGENT_NAME> --ttl 1h --json\n\
+         androidforge ui observe --session <SESSION_ID> --json\n\
+         androidforge ui tap --session <SESSION_ID> --text \"<LABEL>\" --wait-for-text \"<EXPECTED_TEXT>\" --receipt --json\n\
+         androidforge report explain latest-failure --json\n\
+         androidforge session release --session <SESSION_ID> --owner <AGENT_NAME> --json\n\n\
+         Use emulators for destructive tests. Never pass --allow-physical-mutation for a physical device unless the user explicitly approves that exact operation. Keep the session owner so cleanup is possible.",
+        agent_guide = docs("AGENT_GUIDE.md"),
+        user_guide = docs("USER_GUIDE.md"),
+        capabilities = docs("CAPABILITIES.md"),
+        readme = docs("README.md"),
+        exit_codes = docs("EXIT_CODES.md"),
+        project_adapter = docs("PROJECT_ADAPTER.md"),
+    )
 }

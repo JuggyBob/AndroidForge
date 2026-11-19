@@ -61,18 +61,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.checkbox(&mut app.inspector.auto_refresh, "Auto refresh");
         });
-        ui.horizontal_wrapped(|ui| {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Update interval")
+                RichText::new("Preview every")
                     .size(10.0)
                     .color(theme::MUTED),
             );
-            ui.spacing_mut().slider_width = 160.0;
-            ui.add(
-                egui::Slider::new(&mut app.inspector.interval_ms, 500..=5000)
-                    .suffix(" ms")
-                    .show_value(true),
-            );
+            ui.scope(|ui| {
+                theme::configure_slider(ui, 260.0);
+                ui.add_sized(
+                    [320.0, 22.0],
+                    egui::Slider::new(&mut app.inspector.interval_ms, 500..=5000)
+                        .suffix(" ms")
+                        .trailing_fill(true)
+                        .show_value(true),
+                );
+            });
             if app.inspector.frame_loading {
                 ui.spinner();
                 small(ui, "capturing frame");
@@ -95,13 +100,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     });
-    ui.add_space(8.0);
+    ui.add_space(theme::PAGE_GAP);
     performance(app, ui);
-    ui.add_space(8.0);
-    ui.columns(2, |columns| {
-        preview(app, &mut columns[0]);
-        hierarchy(app, &mut columns[1]);
+    ui.add_space(theme::PAGE_GAP);
+    let total = ui.available_width();
+    let preview_width = (total * 0.38).max(340.0);
+    let hierarchy_width = (total - preview_width - theme::PAGE_GAP).max(380.0);
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            Vec2::new(preview_width, 700.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                card_fixed_height(ui, 700.0, "inspector-preview-card", |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        preview(app, ui);
+                    });
+                });
+            },
+        );
+        ui.add_space(theme::PAGE_GAP);
+        ui.allocate_ui_with_layout(
+            Vec2::new(hierarchy_width, 700.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                card_fixed_height(ui, 700.0, "inspector-hierarchy-card", |ui| {
+                    hierarchy(app, ui);
+                });
+            },
+        );
     });
+    if let Some(node) = app.selected_node().cloned() {
+        ui.add_space(theme::PAGE_GAP);
+        node_details(app, ui, &node);
+    }
 }
 
 fn preview(app: &mut App, ui: &mut egui::Ui) {
@@ -124,7 +155,7 @@ fn preview(app: &mut App, ui: &mut egui::Ui) {
     };
     let (image_w, image_h) = app.inspector.image_size.unwrap_or((1080, 2400));
     let available = ui.available_size();
-    let max_h = 520.0;
+    let max_h = 600.0;
     let scale = (available.x / image_w as f32)
         .min(max_h / image_h as f32)
         .max(0.05);
@@ -190,7 +221,7 @@ fn preview(app: &mut App, ui: &mut egui::Ui) {
             ui.painter().rect_stroke(
                 highlight,
                 2.0,
-                Stroke::new(2.0, theme::ACCENT),
+                Stroke::new(2.0, theme::accent()),
                 egui::StrokeKind::Inside,
             );
         }
@@ -279,44 +310,35 @@ fn hierarchy(app: &mut App, ui: &mut egui::Ui) {
     let nodes = hierarchy.nodes.clone();
     let selected = app.inspector.selected_node;
     let collapsed = app.inspector.collapsed.clone();
-    let visible = visible_nodes(&nodes, hierarchy.root, &collapsed, &query);
+    let roots = if let Some(root) = hierarchy.root {
+        vec![root]
+    } else {
+        nodes
+            .iter()
+            .filter(|node| node.parent.is_none())
+            .map(|node| node.id)
+            .collect()
+    };
     let mut select = None;
     let mut toggle = None;
+    let mut tree = NodeTree {
+        nodes: &nodes,
+        collapsed: &collapsed,
+        selected,
+        query: &query,
+        select: &mut select,
+        toggle: &mut toggle,
+    };
     egui::ScrollArea::vertical()
         .id_salt("inspector-nodes")
-        .max_height(300.0)
+        .max_height(540.0)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
-            for item in &visible {
-                let Some(node) = nodes.iter().find(|node| node.id == item.id) else {
-                    continue;
-                };
-                ui.horizontal(|ui| {
-                    ui.add_space(item.depth as f32 * 12.0);
-                    if item.has_children {
-                        let glyph = if item.collapsed { "▶" } else { "▼" };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(glyph).size(8.0).color(theme::MUTED),
-                                )
-                                .frame(false)
-                                .min_size(Vec2::new(12.0, 14.0)),
-                            )
-                            .clicked()
-                        {
-                            toggle = Some(item.id);
-                        }
-                    } else {
-                        ui.add_space(12.0);
-                    }
-                    let label = node_label(node);
-                    if ui
-                        .selectable_label(selected == Some(node.id), RichText::new(label).size(9.5))
-                        .clicked()
-                    {
-                        select = Some(node.id);
-                    }
-                });
+            for (index, root) in roots.iter().enumerate() {
+                if index > 0 {
+                    ui.add_space(6.0);
+                }
+                node_card(ui, &mut tree, *root);
             }
         });
     if let Some(id) = toggle
@@ -327,81 +349,168 @@ fn hierarchy(app: &mut App, ui: &mut egui::Ui) {
     if let Some(id) = select {
         app.inspector.selected_node = Some(id);
     }
-    if let Some(node) = app.selected_node().cloned() {
-        ui.add_space(6.0);
-        node_details(app, ui, &node);
+}
+
+struct NodeTree<'a> {
+    nodes: &'a [UiNode],
+    collapsed: &'a std::collections::HashSet<usize>,
+    selected: Option<usize>,
+    query: &'a str,
+    select: &'a mut Option<usize>,
+    toggle: &'a mut Option<usize>,
+}
+
+fn node_card(ui: &mut egui::Ui, tree: &mut NodeTree<'_>, id: usize) {
+    let Some(node) = tree.nodes.iter().find(|node| node.id == id) else {
+        return;
+    };
+    let node_matches = tree.query.is_empty() || node_matches_query(node, tree.query);
+    let descendant_matches = !tree.query.is_empty()
+        && node
+            .children
+            .iter()
+            .any(|child| subtree_matches(tree.nodes, *child, tree.query));
+    if !node_matches && !descendant_matches {
+        return;
     }
-}
 
-#[derive(Clone, Copy)]
-struct VisibleNode {
-    id: usize,
-    depth: usize,
-    has_children: bool,
-    collapsed: bool,
-}
-
-fn visible_nodes(
-    nodes: &[UiNode],
-    root: Option<usize>,
-    collapsed: &std::collections::HashSet<usize>,
-    query: &str,
-) -> Vec<VisibleNode> {
-    let mut visible = Vec::new();
-    if !query.is_empty() {
-        for node in nodes {
-            let label = format!(
-                "{} {} {} {}",
-                node.text.as_deref().unwrap_or(""),
-                node.content_desc.as_deref().unwrap_or(""),
-                node.resource_id.as_deref().unwrap_or(""),
-                node.class.as_deref().unwrap_or("")
-            )
-            .to_ascii_lowercase();
-            if label.contains(query) {
-                visible.push(VisibleNode {
-                    id: node.id,
-                    depth: node.depth,
-                    has_children: !node.children.is_empty(),
-                    collapsed: false,
+    let has_children = !node.children.is_empty();
+    let open = if tree.query.is_empty() {
+        !tree.collapsed.contains(&id)
+    } else {
+        true
+    };
+    let state_id = ui.make_persistent_id(("inspector-node-card", id));
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), state_id, open);
+    state.set_open(open);
+    let openness = state.openness(ui.ctx());
+    let selected_here = tree.selected == Some(id);
+    let dark = ui.style().visuals.dark_mode;
+    let fill = if selected_here {
+        theme::accent_soft()
+    } else {
+        theme::row_fill(ui)
+    };
+    let border = if selected_here {
+        theme::accent()
+    } else {
+        theme::border_color(ui)
+    };
+    let response = egui::Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1.0, border))
+        .corner_radius(theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            let header = node_header(ui, node, has_children, openness, selected_here);
+            if has_children {
+                state.show_body_unindented(ui, |ui| {
+                    ui.add_space(4.0);
+                    egui::Frame::new()
+                        .fill(if dark {
+                            theme::DARK_PANEL
+                        } else {
+                            Color32::from_rgb(235, 240, 247)
+                        })
+                        .stroke(Stroke::new(1.0, theme::border_color(ui)))
+                        .corner_radius(theme::ROW_RADIUS)
+                        .inner_margin(egui::Margin::symmetric(8, 8))
+                        .show(ui, |ui| {
+                            for (index, child) in node.children.iter().enumerate() {
+                                if index > 0 {
+                                    ui.add_space(4.0);
+                                }
+                                node_card(ui, tree, *child);
+                            }
+                        });
                 });
             }
-        }
-        return visible;
-    }
-    fn walk(
-        nodes: &[UiNode],
-        id: usize,
-        depth: usize,
-        collapsed: &std::collections::HashSet<usize>,
-        visible: &mut Vec<VisibleNode>,
-    ) {
-        let Some(node) = nodes.iter().find(|node| node.id == id) else {
-            return;
-        };
-        let is_collapsed = collapsed.contains(&id);
-        visible.push(VisibleNode {
-            id,
-            depth,
-            has_children: !node.children.is_empty(),
-            collapsed: is_collapsed,
-        });
-        if is_collapsed {
-            return;
-        }
-        for child in &node.children {
-            walk(nodes, *child, depth + 1, collapsed, visible);
+            header
+        })
+        .inner;
+    if response.clicked() {
+        *tree.select = Some(id);
+        if has_children {
+            *tree.toggle = Some(id);
         }
     }
-    if let Some(root) = root.or_else(|| {
-        nodes
+}
+
+fn node_header(
+    ui: &mut egui::Ui,
+    node: &UiNode,
+    has_children: bool,
+    openness: f32,
+    selected: bool,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
+    if response.hovered() && !selected {
+        ui.painter()
+            .rect_filled(rect, theme::ROW_RADIUS, theme::row_hover_fill(ui));
+    }
+    if has_children {
+        paint_chevron(
+            ui.painter(),
+            rect.left() + 14.0,
+            rect.center().y,
+            openness,
+            if selected {
+                theme::accent()
+            } else {
+                theme::MUTED
+            },
+        );
+    }
+    let mut content = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(Vec2::new(10.0, 0.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    content.add_space(18.0);
+    content.add(
+        egui::Label::new(
+            RichText::new(node_label(node))
+                .size(10.5)
+                .color(theme::text_color(ui)),
+        )
+        .truncate(),
+    );
+    response.on_hover_text(node_label(node))
+}
+
+fn paint_chevron(painter: &egui::Painter, x: f32, center_y: f32, openness: f32, color: Color32) {
+    let t = openness.clamp(0.0, 1.0);
+    let p1 = egui::pos2(x - 3.0, center_y - 4.0 + 1.5 * t);
+    let p2 = egui::pos2(x + 1.0 + 3.0 * t, center_y - 0.5 + 0.5 * t);
+    let p3 = egui::pos2(x - 3.0, center_y + 4.0 - 1.5 * t);
+    let stroke = Stroke::new(1.6, color);
+    painter.line_segment([p1, p2], stroke);
+    painter.line_segment([p2, p3], stroke);
+}
+
+fn node_matches_query(node: &UiNode, query: &str) -> bool {
+    format!(
+        "{} {} {} {}",
+        node.text.as_deref().unwrap_or(""),
+        node.content_desc.as_deref().unwrap_or(""),
+        node.resource_id.as_deref().unwrap_or(""),
+        node.class.as_deref().unwrap_or("")
+    )
+    .to_ascii_lowercase()
+    .contains(query)
+}
+
+fn subtree_matches(nodes: &[UiNode], id: usize, query: &str) -> bool {
+    let Some(node) = nodes.iter().find(|node| node.id == id) else {
+        return false;
+    };
+    node_matches_query(node, query)
+        || node
+            .children
             .iter()
-            .find(|node| node.parent.is_none())
-            .map(|node| node.id)
-    }) {
-        walk(nodes, root, 0, collapsed, &mut visible);
-    }
-    visible
+            .any(|child| subtree_matches(nodes, *child, query))
 }
 
 fn node_details(app: &mut App, ui: &mut egui::Ui, node: &UiNode) {

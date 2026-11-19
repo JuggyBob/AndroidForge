@@ -1,6 +1,5 @@
 use eframe::egui;
 use egui::{RichText, Vec2};
-use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
 use crate::components::*;
@@ -89,13 +88,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         );
     });
 
-    ui.add_space(12.0);
-    ui.columns(2, |columns| {
-        environment_panel(app, &mut columns[0]);
-        actions_panel(app, &mut columns[1], failed);
+    ui.add_space(theme::PAGE_GAP);
+    let gap = theme::PAGE_GAP;
+    let spacing = ui.spacing().item_spacing.x;
+    let width = ((ui.available_width() - gap) / 2.0).max(0.0);
+    ui.horizontal_top(|ui| {
+        ui.scope(|ui| {
+            ui.set_width(width);
+            environment_panel(app, ui);
+        });
+        ui.add_space((gap - spacing).max(0.0));
+        ui.scope(|ui| {
+            ui.set_width(width);
+            actions_panel(app, ui, failed);
+        });
     });
 
-    ui.add_space(12.0);
+    ui.add_space(theme::PAGE_GAP);
     section_label(ui, "Recent runs");
     if app.runs.value.runs.is_empty() {
         empty_state(
@@ -109,7 +118,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn environment_panel(app: &mut App, ui: &mut egui::Ui) {
-    card_min_height(ui, 238.0, |ui| {
+    card_fixed_height(ui, 300.0, "overview-health", |ui| {
         ui.horizontal(|ui| {
             section_title(ui, "Workspace health");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -183,7 +192,7 @@ fn environment_panel(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn actions_panel(app: &mut App, ui: &mut egui::Ui, failed: usize) {
-    card_min_height(ui, 238.0, |ui| {
+    card_fixed_height(ui, 300.0, "overview-actions", |ui| {
         section_title(ui, "Next actions");
         if failed > 0 {
             warning_banner(
@@ -259,54 +268,54 @@ fn recent_runs(app: &mut App, ui: &mut egui::Ui) {
     let runs = app.runs.value.runs.clone();
     let ctx = ui.ctx().clone();
     let mut open = None;
-    TableBuilder::new(ui)
-        .sense(egui::Sense::click())
-        .striped(false)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(380.0).at_least(220.0))
-        .column(Column::initial(80.0))
-        .column(Column::initial(150.0))
-        .column(Column::initial(80.0))
-        .column(Column::remainder())
-        .column(Column::initial(60.0))
-        .header(24.0, |mut header| {
-            for name in ["Run", "Status", "Scenario", "Duration", "", ""] {
-                header.col(|ui| {
-                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(28.0, runs.len().min(8), |mut row| {
-                let run = &runs[row.index()];
-                row.set_selected(app.selected_run.as_deref() == Some(run.run_id.as_str()));
-                row.col(|ui| {
-                    ui.add(
-                        egui::Label::new(RichText::new(&run.run_id).size(10.0).monospace())
-                            .truncate(),
-                    )
-                    .on_hover_text(&run.run_id);
-                });
-                row.col(|ui| {
-                    status_pill(ui, &run.status, theme::status_color(&run.status));
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(&run.command).size(10.0).color(theme::MUTED));
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(format_duration(run.duration_ms)).size(10.0));
-                });
-                row.col(|_ui| {});
-                row.col(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        open = Some(run.run_id.clone());
-                    }
-                });
-                if row.response().clicked() {
+    let width = ui.available_width();
+    let widths = proportional_widths(width, &[0.46, 0.08, 0.26, 0.11, 0.09], 10.0);
+    let run_width = widths[0];
+    let status_width = widths[1];
+    let scenario_width = widths[2];
+    let duration_width = widths[3];
+    let open_width = widths[4];
+    table_header(
+        ui,
+        &[
+            ("Run", run_width),
+            ("Status", status_width),
+            ("Scenario", scenario_width),
+            ("Duration", duration_width),
+            ("", open_width),
+        ],
+    );
+    for run in runs.iter().take(8) {
+        let response = selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+            row_cell(ui, run_width, |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(&run.run_id).size(10.0).monospace()).truncate(),
+                )
+                .on_hover_text(&run.run_id);
+            });
+            row_cell(ui, status_width, |ui| {
+                status_pill(ui, &run.status, theme::status_color(&run.status));
+            });
+            row_cell(ui, scenario_width, |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(&run.command).size(10.0).color(theme::MUTED))
+                        .truncate(),
+                );
+            });
+            row_cell(ui, duration_width, |ui| {
+                ui.label(RichText::new(format_duration(run.duration_ms)).size(10.0));
+            });
+            row_cell(ui, open_width, |ui| {
+                if secondary_button(ui, "Open").clicked() {
                     open = Some(run.run_id.clone());
                 }
             });
         });
+        if response.clicked() {
+            open = Some(run.run_id.clone());
+        }
+        ui.add_space(2.0);
+    }
     if let Some(run_id) = open {
         app.open_run(run_id, &ctx);
         app.set_page(Page::Runs);

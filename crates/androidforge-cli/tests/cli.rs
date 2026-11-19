@@ -537,6 +537,57 @@ fn doctor_fix_plan_is_read_only_and_structured() {
 }
 
 #[test]
+fn run_resume_preserves_manual_failure_history() {
+    let temp = tempfile::tempdir().unwrap();
+    project_with_defaults(temp.path());
+    let run = |args: &[&str]| {
+        binary()
+            .current_dir(temp.path())
+            .env("ANDROIDFORGE_HOME", temp.path())
+            .args(args)
+            .output()
+            .expect("run command")
+    };
+
+    let start = run(&["run", "start", "--name", "manual-failure", "--json"]);
+    assert!(start.status.success(), "{start:?}");
+    let started: Value = serde_json::from_slice(&start.stdout).unwrap();
+    let run_id = started["run_id"].as_str().unwrap().to_string();
+
+    let checkpoint = run(&["run", "checkpoint", "cp1", "--run", &run_id, "--json"]);
+    assert!(checkpoint.status.success(), "{checkpoint:?}");
+
+    let end = run(&[
+        "run", "end", "--run", &run_id, "--status", "failed", "--json",
+    ]);
+    assert_eq!(end.status.code(), Some(6), "{end:?}");
+
+    let resume = run(&[
+        "run",
+        "resume",
+        &run_id,
+        "--from-checkpoint",
+        "cp1",
+        "--json",
+    ]);
+    assert!(resume.status.success(), "{resume:?}");
+
+    let report_path = temp
+        .path()
+        .join(".artifacts")
+        .join("runs")
+        .join(&run_id)
+        .join("report.json");
+    let report: Value = serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    let history = report["failure_history"].as_array().unwrap();
+    assert_eq!(history.len(), 1, "{report}");
+    assert_eq!(history[0]["code"], "E_COMMAND_FAILED");
+    assert_eq!(history[0]["failed_operation"], "run");
+    assert_eq!(history[0]["context"]["run_status"], "failed");
+    assert_eq!(report["resume_count"], 1);
+}
+
+#[test]
 fn report_explain_is_deterministic_and_markdown_ready() {
     let temp = tempfile::tempdir().unwrap();
     project_with_defaults(temp.path());

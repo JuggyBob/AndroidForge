@@ -1,11 +1,70 @@
 # Verification record
 
-This document records what was actually run for the `0.10.0` agent-surface release, the `0.9.4`
-safety and repeatability release, the `0.9.3` contract and coverage release, the `0.9.2` patch, the
-`0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`,
-`0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated checks, real Android
-validation, desktop workflow validation and packaging validation from areas that were not
-exercised.
+This document records what was actually run for the `0.11.0` desktop and agent-onboarding beta, the
+`0.10.0` agent-surface release, the `0.9.4` safety and repeatability release, the `0.9.3` contract and
+coverage release, the `0.9.2` patch, the `0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0`
+delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It
+separates automated checks, real Android validation, desktop workflow validation and packaging
+validation from areas that were not exercised.
+
+## v0.11.0 verification (2026-11-19)
+
+### Scope
+
+Desktop and agent-onboarding beta:
+
+1. Setup final Agent Handoff page, copyable prompt and 8-step footer.
+2. Setup section fade/slide and gliding step-rail highlight.
+3. 33-font catalog including embedded JetBrains Mono and live previews.
+4. Recursive Inspector card tree with whole-row expansion and animated collapse.
+5. Consistent raised row cards, thinner status pills and taller rows across every row table.
+6. Compact hoverable Refresh, height-matched Online pill, readable light-mode sidebar and clipped
+   CLI-card path with a persistent console launcher.
+7. `run resume --from-checkpoint` failure-history preservation and concurrency/help fixes.
+
+### Environment
+
+- Windows host, Rust `1.100`, workspace version `0.11.0`.
+- Desktop release and CLI release binaries from `target\release`.
+- Isolated screenshot home with 44 session records and the IronPulse project selected.
+- Headless `aster_test` emulator for the live Inspector capture; stopped after the test.
+- Physical device present but not mutated: Xiaomi `DM9X8LFQYHSSQKIN`.
+
+### Automated gates
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo test --workspace`: **335 passed / 0 failed / 0 ignored**, 27 test executables.
+- `androidforge.exe --version`: `androidforge 0.11.0`.
+- `androidforge-desktop.exe --version`: `androidforge-desktop 0.11.0`.
+
+### Desktop validation
+
+- 14/14 desktop pages PASS in the smoke harness with 3.5s settle and seeded session/run data.
+- Setup Agent Handoff: Step 1→8 footer progression, full documentation paths, copy button, 1,712
+  character clipboard prompt, CLI path/workspace/command loop/safety line verified.
+- Setup animations: content brightness/ink ramp and highlight travel measured over ~320ms; real-mouse
+  step-rail clicks verified.
+- Recursive Inspector: live emulator hierarchy tested **1 → 2 → 3 nested card levels → 1**, honoring
+  whole-row clicks and collapse.
+- Light mode: selected sidebar text readable.
+- Refresh: 98×37 px vs 83×27 px Online pill, hover fill/border delta ~+11 per channel, UIA Invoke
+  reset the workspace-health timer and issued the expected CLI refresh calls.
+- CLI card: path right edge 12 px inside the card border, full path in the tooltip, persistent console
+  showed CLI help and prompt.
+- Screenshot gallery: 16 PNGs captured from the v0.11.0 build under `docs/screenshots/v0.11.0/`.
+
+### Not validated
+
+- Physical-device installs/vendor ROM mutation paths, Maestro execution, real instrumentation packages,
+  snapshot restore and root-only time changes.
+- Real Tesseract recognition accuracy.
+- MCP transports other than local stdio.
+- macOS and Linux hosts.
+- Long-duration stress and very large suites.
+- Code signing.
+
+The release publication record and asset hashes are appended after the GitHub release is published.
 
 ## v0.10.0 verification (2026-11-18)
 

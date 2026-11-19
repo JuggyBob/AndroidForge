@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, StrokeKind,
@@ -6,8 +7,39 @@ use eframe::egui::{
 
 use crate::state::ThemeMode;
 
-pub const ACCENT: Color32 = Color32::from_rgb(240, 166, 50);
+const DEFAULT_ACCENT: Color32 = Color32::from_rgb(240, 166, 50);
+static ACCENT_RGB: AtomicU32 = AtomicU32::new(0x00F0_A632);
+
+/// The current accent. Settings can change it at runtime; all UI should use
+/// this instead of a hard-coded constant.
+pub fn accent() -> Color32 {
+    let packed = ACCENT_RGB.load(Ordering::Relaxed);
+    Color32::from_rgb(
+        ((packed >> 16) & 0xFF) as u8,
+        ((packed >> 8) & 0xFF) as u8,
+        (packed & 0xFF) as u8,
+    )
+}
+
+pub fn set_accent(color: Color32) {
+    let packed = (u32::from(color.r()) << 16) | (u32::from(color.g()) << 8) | u32::from(color.b());
+    ACCENT_RGB.store(packed, Ordering::Relaxed);
+}
+
+pub fn accent_soft() -> Color32 {
+    let color = accent();
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 28)
+}
+
+/// Kept for compatibility with older call sites that only need the default.
+pub const ACCENT: Color32 = DEFAULT_ACCENT;
 pub const ACCENT_SOFT: Color32 = Color32::from_rgb(60, 45, 22);
+
+pub const CARD_RADIUS: u8 = 12;
+pub const ROW_RADIUS: u8 = 8;
+pub const CONTROL_HEIGHT: f32 = 30.0;
+pub const PAGE_GAP: f32 = 14.0;
+pub const ROW_HEIGHT: f32 = 38.0;
 pub const BLUE: Color32 = Color32::from_rgb(104, 168, 255);
 pub const GREEN: Color32 = Color32::from_rgb(74, 201, 112);
 pub const RED: Color32 = Color32::from_rgb(255, 107, 107);
@@ -16,12 +48,14 @@ pub const PURPLE: Color32 = Color32::from_rgb(177, 140, 255);
 pub const MUTED: Color32 = Color32::from_rgb(139, 153, 171);
 pub const TEXT: Color32 = Color32::from_rgb(231, 237, 245);
 
-pub const DARK_BG: Color32 = Color32::from_rgb(9, 12, 17);
-pub const DARK_PANEL: Color32 = Color32::from_rgb(14, 19, 26);
-pub const DARK_SURFACE: Color32 = Color32::from_rgb(20, 27, 36);
-pub const DARK_SURFACE_ALT: Color32 = Color32::from_rgb(26, 35, 47);
-pub const DARK_BORDER: Color32 = Color32::from_rgb(38, 49, 64);
-pub const DARK_BORDER_SOFT: Color32 = Color32::from_rgb(29, 38, 50);
+// GitHub-dark inspired palette. The canvas is close to true black, while
+// panels and surfaces stay distinguishable without a blue cast.
+pub const DARK_BG: Color32 = Color32::from_rgb(8, 11, 15);
+pub const DARK_PANEL: Color32 = Color32::from_rgb(13, 17, 23);
+pub const DARK_SURFACE: Color32 = Color32::from_rgb(22, 27, 34);
+pub const DARK_SURFACE_ALT: Color32 = Color32::from_rgb(33, 38, 45);
+pub const DARK_BORDER: Color32 = Color32::from_rgb(48, 54, 61);
+pub const DARK_BORDER_SOFT: Color32 = Color32::from_rgb(30, 36, 44);
 
 pub const LIGHT_BG: Color32 = Color32::from_rgb(242, 245, 249);
 pub const LIGHT_PANEL: Color32 = Color32::from_rgb(255, 255, 255);
@@ -73,12 +107,20 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode) {
 
 fn apply_style(style: &mut egui::Style, visuals: egui::Visuals) {
     style.visuals = visuals;
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.item_spacing = egui::vec2(10.0, 7.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.menu_margin = egui::Margin::same(8);
-    style.spacing.interact_size.y = 26.0;
-    style.spacing.scroll.bar_width = 8.0;
-    style.spacing.scroll.floating = true;
+    style.spacing.interact_size.y = CONTROL_HEIGHT;
+    // Solid, non-floating scrollbars reserve their own column. This keeps the
+    // scrollbar from covering cards or buttons on every page.
+    style.spacing.scroll = egui::style::ScrollStyle {
+        floating: false,
+        bar_width: 10.0,
+        handle_min_length: 28.0,
+        bar_inner_margin: 6.0,
+        bar_outer_margin: 2.0,
+        ..Default::default()
+    };
     style.text_styles.insert(
         egui::TextStyle::Heading,
         FontId::new(18.0, FontFamily::Proportional),
@@ -109,27 +151,27 @@ fn dark_visuals() -> egui::Visuals {
     visuals.extreme_bg_color = Color32::from_rgb(6, 9, 13);
     visuals.override_text_color = Some(TEXT);
     visuals.hyperlink_color = BLUE;
-    visuals.selection.bg_fill = Color32::from_rgb(55, 75, 104);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(210, 225, 255));
+    visuals.selection.bg_fill = accent_soft();
+    visuals.selection.stroke = Stroke::new(1.0, accent());
     visuals.widgets.noninteractive.bg_fill = DARK_PANEL;
     visuals.widgets.noninteractive.weak_bg_fill = DARK_PANEL;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, DARK_BORDER);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(7);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
     visuals.widgets.inactive.bg_fill = DARK_SURFACE;
     visuals.widgets.inactive.weak_bg_fill = DARK_SURFACE;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, DARK_BORDER);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
     visuals.widgets.hovered.bg_fill = DARK_SURFACE_ALT;
     visuals.widgets.hovered.weak_bg_fill = DARK_SURFACE_ALT;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(61, 78, 99));
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(34, 46, 61);
-    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(34, 46, 61);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(72, 79, 88));
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(38, 44, 52);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(38, 44, 52);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent());
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
     visuals.widgets.open.bg_fill = DARK_SURFACE_ALT;
     visuals.window_stroke = Stroke::new(1.0, DARK_BORDER);
-    visuals.window_corner_radius = egui::CornerRadius::same(10);
+    visuals.window_corner_radius = egui::CornerRadius::same(CARD_RADIUS);
     visuals.window_shadow = egui::epaint::Shadow {
         offset: [0, 10],
         blur: 28,
@@ -153,26 +195,26 @@ fn light_visuals() -> egui::Visuals {
     visuals.extreme_bg_color = Color32::WHITE;
     visuals.override_text_color = Some(Color32::from_rgb(22, 32, 45));
     visuals.hyperlink_color = Color32::from_rgb(20, 100, 200);
-    visuals.selection.bg_fill = Color32::from_rgb(194, 222, 255);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(20, 60, 110));
+    visuals.selection.bg_fill = accent_soft();
+    visuals.selection.stroke = Stroke::new(1.0, accent());
     visuals.widgets.noninteractive.bg_fill = LIGHT_PANEL;
     visuals.widgets.noninteractive.weak_bg_fill = LIGHT_PANEL;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, LIGHT_BORDER);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(7);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
     visuals.widgets.inactive.bg_fill = LIGHT_SURFACE;
     visuals.widgets.inactive.weak_bg_fill = LIGHT_SURFACE;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, LIGHT_BORDER);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
     visuals.widgets.hovered.bg_fill = Color32::from_rgb(228, 235, 244);
     visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(228, 235, 244);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(170, 184, 200));
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
     visuals.widgets.active.bg_fill = Color32::from_rgb(214, 224, 236);
     visuals.widgets.active.weak_bg_fill = Color32::from_rgb(214, 224, 236);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent());
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(ROW_RADIUS);
     visuals.window_stroke = Stroke::new(1.0, LIGHT_BORDER);
-    visuals.window_corner_radius = egui::CornerRadius::same(10);
+    visuals.window_corner_radius = egui::CornerRadius::same(CARD_RADIUS);
     visuals.window_shadow = egui::epaint::Shadow {
         offset: [0, 10],
         blur: 28,
@@ -198,12 +240,62 @@ pub fn surface_fill(ui: &egui::Ui) -> Color32 {
     }
 }
 
+pub fn text_color(ui: &egui::Ui) -> Color32 {
+    if ui.style().visuals.dark_mode {
+        TEXT
+    } else {
+        Color32::from_rgb(22, 32, 45)
+    }
+}
+
+pub fn nav_muted(ui: &egui::Ui) -> Color32 {
+    if ui.style().visuals.dark_mode {
+        MUTED
+    } else {
+        Color32::from_rgb(82, 97, 117)
+    }
+}
+
+/// Row tables sit on top of cards or the page background, so they need a
+/// visibly raised surface rather than a fill that blends into the parent.
+pub fn row_fill(ui: &egui::Ui) -> Color32 {
+    if ui.style().visuals.dark_mode {
+        Color32::from_rgb(33, 39, 47)
+    } else {
+        Color32::from_rgb(241, 246, 252)
+    }
+}
+
+pub fn row_hover_fill(ui: &egui::Ui) -> Color32 {
+    if ui.style().visuals.dark_mode {
+        Color32::from_rgb(41, 48, 58)
+    } else {
+        Color32::from_rgb(231, 238, 247)
+    }
+}
+
 pub fn border_color(ui: &egui::Ui) -> Color32 {
     if ui.style().visuals.dark_mode {
         DARK_BORDER
     } else {
         LIGHT_BORDER
     }
+}
+
+/// Make an egui slider clearly visible against both themes. The default rail
+/// is only a couple of pixels tall and disappears on the dark surface.
+pub fn configure_slider(ui: &mut egui::Ui, width: f32) {
+    let dark = ui.style().visuals.dark_mode;
+    ui.visuals_mut().widgets.inactive.bg_fill = if dark {
+        DARK_SURFACE_ALT
+    } else {
+        Color32::from_rgb(220, 228, 238)
+    };
+    ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border_color(ui));
+    ui.visuals_mut().slider_trailing_fill = true;
+    ui.visuals_mut().selection.bg_fill = accent();
+    ui.spacing_mut().slider_width = width;
+    ui.spacing_mut().slider_rail_height = 6.0;
 }
 
 pub fn status_color(status: &str) -> Color32 {

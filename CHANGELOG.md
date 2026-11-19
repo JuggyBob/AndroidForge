@@ -2,11 +2,131 @@
 
 All notable changes to AndroidForge are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses semantic versioning
-within its alpha release line.
+within its beta release line.
 
 ## [Unreleased]
 
-No changes yet.
+### Changed
+
+- Nothing yet.
+
+## [0.11.0] - 2026-11-19
+
+**Desktop & Agent Onboarding beta.** The CLI contract is unchanged. This release rebuilds the native
+cockpit around consistent cards, rows and typography, completes Setup with a copyable agent handoff,
+and fixes the run-resume failure-history edge case.
+
+### Added
+
+- **Setup Agent Handoff page:** an eighth and final wizard step shows a ready-to-send prompt containing
+  the full paths to `AGENT_GUIDE.md`, `USER_GUIDE.md`, `CAPABILITIES.md`, `README.md`, `EXIT_CODES.md`
+  and `PROJECT_ADAPTER.md`, the CLI executable, the workspace and the recommended agent loop. The
+  prompt is copyable with one button; the documentation folder and CLI path are also copyable/openable.
+- **Setup animations:** switching wizard sections now fades and slides the content pane and glides the
+  active-step highlight in the left rail. Whole-row step clicks, Back/Continue and direct step jumps
+  share the animation.
+- **33-font catalog:** embedded JetBrains Mono plus installed Windows fonts including Segoe UI, Aptos,
+  Bahnschrift, Calibri, Candara, Cascadia Code/Mono, Comic Sans, Consolas, Constantia, Corbel,
+  Courier New, Ebrima, Franklin Gothic, Gabriola, Georgia, Impact, Ink Free, Lucida fonts, Microsoft
+  Sans Serif, Palatino Linotype, Segoe Print/Script, Sylfaen, Tahoma, Times New Roman, Trebuchet and
+  Verdana. The picker keeps live `Lorem Ipsum` previews and persists the choice.
+- **Recursive Inspector cards:** each hierarchy object is a row card. Expanding a row turns it into a
+  card containing child row cards; children recursively expand into deeper cards. Clicking anywhere on
+  a row works, the body slides open/closed, and collapsing returns to the initial state.
+- **Screenshot gallery:** 16 current screenshots covering every major page, Setup Agent Handoff and
+  light mode, published under `docs/screenshots/v0.11.0/` and as a release asset.
+- **Documentation navigation:** the release notes and README link the screenshot gallery and the agent
+  handoff flow.
+
+### Changed
+
+- **Desktop visual overhaul:** GitHub-dark and light palettes, reusable card gutters, rounded cards,
+  thin status pills with larger text, taller row tables, a lighter raised surface behind every row,
+  solid right-side scrollbars and a short page slide-up transition.
+- **All row tables:** Sessions, Ownership, Runs, Overview recent runs, Maintenance lists and Inspector
+  use the same raised rounded row card, aligned columns and hover/selection treatment.
+- **Topbar:** Settings moved to the sidebar; Refresh is a compact rounded button with a hand-painted
+  circular-arrow icon, hover highlight and UI Automation Invoke support; the Online/Offline pill is
+  height-matched to Refresh.
+- **Bottom-left CLI card:** compact two-line layout, path is middle-truncated and clipped inside the
+  card, full path appears in the hover tooltip, and the whole card is one accessible button that opens
+  a persistent `cmd /K` console running the CLI.
+- **Settings page:** connection, workspace, owner, theme, accent, font, updates and about are now one
+  scrollable page. The color wheel, brightness slider and font picker use the same visible slider and
+  hover styling as the Inspector.
+- **Light mode:** selected sidebar text, setup step labels, font-picker rows and segmented controls use
+  theme-aware foreground colors; nav group and unselected nav colors are darker for readability.
+- **Setup finish flow:** the old summary page now leads to Agent Handoff; the footer shows Step 8 of 8
+  and Finish setup. Changing sections resets the page scroll to the top.
+- **Sessions loading:** the page shows a spinner instead of a false “No sessions” state while the CLI
+  list is in flight.
+- **Inspector refresh:** manual Refresh is ignored while an automatic frame/hierarchy dump is already
+  running, preventing concurrent UIAutomator failures.
+- **Matrix copy:** `agent matrix --help` and the desktop help text describe the implemented parallel
+  worker model instead of calling parallel execution unvalidated.
+- Workspace, CLI, desktop, installer and compatibility version are `0.11.0`.
+- Repository: local-only `SPEC-v*.md` drafts are no longer tracked or published; they remain on the
+  developer machine and are ignored by `.gitignore`.
+
+### Fixed
+
+- `run resume --from-checkpoint` preserves a `failure_history` record when the previous attempt was
+  finalized with `run end --status failed` (or another non-success terminal status) without a
+  structured step failure. The record carries the terminal status and exit code.
+- CLI card opened the executable in a console that immediately closed; it now runs `cmd /K` with a
+  correctly quoted path and remains at a prompt.
+- CLI card path overflowed the card; it is now clipped and middle-truncated with a full-path tooltip.
+- Topbar Refresh was unnecessarily wide because of leading spaces; the icon and label are now laid out
+  compactly at 98×37 px versus the 83×27 px Online pill, with the icon painted instead of using a
+  missing font glyph.
+- Light-mode selected sidebar text was invisible; selected and unselected nav colors are now readable.
+- Overview warning rows rendered with zero gap (`maestronot found`) because the two-column layout set
+  horizontal item spacing to zero; spacing is restored without changing the column widths.
+- Brightness and Inspector interval sliders could be invisible on dark surfaces; both now use a 6 px
+  rail, visible handle, accent trailing fill and themed inactive background.
+- Run resume failure history, setup scroll reset, matrix help copy, and concurrent Inspector refresh
+  races are covered by the updated regression suite.
+
+### Release assets
+
+- `androidforge-cli-windows-x86_64.zip` — standalone `androidforge.exe` for PATH and automation.
+- `androidforge-desktop-windows-x86_64.zip` — portable `androidforge.exe` + `androidforge-desktop.exe`,
+  license and documentation.
+- `androidforge-windows-x86_64-setup.exe` — per-user Windows installer with both executables, Start Menu
+  shortcuts and uninstaller; user data outside the install directory is preserved.
+- `androidforge-screenshots-v0.11.0.zip` — 16 PNG screenshots of the v0.11.0 desktop UI.
+- `SHA256SUMS.txt` — SHA-256 checksums for the CLI, desktop and installer assets.
+
+All binaries are intentionally unsigned. Windows SmartScreen may warn on first launch.
+
+### Validation
+
+- `cargo test --workspace`: **335 passed / 0 failed / 0 ignored**, 27 test executables.
+- `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- Desktop smoke: **14/14 pages PASS**, 0 blank pages, seeded Sessions/Ownership/Runs data, correct
+  breadcrumbs, no leftover processes.
+- Setup Agent Handoff: clipboard prompt verified with all six full documentation paths, CLI path,
+  workspace and command loop; 8-step footer progression verified.
+- Setup animations: measured content fade/slide and step-rail highlight glide over ~320 ms.
+- Recursive Inspector: live emulator test progressed **1 → 2 → 3 nested card levels → 1**; whole-row
+  clicks and animated collapse verified; isolated emulator and session cleaned up.
+- Light mode: selected sidebar item readable; settings left unchanged.
+- Topbar Refresh: 98×37 px button vs 83×27 px Online pill, hover fill/border change, UIA Invoke
+  confirmed by the workspace-health timer reset and CLI refresh calls.
+- CLI card: path text right edge 12 px inside the card border; full path available in the tooltip;
+  persistent console showed CLI help and the command prompt.
+- Screenshot gallery: 16 images from the v0.11.0 release binary.
+
+### Known limitations
+
+- Physical devices, vendor ROM installs, Maestro execution, a real instrumentation package, snapshot
+  restore and root-only time changes remain incompletely validated.
+- Real Tesseract accuracy is engine- and language-data-dependent.
+- MCP is local stdio only; no HTTP/SSE transport is shipped.
+- macOS and Linux hosts are not validated.
+- The desktop is Windows-focused; code signing is not included.
+- Screenshots and test evidence may expose local project paths and emulator labels; review them before
+  publishing in a different environment.
 
 ## [0.10.0] - 2026-11-18
 
@@ -711,7 +831,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.11.0
 [0.10.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.10.0
 [0.9.4]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.4
 [0.9.3]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.3

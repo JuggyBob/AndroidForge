@@ -22,7 +22,6 @@ eframe = { version = "0.37", default-features = false, features = [
     "links",
     "persistence",
 ] }
-egui_extras = { version = "0.37", default-features = false, features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rfd = { version = "0.18", default-features = false, features = ["common-controls-v6"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -36,10 +35,12 @@ thiserror = "2.0"
 ureq = "3.5.2"
 zip = "9.6.0"
 chrono.workspace = true
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
 ] }

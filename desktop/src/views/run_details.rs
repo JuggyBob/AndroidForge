@@ -1,6 +1,5 @@
 use eframe::egui;
 use egui::{RichText, Vec2};
-use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
 use crate::backend::evidence;
@@ -196,53 +195,56 @@ fn summary(ui: &mut egui::Ui, report: &crate::models::RunReport) {
         return;
     }
     let steps = report.steps.clone();
-    TableBuilder::new(ui)
-        .striped(false)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(60.0))
-        .column(Column::initial(85.0))
-        .column(Column::remainder().at_least(180.0))
-        .column(Column::initial(80.0))
-        .column(Column::initial(55.0))
-        .column(Column::initial(65.0))
-        .header(24.0, |mut header| {
-            for name in ["#", "Status", "Step", "Duration", "Exit", "Artifacts"] {
-                header.col(|ui| {
-                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(28.0, steps.len(), |mut row| {
-                let step = &steps[row.index()];
-                row.col(|ui| {
-                    ui.label(RichText::new(&step.id).size(9.0).monospace());
-                });
-                row.col(|ui| {
-                    status_pill(ui, &step.status, theme::status_color(&step.status));
-                });
-                row.col(|ui| {
-                    ui.add(egui::Label::new(RichText::new(&step.name).size(10.0)).truncate())
-                        .on_hover_text(&step.name);
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(format_duration(step.duration_ms)).size(10.0));
-                });
-                row.col(|ui| {
-                    ui.label(
-                        RichText::new(
-                            step.exit_code
-                                .map(|value| value.to_string())
-                                .unwrap_or_else(|| "-".to_string()),
-                        )
-                        .size(10.0),
-                    );
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(step.artifacts.len().to_string()).size(10.0));
-                });
+    let width = ui.available_width();
+    let widths = proportional_widths(width, &[0.05, 0.09, 0.53, 0.13, 0.07, 0.13], 10.0);
+    let id_width = widths[0];
+    let status_width = widths[1];
+    let name_width = widths[2];
+    let duration_width = widths[3];
+    let exit_width = widths[4];
+    let artifacts_width = widths[5];
+    table_header(
+        ui,
+        &[
+            ("#", id_width),
+            ("Status", status_width),
+            ("Step", name_width),
+            ("Duration", duration_width),
+            ("Exit", exit_width),
+            ("Artifacts", artifacts_width),
+        ],
+    );
+    for step in &steps {
+        selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+            row_cell(ui, id_width, |ui| {
+                ui.label(RichText::new(&step.id).size(9.0).monospace());
+            });
+            row_cell(ui, status_width, |ui| {
+                status_pill(ui, &step.status, theme::status_color(&step.status));
+            });
+            row_cell(ui, name_width, |ui| {
+                ui.add(egui::Label::new(RichText::new(&step.name).size(10.5)).truncate())
+                    .on_hover_text(&step.name);
+            });
+            row_cell(ui, duration_width, |ui| {
+                ui.label(RichText::new(format_duration(step.duration_ms)).size(10.0));
+            });
+            row_cell(ui, exit_width, |ui| {
+                ui.label(
+                    RichText::new(
+                        step.exit_code
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                    )
+                    .size(10.0),
+                );
+            });
+            row_cell(ui, artifacts_width, |ui| {
+                ui.label(RichText::new(step.artifacts.len().to_string()).size(10.0));
             });
         });
+        ui.add_space(2.0);
+    }
     if !report.artifacts.is_empty() {
         muted(
             ui,

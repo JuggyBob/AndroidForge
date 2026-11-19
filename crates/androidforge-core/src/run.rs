@@ -40,6 +40,19 @@ impl RunStatus {
     pub fn is_terminal(self) -> bool {
         !matches!(self, Self::Running)
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Partial => "partial",
+            Self::Cancelled => "cancelled",
+            Self::Interrupted => "interrupted",
+            Self::TimedOut => "timed_out",
+            Self::Abandoned => "abandoned",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +90,60 @@ impl FailureInfo {
             context: body.context.clone(),
             artifacts: body.artifacts.clone(),
         }
+    }
+
+    /// Build a record for a terminal non-success run that was finalized
+    /// without a structured step failure, for example
+    /// `run end --status failed`. Without this, a later `run resume` has
+    /// nothing to preserve in `failure_history`.
+    pub fn from_terminal_status(status: RunStatus, exit_code: i32) -> Option<Self> {
+        let (code, message, suggestions) = match status {
+            RunStatus::Failed => (
+                ErrorCode::CommandFailed,
+                "run was finalized as failed without a structured step failure",
+                vec![
+                    "Inspect report.json and the run artifacts before resuming.".to_string(),
+                    "Use a failed step or run end --status failed only when the failure is intentional."
+                        .to_string(),
+                ],
+            ),
+            RunStatus::Partial => (
+                ErrorCode::PartialFailure,
+                "run was finalized as partial without a structured step failure",
+                vec!["Inspect report.json and the run artifacts before resuming.".to_string()],
+            ),
+            RunStatus::Cancelled => (
+                ErrorCode::CommandFailed,
+                "run was cancelled without a structured step failure",
+                vec!["Resume from a checkpoint if the cancelled work should continue.".to_string()],
+            ),
+            RunStatus::Interrupted | RunStatus::Abandoned => (
+                ErrorCode::Interrupted,
+                "run was interrupted without a structured step failure",
+                vec!["Inspect the run and resume from a checkpoint when ready.".to_string()],
+            ),
+            RunStatus::TimedOut => (
+                ErrorCode::CommandTimeout,
+                "run timed out without a structured step failure",
+                vec!["Inspect the run and retry or resume from a checkpoint.".to_string()],
+            ),
+            RunStatus::Running | RunStatus::Passed => return None,
+        };
+        let mut context = BTreeMap::new();
+        context.insert(
+            "run_status".to_string(),
+            Value::String(status.as_str().to_string()),
+        );
+        context.insert("exit_code".to_string(), Value::from(exit_code));
+        Some(Self {
+            code,
+            message: message.to_string(),
+            failed_operation: "run".to_string(),
+            recoverable: true,
+            suggestions,
+            context,
+            artifacts: Vec::new(),
+        })
     }
 }
 
@@ -715,7 +782,13 @@ impl RunContext {
                 note: Some("implicit resume point".to_string()),
             }
         };
-        if let Some(failure) = self.report.failure.take() {
+        // A manual `run end --status failed` does not necessarily leave a
+        // step failure behind. Preserve the terminal status as a failure
+        // record so a resume never loses why the previous attempt stopped.
+        let prior_failure = self.report.failure.take().or_else(|| {
+            FailureInfo::from_terminal_status(self.report.status, self.report.exit_code)
+        });
+        if let Some(failure) = prior_failure {
             self.report.failure_history.push(failure);
         }
         self.report.status = RunStatus::Running;
@@ -1129,6 +1202,41 @@ mod tests {
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
         assert!(parsed.iter().all(|event| event["run_id"] == context.run_id));
+    }
+
+    #[test]
+    fn resuming_a_manually_failed_run_preserves_failure_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = RunOptions::new(
+            temp.path().join(".artifacts"),
+            temp.path(),
+            "Example",
+            "run.manual",
+        );
+        let mut context = RunContext::create(options, Redactor::default()).unwrap();
+        context.checkpoint("cp1", None).unwrap();
+        context
+            .finalize(RunStatus::Failed, ErrorCode::CommandFailed.exit_code())
+            .unwrap();
+        assert!(
+            context.report.failure.is_none(),
+            "the manual failed run has no step failure by design"
+        );
+
+        context.resume(Some("cp1")).unwrap();
+        assert_eq!(context.report.failure_history.len(), 1);
+        let failure = &context.report.failure_history[0];
+        assert_eq!(failure.code.as_str(), "E_COMMAND_FAILED");
+        assert_eq!(failure.failed_operation, "run");
+        assert_eq!(
+            failure.context.get("run_status").and_then(Value::as_str),
+            Some("failed")
+        );
+
+        let report: RunReport = read_json(&context.report_path()).unwrap();
+        assert_eq!(report.status, RunStatus::Running);
+        assert_eq!(report.resume_count, 1);
+        assert_eq!(report.failure_history.len(), 1);
     }
 
     #[test]

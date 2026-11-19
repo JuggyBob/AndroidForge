@@ -108,10 +108,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             if secondary_button(ui, "Export").clicked() {
                 app.export_logcat();
             }
-            if ghost_button(ui, "Clear").clicked() {
+            if secondary_button(ui, "Clear").clicked() {
                 app.clear_logcat();
             }
-            ui.checkbox(&mut app.logcat.follow, "Follow latest");
+            let follow_label = if app.logcat.follow {
+                "Following latest"
+            } else {
+                "Follow latest"
+            };
+            if secondary_button(ui, follow_label).clicked() {
+                app.logcat.follow = true;
+                app.logcat.paused = false;
+                ui.ctx().request_repaint();
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 small(
                     ui,
@@ -133,7 +142,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             path_row(ui, path);
         }
     });
-    ui.add_space(8.0);
+    ui.add_space(theme::PAGE_GAP);
     let min_rank = level_rank(&app.logcat.level);
     let query = app.logcat.search.to_ascii_lowercase();
     let entries = app
@@ -161,58 +170,87 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         );
         return;
     }
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [96.0, 16.0],
+            egui::Label::new(RichText::new("TIME").size(9.0).strong().color(theme::MUTED)),
+        );
+        ui.add_sized(
+            [58.0, 16.0],
+            egui::Label::new(
+                RichText::new("LEVEL")
+                    .size(9.0)
+                    .strong()
+                    .color(theme::MUTED),
+            ),
+        );
+        ui.add_sized(
+            [176.0, 16.0],
+            egui::Label::new(RichText::new("TAG").size(9.0).strong().color(theme::MUTED)),
+        );
+        ui.label(
+            RichText::new("MESSAGE")
+                .size(9.0)
+                .strong()
+                .color(theme::MUTED),
+        );
+    });
+    ui.add_space(2.0);
     let available = ui.available_height().max(240.0);
-    egui::ScrollArea::both()
+    let output = egui::ScrollArea::both()
         .id_salt("logcat-scroll")
-        .stick_to_bottom(app.logcat.follow && !app.logcat.paused)
+        .vertical_scroll_offset(app.logcat.scroll_offset)
         .max_height(available)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for entry in &entries {
+            for (index, entry) in entries.iter().enumerate() {
                 let color = log_color(&entry.level, entry.crash);
                 let (rect, _) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width().max(600.0), 18.0),
+                    Vec2::new(ui.available_width().max(600.0), 20.0),
                     egui::Sense::hover(),
                 );
-                if entry.crash {
-                    ui.painter().rect_filled(
-                        rect,
-                        2.0,
-                        egui::Color32::from_rgba_unmultiplied(255, 107, 107, 18),
-                    );
+                let background = if entry.crash {
+                    egui::Color32::from_rgba_unmultiplied(255, 107, 107, 24)
+                } else if index % 2 == 0 {
+                    ui.style().visuals.faint_bg_color
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                if background != egui::Color32::TRANSPARENT {
+                    ui.painter().rect_filled(rect, 4.0, background);
                 }
                 let painter = ui.painter();
                 painter.text(
-                    rect.left_center() + Vec2::new(4.0, 0.0),
+                    rect.left_center() + Vec2::new(8.0, 0.0),
                     egui::Align2::LEFT_CENTER,
                     &entry.timestamp,
                     egui::FontId::monospace(9.0),
                     theme::MUTED,
                 );
                 painter.text(
-                    rect.left_center() + Vec2::new(112.0, 0.0),
+                    rect.left_center() + Vec2::new(116.0, 0.0),
                     egui::Align2::LEFT_CENTER,
                     &entry.level,
                     egui::FontId::monospace(9.5),
                     color,
                 );
                 let tag_clip = egui::Rect::from_min_max(
-                    egui::pos2(rect.left() + 132.0, rect.top()),
-                    egui::pos2(rect.left() + 308.0, rect.bottom()),
+                    egui::pos2(rect.left() + 172.0, rect.top()),
+                    egui::pos2(rect.left() + 340.0, rect.bottom()),
                 );
                 painter.with_clip_rect(tag_clip).text(
-                    rect.left_center() + Vec2::new(132.0, 0.0),
+                    rect.left_center() + Vec2::new(172.0, 0.0),
                     egui::Align2::LEFT_CENTER,
-                    truncate_end(&entry.tag, 30),
+                    truncate_end(&entry.tag, 28),
                     egui::FontId::monospace(9.5),
                     color,
                 );
                 let message_clip = egui::Rect::from_min_max(
-                    egui::pos2(rect.left() + 320.0, rect.top()),
+                    egui::pos2(rect.left() + 348.0, rect.top()),
                     rect.right_bottom(),
                 );
                 painter.with_clip_rect(message_clip).text(
-                    rect.left_center() + Vec2::new(320.0, 0.0),
+                    rect.left_center() + Vec2::new(348.0, 0.0),
                     egui::Align2::LEFT_CENTER,
                     &entry.message,
                     egui::FontId::monospace(9.5),
@@ -224,6 +262,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 );
             }
         });
+    let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
+    let user_scrolled = ui
+        .ctx()
+        .input(|input| input.smooth_scroll_delta.y.abs() > 0.1);
+    if user_scrolled && app.logcat.follow && output.state.clamped_offset().y < max_offset - 2.0 {
+        app.logcat.follow = false;
+    }
+    if app.logcat.follow && !app.logcat.paused {
+        let current = output.state.clamped_offset().y;
+        let next = current + (max_offset - current) * 0.18;
+        if (max_offset - next).abs() > 1.0 {
+            app.logcat.scroll_offset = next;
+            ui.ctx().request_repaint();
+        } else {
+            app.logcat.scroll_offset = max_offset;
+        }
+    } else {
+        app.logcat.scroll_offset = output.state.clamped_offset().y;
+    }
 }
 
 fn truncate_end(value: &str, max_chars: usize) -> String {

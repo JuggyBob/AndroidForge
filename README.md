@@ -4,12 +4,12 @@
 
 [![CI](https://github.com/JuggyBob/AndroidForge/actions/workflows/ci.yml/badge.svg)](https://github.com/JuggyBob/AndroidForge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
+[![Status: Beta](https://img.shields.io/badge/status-beta-blue.svg)](#project-status)
 
-> **Alpha `v0.10.0`.** AndroidForge is usable today for emulator-driven development and agent
-> workflows, but it is not a finished product. Windows is the tested host, and physical devices,
-> Maestro, instrumentation, snapshot restore and root-only operations are not yet fully validated.
-> Read [Project status](#project-status) before relying on it.
+> **Beta `v0.11.0`.** AndroidForge is usable today for emulator-driven development and agent
+> workflows. Windows is the tested host; physical devices, Maestro, instrumentation, snapshot restore
+> and root-only operations are not yet fully validated. Read [Project status](#project-status) before
+> relying on it.
 
 AndroidForge is a local-first Rust toolkit: a single native CLI for automation plus an optional native
 desktop cockpit for humans. The CLI gives an AI coding agent a reliable way to acquire an Android
@@ -81,6 +81,33 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
 
+## What is new in v0.11.0
+
+The desktop & agent-onboarding beta. The CLI contract is unchanged; this release makes the desktop
+cockpit substantially more usable and gives a finished setup a ready-to-send agent prompt.
+
+- **Complete visual overhaul:** GitHub-dark and light themes, consistent card gutters, rounded cards
+  and rows, thinner status pills with larger text, solid scrollbars, page slide-up transitions and a
+  gliding sidebar highlight.
+- **Setup → Agent Handoff:** the wizard gains an eighth and final step with a copyable prompt that
+  contains the full documentation paths, CLI executable, workspace and agent loop. Setup step changes
+  now fade/slide and the step-rail highlight glides.
+- **Settings as a page:** color-wheel accent picker, brightness slider, 33-font catalog including
+  embedded JetBrains Mono, live font previews, persistent theme/accent/font choices and a path block
+  with rounded Copy/Open actions.
+- **Recursive Inspector cards:** top-level hierarchy rows expand into cards of child rows, recursively,
+  with whole-row activation and an animated collapse.
+- **Row tables everywhere:** Sessions, Ownership, Runs, Overview and Inspector use raised rounded row
+  cards with a visibly lighter surface, aligned columns and consistent pills.
+- **Native desktop polish:** compact topbar Refresh with a painted icon and hover state; connection tag
+  matched to the Refresh height; compact clickable CLI card that opens a persistent console; light-mode
+  sidebar text is readable.
+- **Fixed:** `run resume --from-checkpoint` keeps a `failure_history` record when the previous attempt
+  ended in a failed terminal status without a structured step failure.
+- **Screenshots:** the release includes a 16-image gallery of the updated UI in
+  [`docs/screenshots/v0.11.0/`](docs/screenshots/v0.11.0/README.md) and a downloadable
+  `androidforge-screenshots-v0.11.0.zip` asset.
+
 ## What is new in v0.10.0
 
 Seven agent-facing capabilities, delivered together:
@@ -131,7 +158,7 @@ Seven agent-facing capabilities, delivered together:
 - **Bounded observation storage:** `[storage] observation_retention` (default 20, range 2-1000) controls how many observation records are kept per session. Token allocation, writes and pruning are serialized with a cross-process `StateLock`, so parallel commands cannot reuse a token or race retention.
 - **Empty hierarchy recovery:** a valid but empty UIAutomator hierarchy is treated as a transient capture failure and retried instead of being returned as a blank successful screen.
 - **Certification coverage:** the 26 checks that were `NOT RUN` in the v0.9.1/v0.9.2 certification record were exercised against a clean API 36 AVD, including session restart, warm/cold performance, flaky analysis, reconcile, JUnit import failure, bundle screenshot handling, mismatched adapters and a 10-cycle app soak.
-- **Desktop render gate:** `desktop/tests/smoke.ps1` launches all 13 pages, captures a screenshot per page, checks the window rendered, records the Windows UI Automation tree and invokes Refresh on overview. The local release run passed 13/13 pages.
+- **Desktop render gate:** `desktop/tests/smoke.ps1` launches all 14 pages, captures a screenshot per page, checks the window rendered, records the Windows UI Automation tree and invokes Refresh on overview. The v0.11.0 local release run passed 14/14 pages.
 - **Exit-code drift test:** `EXIT_CODES.md` is now checked against `ErrorCode::ALL`; `session stop` is documented as owner-guarded rather than `--yes`-guarded.
 - **Physical device:** not validated. The Poco X4 GT / HyperOS 2 device was not connected during this release, so item 4 is recorded as **BLOCKED** in [VERIFICATION.md](VERIFICATION.md), not passed.
 
@@ -252,7 +279,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.10.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.11.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -324,7 +351,7 @@ androidforge report explain latest-failure --json
 androidforge report recurrences --project . --json
 androidforge report bundle latest-failure --output .\\evidence.zip --json
 
-# Use a stable element reference, then run a sequential device matrix.
+# Use a stable element reference, then run a device matrix.
 androidforge ui observe --session ses-... --json
 androidforge ui tap --session ses-... --ref el-... --expect-token obs-... --json
 androidforge ui text "hello" --session ses-... --ref el-... --expect-token obs-... --json
@@ -370,14 +397,27 @@ androidforge report show latest --json
 same sessions, runs and evidence the CLI produces. It is built with Rust, egui/eframe and glow; there is
 no WebView, JavaScript, HTML, Node or browser runtime.
 
-The cockpit has four pages:
+The cockpit has fourteen pages:
 
-- **Overview** — environment health, device/session counts, recent runs and project context.
-- **Devices** — serial, model, Android version, boot state, battery and current owner.
-- **Sessions** — owner, heartbeat, prepared settings and validated `Release`, `Stop` and `Restart`
+- **Setup** - seven setup checks plus the final **Agent Handoff** prompt.
+- **Overview** - environment health, device/session counts, next actions and recent runs.
+- **Context** - one read-only project/session/device/app/screen/last-run snapshot.
+- **Devices** - serial, model, Android version, boot state, battery, ownership and wireless ADB.
+- **Sessions** - owner, heartbeat, prepared settings and validated `Release`, `Stop` and `Restart`
   actions behind explicit confirmations.
-- **Runs** — report-backed run table, build identity, steps, failure details, screenshots, hierarchy,
+- **Ownership** - sessions and leases, device owners, stale state and safe alternatives.
+- **Runs** - report-backed run table, build identity, steps, failure details, screenshots, hierarchy,
   logs, raw files and checksum-manifest verification.
+- **Triage** - deterministic failure explanation, recurrence evidence and diagnostic bundles.
+- **Compare** - compatible run comparison and build/environment differences.
+- **Matrix** - sequential or parallel per-device conformance runs.
+- **Logcat** - bounded live streaming with package/level/search filters and Follow latest.
+- **Inspector** - device preview, recursive semantic hierarchy cards and node actions.
+- **Maintenance** - managed paths, cleanup preview, session/run pruning and largest-run review.
+- **Settings** - connection, theme, accent, fonts, updates and about.
+
+Settings, setup and typography are now pages rather than separate windows. The final setup page provides
+a copyable agent prompt with the full documentation paths and the recommended command loop.
 
 P1 actions are intentionally narrow: start an emulator, attach a device, choose and inspect an APK,
 dry-run or install it, run fixtures/conformance flows/hooks, stream output and cancel a run. Cancellation
@@ -462,17 +502,23 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Alpha `v0.10.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
+**Beta `v0.11.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
 emulators, including a two-AVD parallel matrix, and against a Xiaomi HyperOS device for read-only and
-safe UI paths. v0.10.0 adds the MCP server and tool export, selector v2 with optional local OCR,
-resumable runs with NDJSON events, structured logcat query/watch, generic intents and deep links,
-network profiles/proxy control, bounded device waiting and a parallel matrix. The v0.9.x safety
-fixes remain in place. See
+safe UI paths. v0.11.0 is the desktop and agent-onboarding beta: the cockpit was rebuilt around
+consistent cards, rows and status tags; Setup ends with a copyable agent handoff prompt; Settings has
+theme/accent/font controls and a 33-font catalog; the Inspector hierarchy expands as recursive cards.
+v0.10.0 added the MCP server and tool export, selector v2 with optional local OCR, resumable runs with
+NDJSON events, structured logcat query/watch, generic intents and deep links, network profiles/proxy
+control, bounded device waiting and a parallel matrix. The v0.9.x safety fixes remain in place. See
 [VERIFICATION.md](VERIFICATION.md), [docs/REAL_DEVICE_COMPATIBILITY.md](docs/REAL_DEVICE_COMPATIBILITY.md),
 [docs/LONG_HORIZON_TESTING.md](docs/LONG_HORIZON_TESTING.md) and [case-studies/](case-studies/).
 
 Validated:
 
+- v0.11.0 desktop beta validation: 14/14 page smoke with seeded data, Settings brightness and
+  font catalog, row-card consistency, topbar Refresh accessibility and hover, CLI-card path clipping
+  and persistent console launch, light-mode sidebar readability, Setup Agent Handoff clipboard prompt
+  and animations, and live recursive Inspector cards (including an isolated emulator cleanup).
 - Windows 10/11 host, Android 16 / API 36 emulator, x86_64.
 - APK install and signature/version/hash verification.
 - Semantic UI navigation, text entry, scrolling, waits and assertions.
@@ -515,7 +561,7 @@ Validated:
 - v0.9.3 contract and coverage validation: all released schemas compiled and representative payloads
   validated, nested unknown adapter fields rejected, configurable observation retention with
   cross-process locking, empty-hierarchy retry, and the 26 previously `NOT RUN` certification checks
-  exercised on a clean API 36 AVD. The desktop smoke harness rendered all 13 pages with UI Automation
+  exercised on a clean API 36 AVD. The desktop smoke harness rendered all 14 pages with UI Automation
   and invoked Refresh.
 - v0.10.0 agent-surface validation: MCP handshake/tools/resources (31 tools, 29 resources), selector
   v2 and OCR fallback, checkpoint/resume/event/repro, structured logcat query/watch, intent/broadcast
@@ -556,7 +602,8 @@ that was not exercised is not claimed as verified.
 - [AGENT_GUIDE.md](AGENT_GUIDE.md) — operating model for autonomous agents
 - [USER_GUIDE.md](USER_GUIDE.md) — setup, devices, sessions, diagnostics, troubleshooting
 - [ARCHITECTURE.md](ARCHITECTURE.md) — crates, data flow, locking, process and report model
-- [desktop/README.md](desktop/README.md) — building and testing the native desktop cockpit
+- [desktop/README.md](desktop/README.md) - building and testing the native desktop cockpit
+- [docs/screenshots/v0.11.0/README.md](docs/screenshots/v0.11.0/README.md) - updated UI screenshot gallery
 - [PROJECT_ADAPTER.md](PROJECT_ADAPTER.md) — project config, fixtures, hooks and conformance
 - [SCHEMA.md](SCHEMA.md) — report, metadata, manifest and JSON shapes
 - [EXIT_CODES.md](EXIT_CODES.md) — stable exit codes and error codes

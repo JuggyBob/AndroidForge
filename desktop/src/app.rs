@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -56,6 +57,13 @@ pub struct App {
     pub attach_form: Option<AttachForm>,
     pub run_form: Option<RunForm>,
     pub settings_open: bool,
+    pub nav_rects: HashMap<Page, egui::Rect>,
+    pub nav_highlight_y: Option<f32>,
+    pub page_animation_started: Instant,
+    pub page_scroll_reset: bool,
+    pub chrome_dark: Option<bool>,
+    pub accent_wheel: Option<egui::TextureHandle>,
+    pub font_search: String,
     pub setup: SetupState,
     pub update: UpdateState,
     pub triage: TriageState,
@@ -94,7 +102,12 @@ impl App {
             .and_then(|text| serde_json::from_str::<DesktopSettings>(&text).ok())
             .unwrap_or_default();
 
-        theme::configure_fonts(&cc.egui_ctx);
+        theme::set_accent(egui::Color32::from_rgb(
+            settings.accent[0],
+            settings.accent[1],
+            settings.accent[2],
+        ));
+        crate::fonts::apply(&cc.egui_ctx, settings.font.as_deref());
         theme::apply(&cc.egui_ctx, settings.theme);
         let icon = theme::load_icon_texture(&cc.egui_ctx);
         let (event_tx, event_rx) = mpsc::channel();
@@ -130,6 +143,13 @@ impl App {
             attach_form: None,
             run_form: None,
             settings_open: false,
+            nav_rects: HashMap::new(),
+            nav_highlight_y: None,
+            page_animation_started: Instant::now(),
+            page_scroll_reset: true,
+            chrome_dark: None,
+            accent_wheel: None,
+            font_search: String::new(),
             setup: SetupState::default(),
             update: UpdateState::default(),
             triage: TriageState::default(),
@@ -281,6 +301,8 @@ impl App {
     pub fn set_page(&mut self, page: Page) {
         if self.page != page {
             self.page = page;
+            self.page_animation_started = Instant::now();
+            self.page_scroll_reset = true;
             if !matches!(page, Page::Runs | Page::Triage) {
                 self.run_detail = None;
             }
@@ -294,7 +316,39 @@ impl App {
     }
 
     pub fn open_settings(&mut self) {
-        self.settings_open = true;
+        self.settings_open = false;
+        self.set_page(Page::Settings);
+    }
+
+    pub fn open_cli(&self) {
+        let path = self
+            .cli
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.path.clone())
+            .or_else(|| self.cli.configured_path.clone());
+        let Some(path) = path else {
+            return;
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+            // /K keeps the console window open after the CLI exits, instead
+            // of flashing a window and immediately closing it. raw_arg avoids
+            // Rust's automatic argument escaping around the quoted path.
+            let command = format!("\"{}\"", path.display());
+            let _ = std::process::Command::new("cmd.exe")
+                .arg("/K")
+                .raw_arg(command)
+                .current_dir(self.workspace())
+                .creation_flags(CREATE_NEW_CONSOLE)
+                .spawn();
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = std::process::Command::new(path).spawn();
+        }
     }
 
     pub fn toast(&mut self, text: impl Into<String>, level: ToastLevel) {
@@ -364,8 +418,16 @@ impl App {
     }
 
     pub fn open_setup(&mut self, section: SetupSection) {
-        self.setup.section = section;
+        self.set_setup_section(section);
         self.set_page(Page::Setup);
+    }
+
+    pub fn set_setup_section(&mut self, section: SetupSection) {
+        if self.setup.section != section {
+            self.setup.section = section;
+            self.setup.section_animation_started = Some(Instant::now());
+            self.page_scroll_reset = true;
+        }
     }
 
     fn refresh_doctor(&mut self, ctx: &egui::Context) {
@@ -622,7 +684,7 @@ impl eframe::App for App {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.applied_theme != self.settings.theme {
             self.applied_theme = self.settings.theme;
@@ -635,6 +697,10 @@ impl eframe::App for App {
         self.poll_inspector(&ctx);
 
         let dark = ui.style().visuals.dark_mode;
+        if self.chrome_dark != Some(dark) {
+            crate::platform::apply_titlebar(frame, dark);
+            self.chrome_dark = Some(dark);
+        }
         let panel = if dark {
             theme::DARK_PANEL
         } else {
@@ -698,10 +764,14 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin::symmetric(18, 14)),
             )
             .show(ui, |ui| {
-                egui::ScrollArea::vertical()
+                let mut scroll = egui::ScrollArea::vertical()
                     .id_salt("main-page-scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| views::page(self, ui));
+                    .auto_shrink([false, false]);
+                if self.page_scroll_reset {
+                    scroll = scroll.vertical_scroll_offset(0.0);
+                    self.page_scroll_reset = false;
+                }
+                scroll.show(ui, |ui| views::page(self, ui));
             });
 
         crate::dialogs::dialogs(self, &ctx);

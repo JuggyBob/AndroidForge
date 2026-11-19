@@ -1,6 +1,6 @@
 # Contributing to AndroidForge
 
-Thanks for taking the time to contribute. AndroidForge is an alpha-stage tool. Bug reports,
+Thanks for taking the time to contribute. AndroidForge is a beta-stage tool. Bug reports,
 reproduction cases and small, focused pull requests are especially valuable.
 
 ## Before you start

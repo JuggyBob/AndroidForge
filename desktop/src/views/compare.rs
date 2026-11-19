@@ -1,6 +1,5 @@
 use eframe::egui;
 use egui::RichText;
-use egui_extras::{Column, TableBuilder};
 
 use crate::app::App;
 use crate::components::*;
@@ -89,7 +88,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             error_banner(ui, error);
         }
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::PAGE_GAP);
     let Some(comparison) = app.compare.comparison.clone() else {
         empty_state(
             ui,
@@ -232,65 +231,67 @@ fn short_value(value: &str) -> String {
 
 fn steps_table(ui: &mut egui::Ui, comparison: &crate::models::RunComparison) {
     let steps = comparison.step_changes.clone();
-    TableBuilder::new(ui)
-        .striped(false)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::remainder().at_least(180.0))
-        .column(Column::initial(110.0))
-        .column(Column::initial(110.0))
-        .column(Column::initial(90.0))
-        .column(Column::initial(100.0))
-        .header(24.0, |mut header| {
-            for name in ["Step", "Current", "Baseline", "Delta", "Change"] {
-                header.col(|ui| {
-                    ui.label(RichText::new(name).size(9.0).strong().color(theme::MUTED));
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(28.0, steps.len(), |mut row| {
-                let step = &steps[row.index()];
-                row.col(|ui| {
-                    ui.add(egui::Label::new(RichText::new(&step.name).size(10.0)).truncate())
-                        .on_hover_text(&step.command);
-                });
-                row.col(|ui| {
-                    if let Some(status) = &step.current_status {
-                        status_pill(ui, status, theme::status_color(status));
+    let width = ui.available_width();
+    let widths = proportional_widths(width, &[0.42, 0.15, 0.15, 0.12, 0.16], 10.0);
+    let step_width = widths[0];
+    let current_width = widths[1];
+    let baseline_width = widths[2];
+    let delta_width = widths[3];
+    let change_width = widths[4];
+    table_header(
+        ui,
+        &[
+            ("Step", step_width),
+            ("Current", current_width),
+            ("Baseline", baseline_width),
+            ("Delta", delta_width),
+            ("Change", change_width),
+        ],
+    );
+    for step in &steps {
+        selectable_row(ui, false, theme::ROW_HEIGHT, |ui| {
+            row_cell(ui, step_width, |ui| {
+                ui.add(egui::Label::new(RichText::new(&step.name).size(10.0)).truncate())
+                    .on_hover_text(&step.command);
+            });
+            row_cell(ui, current_width, |ui| {
+                if let Some(status) = &step.current_status {
+                    status_pill(ui, status, theme::status_color(status));
+                } else {
+                    small(ui, "missing");
+                }
+            });
+            row_cell(ui, baseline_width, |ui| {
+                if let Some(status) = &step.baseline_status {
+                    status_pill(ui, status, theme::status_color(status));
+                } else {
+                    small(ui, "missing");
+                }
+            });
+            row_cell(ui, delta_width, |ui| {
+                if let Some(delta) = step.duration_delta_ms {
+                    let color = if delta > 0 {
+                        theme::YELLOW
+                    } else if delta < 0 {
+                        theme::GREEN
                     } else {
-                        small(ui, "missing");
-                    }
-                });
-                row.col(|ui| {
-                    if let Some(status) = &step.baseline_status {
-                        status_pill(ui, status, theme::status_color(status));
-                    } else {
-                        small(ui, "missing");
-                    }
-                });
-                row.col(|ui| {
-                    if let Some(delta) = step.duration_delta_ms {
-                        let color = if delta > 0 {
-                            theme::YELLOW
-                        } else if delta < 0 {
-                            theme::GREEN
-                        } else {
-                            theme::MUTED
-                        };
-                        ui.label(
-                            RichText::new(format!("{:+.0}ms", delta as f64))
-                                .size(9.5)
-                                .color(color),
-                        );
-                    } else {
-                        small(ui, "-");
-                    }
-                });
-                row.col(|ui| {
-                    status_pill(ui, &step.change, theme::status_color(&step.change));
-                });
+                        theme::MUTED
+                    };
+                    ui.label(
+                        RichText::new(format!("{:+.0}ms", delta as f64))
+                            .size(9.5)
+                            .color(color),
+                    );
+                } else {
+                    small(ui, "-");
+                }
+            });
+            row_cell(ui, change_width, |ui| {
+                status_pill(ui, &step.change, theme::status_color(&step.change));
             });
         });
+        ui.add_space(2.0);
+    }
 }
 
 fn comparison_markdown(comparison: &crate::models::RunComparison) -> String {
