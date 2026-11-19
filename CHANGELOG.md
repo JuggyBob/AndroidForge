@@ -97,6 +97,15 @@ and fixes the run-resume failure-history edge case.
 - `androidforge-screenshots-v0.11.0.zip` — 16 PNG screenshots of the v0.11.0 desktop UI.
 - `SHA256SUMS.txt` — SHA-256 checksums for the CLI, desktop and installer assets.
 
+Published asset checksums:
+
+```text
+6e200c25093a1e1d089dc23b8cbef9688b258c5d0e9084f304882af147bb9a2b  androidforge-cli-windows-x86_64.zip
+c4f08e41b3e7e20e568b815505a6f9e998f2c8c21852040124fd1d06a58bc7bf  androidforge-desktop-windows-x86_64.zip
+67660a091905a1c69f19d651800d24a3e0ea7bbb18591de5064decf5e2f8b98d  androidforge-screenshots-v0.11.0.zip
+c24b2d234546f2d37de58ca9a2dc56aaff6cfaa060681930bb5412e3b7a8076d  androidforge-windows-x86_64-setup.exe
+```
+
 All binaries are intentionally unsigned. Windows SmartScreen may warn on first launch.
 
 ### Validation

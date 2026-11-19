@@ -64,7 +64,25 @@ Desktop and agent-onboarding beta:
 - Long-duration stress and very large suites.
 - Code signing.
 
-The release publication record and asset hashes are appended after the GitHub release is published.
+The CI release workflow completed successfully: [run 44471143373](https://github.com/JuggyBob/AndroidForge/actions/runs/44471143373).
+
+### Release publication
+
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.11.0>; title
+  **AndroidForge v0.11.0 Beta**; not a draft; marked **pre-release**.
+- Tag: annotated `v0.11.0`, tag object `0b4f9e4ec4f1e82e3c25900b77dfa509004e1969`, commit
+  `ef6e0596127a901b51f7d31631ce25362c572b26`.
+- Assets: `androidforge-cli-windows-x86_64.zip`, `androidforge-desktop-windows-x86_64.zip`,
+  `androidforge-windows-x86_64-setup.exe`, `androidforge-screenshots-v0.11.0.zip`,
+  `SHA256SUMS.txt`.
+- Published checksums:
+  - `6e200c25093a1e1d089dc23b8cbef9688b258c5d0e9084f304882af147bb9a2b` CLI ZIP
+  - `c4f08e41b3e7e20e568b815505a6f9e998f2c8c21852040124fd1d06a58bc7bf` portable desktop ZIP
+  - `67660a091905a1c69f19d651800d24a3e0ea7bbb18591de5064decf5e2f8b98d` screenshots ZIP
+  - `c24b2d234546f2d37de58ca9a2dc56aaff6cfaa060681930bb5412e3b7a8076d` installer
+- GitHub repository description updated to **Beta v0.11.0**.
+- Local-only `SPEC-v*.md` drafts are deleted from the tracked tree and ignored; the local files remain
+  on the developer machine.
 
 ## v0.10.0 verification (2026-11-18)
 
