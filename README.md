@@ -81,6 +81,19 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
 
+## Screenshots
+
+Real captures from the v0.11.0 native desktop cockpit. The full 16-image gallery is in
+[docs/screenshots/v0.11.0/](docs/screenshots/v0.11.0/README.md).
+
+| Setup / Agent Handoff | Overview |
+| --- | --- |
+| [![Setup Agent Handoff](docs/screenshots/v0.11.0/02-setup-agent-handoff.png)](docs/screenshots/v0.11.0/02-setup-agent-handoff.png) | [![Overview](docs/screenshots/v0.11.0/03-overview.png)](docs/screenshots/v0.11.0/03-overview.png) |
+| **Sessions** | **Inspector** |
+| [![Sessions](docs/screenshots/v0.11.0/06-sessions.png)](docs/screenshots/v0.11.0/06-sessions.png) | [![Inspector](docs/screenshots/v0.11.0/13-inspector.png)](docs/screenshots/v0.11.0/13-inspector.png) |
+| **Settings** | **Light theme** |
+| [![Settings](docs/screenshots/v0.11.0/15-settings.png)](docs/screenshots/v0.11.0/15-settings.png) | [![Light theme overview](docs/screenshots/v0.11.0/16-overview-light.png)](docs/screenshots/v0.11.0/16-overview-light.png) |
+
 ## What is new in v0.11.0
 
 The desktop & agent-onboarding beta. The CLI contract is unchanged; this release makes the desktop
