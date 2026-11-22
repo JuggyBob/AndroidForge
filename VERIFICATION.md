@@ -1,11 +1,37 @@
 # Verification record
 
-This document records what was actually run for the `0.12.0` stable pre-1.0 release, the `0.11.0`
-desktop and agent-onboarding beta, the `0.10.0` agent-surface release, the `0.9.4` safety and
-repeatability release, the `0.9.3` contract and coverage release, the `0.9.2` patch, the `0.9.1` patch,
-the `0.9.0` Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`,
-`0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
-validation and packaging validation from areas that were not exercised.
+This document records what was actually run for the `0.12.1` dependency and supply-chain patch, the
+`0.12.0` stable pre-1.0 release, the `0.11.0` desktop and agent-onboarding beta, the `0.10.0`
+agent-surface release, the `0.9.4` safety and repeatability release, the `0.9.3` contract and coverage
+release, the `0.9.2` patch, the `0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0` delivery, the
+`0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated
+checks, real Android validation, desktop workflow validation and packaging validation from areas that
+were not exercised.
+
+## v0.12.1 verification (2026-11-22)
+
+### Scope
+
+Dependency and supply-chain patch for v0.12.0:
+
+1. Update `url` to 2.5.9 for RUSTSEC-2026-0592.
+2. Replace unmaintained `rustls-pemfile` with `rustls-pki-types` PEM parsing.
+3. Rebuild, repackage and republish the stable assets with no feature changes.
+
+### Automated gates
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo test --workspace`: **347 passed / 0 failed / 0 ignored**.
+- Local `cargo deny check advisories bans licenses sources`: advisories ok, bans ok, licenses ok,
+  sources ok.
+- `androidforge.exe --version`: `androidforge 0.12.1`; desktop: `androidforge-desktop 0.12.1`.
+- Mock TLS with a self-signed certificate still serves successfully after the PEM migration.
+
+### Release publication
+
+Release publication details and published checksums are added after the tag and release workflow
+complete.
 
 ## v0.12.0 verification (2026-11-22)
 
@@ -119,8 +145,20 @@ Truthful verification and automation gap closure from the IronPulse 5.1.2 campai
 
 ### Release publication
 
-Release publication details and published checksums are added after the tag and release workflow
-complete.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.0>; title
+  **AndroidForge v0.12.0**; not a draft; **not a prerelease**; marked latest.
+- Tag: annotated `v0.12.0`, tag object `66c7a649017cd848de8d9b682683d24268449d32`, commit
+  `3d48683d1145a93a6514feefe136325628d9c9a5`.
+- Release workflow: [run 45021763219](https://github.com/JuggyBob/AndroidForge/actions/runs/45021763219),
+  success.
+- Assets: `androidforge-cli-windows-x86_64.zip`, `androidforge-desktop-windows-x86_64.zip`,
+  `androidforge-windows-x86_64-setup.exe`, `SHA256SUMS.txt`. No screenshot asset was published because
+  the desktop UI is unchanged from v0.11.0.
+- Published checksums:
+  - `d68f10a43991c4cbd3e40aa2d0a06d00126023ba7edf0748c59b461265552e67` CLI ZIP
+  - `d7dfe246c6bf5e28beddf7a13a8ec57931e79d0eee2fa99f8c13a19f9e53d181` portable desktop ZIP
+  - `b89cd32077d0d18dd60d10c16aebc8c868e3034f87196cfd8dc24b64a566e872` installer
+- GitHub repository description updated to **Stable v0.12.0**.
 
 ## v0.11.0 verification (2026-11-19)
 

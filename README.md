@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Stable](https://img.shields.io/badge/status-stable-green.svg)](#project-status)
 
-> **Stable `v0.12.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Stable `v0.12.1`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows. Windows is the tested host; physical devices, Maestro, instrumentation, snapshot restore
 > and root-only operations are not yet fully validated. Read [Project status](#project-status) before
 > relying on it.
@@ -318,7 +318,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.12.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.12.1` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -541,7 +541,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Stable `v0.12.0` (pre-1.0).** The CLI has been exercised against real apps on Android 16 and Android
+**Stable `v0.12.1` (pre-1.0).** The CLI has been exercised against real apps on Android 16 and Android
 14 emulators, including a two-AVD parallel matrix, and against a Xiaomi HyperOS device for read-only and
 safe UI paths. v0.12.0 closes the IronPulse 5.1.2 truth and automation gaps: live install metadata,
 byte-truthful `--only-if-changed`, verification commands, configurable gestures and waits, app-data
@@ -647,6 +647,7 @@ that was not exercised is not claimed as verified.
 - [desktop/README.md](desktop/README.md) - building and testing the native desktop cockpit
 - [docs/screenshots/v0.11.0/README.md](docs/screenshots/v0.11.0/README.md) - desktop UI screenshot gallery (desktop unchanged in v0.12.0)
 - [docs/release-notes/v0.12.0.md](docs/release-notes/v0.12.0.md) - v0.12.0 release notes
+- [docs/release-notes/v0.12.1.md](docs/release-notes/v0.12.1.md) - v0.12.1 dependency/security patch
 - [PROJECT_ADAPTER.md](PROJECT_ADAPTER.md) — project config, fixtures, hooks and conformance
 - [SCHEMA.md](SCHEMA.md) — report, metadata, manifest and JSON shapes
 - [EXIT_CODES.md](EXIT_CODES.md) — stable exit codes and error codes

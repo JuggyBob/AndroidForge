@@ -751,14 +751,14 @@ fn tls_acceptor(cert_path: &Path, key_path: &Path) -> Result<tokio_rustls::TlsAc
 }
 
 fn load_certs(path: &Path) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
-    let file = std::fs::File::open(path).map_err(|error| {
-        ForgeError::new(
-            ErrorCode::ConfigInvalid,
-            format!("could not open TLS certificate {}: {error}", path.display()),
-        )
-    })?;
-    let mut reader = std::io::BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader)
+    use rustls::pki_types::pem::PemObject;
+    let certs = rustls::pki_types::CertificateDer::pem_file_iter(path)
+        .map_err(|error| {
+            ForgeError::new(
+                ErrorCode::ConfigInvalid,
+                format!("could not open TLS certificate {}: {error}", path.display()),
+            )
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|error| {
             ForgeError::new(
@@ -782,23 +782,11 @@ fn load_certs(path: &Path) -> Result<Vec<rustls::pki_types::CertificateDer<'stat
 }
 
 fn load_key(path: &Path) -> Result<rustls::pki_types::PrivateKeyDer<'static>> {
-    let file = std::fs::File::open(path).map_err(|error| {
-        ForgeError::new(
-            ErrorCode::ConfigInvalid,
-            format!("could not open TLS key {}: {error}", path.display()),
-        )
-    })?;
-    let mut reader = std::io::BufReader::new(file);
-    let key = rustls_pemfile::private_key(&mut reader).map_err(|error| {
+    use rustls::pki_types::pem::PemObject;
+    rustls::pki_types::PrivateKeyDer::from_pem_file(path).map_err(|error| {
         ForgeError::new(
             ErrorCode::ConfigInvalid,
             format!("could not parse TLS key {}: {error}", path.display()),
-        )
-    })?;
-    key.ok_or_else(|| {
-        ForgeError::new(
-            ErrorCode::ConfigInvalid,
-            format!("TLS key {} contains no private key", path.display()),
         )
     })
 }

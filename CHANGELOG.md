@@ -10,6 +10,34 @@ within its pre-1.0 release line.
 
 - Nothing yet.
 
+## [0.12.1] - 2026-11-22
+
+**Dependency and supply-chain patch for the v0.12.0 stable line.** This is a normal stable release and
+supersedes the v0.12.0 assets. It contains no intentional feature changes.
+
+### Changed
+
+- Updated the transitive `url` crate to `2.5.9`, which fixes RUSTSEC-2026-0592 (stack overflow in
+  `Url::origin()` on nested `blob:` URLs). The vulnerable function is not called by AndroidForge or its
+  `webbrowser` use path, but the published v0.12.0 desktop bundle contained `url 2.5.8`.
+- Replaced the unmaintained `rustls-pemfile` crate with the PEM parser built into `rustls-pki-types`.
+  Mock TLS certificate/key loading keeps the same behavior and error messages.
+- Workspace, CLI, desktop, installer and compatibility version are `0.12.1`.
+
+### Fixed
+
+- `cargo deny check advisories bans licenses sources` is clean again. The v0.12.0 tag predates
+  RUSTSEC-2026-0592, so its published assets retain the advisory; v0.12.1 is the corrected build.
+
+### Validation
+
+- `cargo fmt --all -- --check`, strict clippy and `cargo test --workspace` pass (347 tests, 0 failed).
+- Local `cargo deny check advisories bans licenses sources`: advisories, bans, licenses and sources
+  all report `ok`.
+- Mock TLS was re-tested with a self-signed certificate after the PEM parser migration.
+- Package/ZIP/installer versions report `0.12.1`; published checksums are added to
+  [VERIFICATION.md](VERIFICATION.md) after the release workflow completes.
+
 ## [0.12.0] - 2026-11-22
 
 **Truthful Verification & Automation Gap Closure — the first stable (pre-1.0) release.** This release
@@ -158,8 +186,16 @@ a process exit code.
 - `androidforge-windows-x86_64-setup.exe` — per-user Windows installer.
 - `SHA256SUMS.txt` — checksums for the published assets.
 
-Published asset checksums are recorded in [VERIFICATION.md](VERIFICATION.md) and in the GitHub release
-after the release workflow completes.
+Published asset checksums:
+
+```text
+d68f10a43991c4cbd3e40aa2d0a06d00126023ba7edf0748c59b461265552e67  androidforge-cli-windows-x86_64.zip
+d7dfe246c6bf5e28beddf7a13a8ec57931e79d0eee2fa99f8c13a19f9e53d181  androidforge-desktop-windows-x86_64.zip
+b89cd32077d0d18dd60d10c16aebc8c868e3034f87196cfd8dc24b64a566e872  androidforge-windows-x86_64-setup.exe
+```
+
+GitHub release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.0>. A normal stable
+release, not a prerelease. All assets are unsigned.
 
 
 
@@ -993,7 +1029,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.1
 [0.12.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.0
 [0.11.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.11.0
 [0.10.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.10.0
