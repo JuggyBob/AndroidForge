@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use eframe::egui;
+use serde_json::Value;
 
 use super::App;
 use crate::backend::update;
@@ -277,6 +278,14 @@ impl App {
                 match result {
                     Ok(frame) => {
                         self.inspector.last_frame_path = Some(frame.path.clone());
+                        let too_large = std::fs::metadata(&frame.path)
+                            .map(|metadata| metadata.len() > 32 * 1024 * 1024)
+                            .unwrap_or(false);
+                        if too_large {
+                            self.inspector.frame_error =
+                                Some("Preview frame exceeds the 32 MiB safety limit".to_string());
+                            return;
+                        }
                         match std::fs::read(&frame.path) {
                             Ok(bytes) => match image::load_from_memory(&bytes) {
                                 Ok(image) => {
@@ -558,6 +567,40 @@ impl App {
                         }
                     }
                     Err(error) => self.setup.repair_error = Some(error),
+                }
+            }
+            AppEvent::Catalog(result) => {
+                self.tools.loading = false;
+                match result {
+                    Ok(catalog) => {
+                        let count = catalog.commands.len();
+                        self.tools.catalog = Some(catalog);
+                        self.tools.error = None;
+                        self.toast(
+                            format!("Tool database loaded: {count} commands"),
+                            ToastLevel::Info,
+                        );
+                    }
+                    Err(error) => self.tools.error = Some(error),
+                }
+            }
+            AppEvent::MaestroInstall(result) => {
+                self.setup.maestro_installing = false;
+                match result {
+                    Ok(value) => {
+                        let path = value
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the managed tools directory");
+                        self.setup.maestro_message = Some(format!("Maestro installed at {path}"));
+                        self.toast("Maestro installed", ToastLevel::Success);
+                        self.refresh_doctor(ctx);
+                    }
+                    Err(error) => {
+                        self.setup.maestro_message =
+                            Some(format!("Maestro install failed: {error}"));
+                        self.toast("Maestro install failed", ToastLevel::Error);
+                    }
                 }
             }
         }

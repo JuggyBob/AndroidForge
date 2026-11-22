@@ -164,6 +164,16 @@ pub fn parse_checksums(text: &str, asset: &str) -> Result<String> {
     )))
 }
 
+fn safe_release_url(url: &str) -> Result<&str> {
+    if url.starts_with("https://github.com/JuggyBob/AndroidForge/releases/download/") {
+        Ok(url)
+    } else {
+        Err(DesktopError::Verification(format!(
+            "release asset URL is not on the expected GitHub release host: {url}"
+        )))
+    }
+}
+
 fn download(url: &str, limit: u64) -> Result<Vec<u8>> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(60)))
@@ -212,29 +222,39 @@ pub fn stage_cli_update(check: &UpdateCheck) -> Result<PathBuf> {
                 check.latest_version
             ))
         })?;
-    let sums_text =
-        String::from_utf8_lossy(&download(&sums_asset.browser_download_url, 1024 * 1024)?)
-            .into_owned();
+    let sums_text = String::from_utf8_lossy(&download(
+        safe_release_url(&sums_asset.browser_download_url)?,
+        1024 * 1024,
+    )?)
+    .into_owned();
     let expected = parse_checksums(&sums_text, CLI_ASSET)?;
-    let archive = download(&cli_asset.browser_download_url, 256 * 1024 * 1024)?;
+    let archive = download(
+        safe_release_url(&cli_asset.browser_download_url)?,
+        256 * 1024 * 1024,
+    )?;
     let actual = sha256_hex(&archive);
     if actual != expected {
         return Err(DesktopError::Verification(format!(
             "downloaded CLI archive hash {actual} does not match published {expected}"
         )));
     }
-    let staging = std::env::temp_dir().join(format!(
-        "androidforge-update-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().format("%Y%m%d%H%M%S")
-    ));
-    std::fs::create_dir_all(&staging)?;
+    let staging = tempfile::Builder::new()
+        .prefix("androidforge-update-")
+        .tempdir()
+        .map_err(|error| {
+            DesktopError::Update(format!("could not create staging directory: {error}"))
+        })?;
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive))
         .map_err(|error| DesktopError::Update(format!("invalid CLI archive: {error}")))?;
     let mut entry = zip.by_name("androidforge.exe").map_err(|error| {
         DesktopError::Update(format!("CLI archive has no androidforge.exe: {error}"))
     })?;
-    let path = staging.join("androidforge.exe");
+    if entry.size() > 100 * 1024 * 1024 {
+        return Err(DesktopError::Update(
+            "CLI archive executable exceeds the 100 MB safety limit".to_string(),
+        ));
+    }
+    let path = staging.path().join("androidforge.exe");
     let mut file = std::fs::File::create(&path)?;
     std::io::copy(&mut entry, &mut file)?;
     drop(file);
@@ -246,7 +266,8 @@ pub fn stage_cli_update(check: &UpdateCheck) -> Result<PathBuf> {
             check.latest_version
         )));
     }
-    Ok(path)
+    let staging = staging.keep();
+    Ok(staging.join("androidforge.exe"))
 }
 
 /// Replace a CLI executable with a staged executable. The previous binary is

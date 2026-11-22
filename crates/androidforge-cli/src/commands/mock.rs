@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
+use androidforge_core::redact::Redactor;
 use androidforge_core::util::{ensure_dir, sha256_hex};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -100,6 +101,19 @@ async fn serve(ctx: &CliContext, args: &NetworkMockServeArgs) -> Result<CommandS
     if args.port == 0 {
         return Err(ForgeError::invalid_argument(
             "network mock serve requires a port between 1 and 65535",
+        ));
+    }
+    let loopback = args
+        .bind
+        .parse::<std::net::IpAddr>()
+        .map(|address| address.is_loopback())
+        .unwrap_or(false);
+    if !loopback && !args.allow_external_bind {
+        return Err(ForgeError::invalid_argument(
+            "network mock serve only binds loopback by default because it has no authentication",
+        )
+        .with_suggestion(
+            "Pass --allow-external-bind only on a trusted network, or keep 127.0.0.1 and use adb reverse.",
         ));
     }
     let routes = load_routes(ctx, args)?;
@@ -288,6 +302,18 @@ fn load_routes(ctx: &CliContext, args: &NetworkMockServeArgs) -> Result<Vec<Mock
                 route.status
             )));
         }
+        for (name, value) in &route.headers {
+            if name.contains('\r')
+                || name.contains('\n')
+                || name.contains(':')
+                || value.contains('\r')
+                || value.contains('\n')
+            {
+                return Err(ForgeError::invalid_argument(
+                    "mock route headers cannot contain CR, LF or a colon in the name",
+                ));
+            }
+        }
     }
     Ok(routes)
 }
@@ -362,6 +388,7 @@ async fn serve_inner(
     let deadline_at = deadline.map(|duration| started + duration);
     let counts = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(Notify::new());
+    let redactor = ctx.redactor();
     let mut tasks = JoinSet::new();
     let mut stopped_by;
     loop {
@@ -386,6 +413,9 @@ async fn serve_inner(
                 break;
             }
             accepted = accept => {
+                if tasks.len() >= 64 {
+                    let _ = tasks.join_next().await;
+                }
                 let (stream, peer) = accepted.map_err(|error| {
                     ForgeError::new(
                         ErrorCode::CommandFailed,
@@ -401,8 +431,11 @@ async fn serve_inner(
                 let delay_ms = args.delay_ms;
                 let counts = Arc::clone(&counts);
                 let stop = Arc::clone(&stop);
+                let redactor = redactor.clone();
                 tasks.spawn(async move {
-                    let _ = handle_connection(
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(15),
+                        handle_connection(
                         stream,
                         peer.to_string(),
                         tls_acceptor,
@@ -412,7 +445,8 @@ async fn serve_inner(
                         default_status,
                         default_body,
                         delay_ms,
-                    )
+                        redactor,
+                    ))
                     .await;
                     let total = counts.fetch_add(1, Ordering::SeqCst) + 1;
                     if let Some(limit) = limit
@@ -464,6 +498,7 @@ async fn handle_connection(
     default_status: u16,
     default_body: Option<String>,
     delay_ms: u64,
+    redactor: Redactor,
 ) -> Result<()> {
     let mut stream: Box<dyn AsyncStream> = Box::new(stream);
     if let Some(acceptor) = tls_acceptor {
@@ -541,7 +576,7 @@ async fn handle_connection(
         }
         buffer.extend_from_slice(&chunk[..read]);
     }
-    let body = buffer[header_end..].to_vec();
+    let body = buffer[header_end..(header_end + content_length).min(buffer.len())].to_vec();
     let route = match_route(&routes, &method, &path);
     let status = route.map(|route| route.status).unwrap_or(default_status);
     let response_body = route
@@ -594,7 +629,7 @@ async fn handle_connection(
             body_bytes: body.len(),
             body_sha256: sha256_hex(&body),
             body_truncated: truncated,
-            body_preview: Some(String::from_utf8_lossy(preview_bytes).into_owned()),
+            body_preview: Some(redactor.redact(&String::from_utf8_lossy(preview_bytes))),
             status,
             matched_route: route.map(|route| format!("{} {}", route.method, route.path)),
             duration_ms: started.elapsed().as_millis() as u64,
@@ -694,6 +729,10 @@ fn redact_headers(headers: BTreeMap<String, String>) -> BTreeMap<String, String>
         "set-cookie",
         "x-api-key",
         "api-key",
+        "x-auth-token",
+        "x-access-token",
+        "x-csrf-token",
+        "x-xsrf-token",
     ];
     headers
         .into_iter()

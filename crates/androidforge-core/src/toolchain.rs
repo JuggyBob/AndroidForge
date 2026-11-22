@@ -103,17 +103,21 @@ impl Toolchain {
         let maestro = first_existing([
             config.file.sdk.maestro.clone(),
             env_path("ANDROIDFORGE_MAESTRO"),
+            crate::maestro::latest_installed().map(|install| install.launcher),
             which(&config.file.maestro.binary),
             env_path("USERPROFILE").map(|home| {
                 home.join(".maestro")
                     .join("bin")
                     .join(platform_exe("maestro"))
             }),
+            env_path("USERPROFILE")
+                .map(|home| home.join(".maestro").join("bin").join("maestro.bat")),
             env_path("HOME").map(|home| {
                 home.join(".maestro")
                     .join("bin")
                     .join(platform_exe("maestro"))
             }),
+            env_path("HOME").map(|home| home.join(".maestro").join("bin").join("maestro")),
             which("maestro"),
         ]);
 

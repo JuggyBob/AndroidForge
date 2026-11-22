@@ -318,6 +318,34 @@ fn confirm_dialog(app: &mut App, ctx: &egui::Context) {
                     );
                     muted(ui, "The preview above is the authoritative list; inspect it before confirming.");
                 }
+                ConfirmAction::InstallMaestro => {
+                    warning_banner(
+                        ui,
+                        "Download about 350 MB and install the pinned Maestro CLI 2.12.1?",
+                    );
+                    kv_grid(
+                        ui,
+                        "maestro-install",
+                        &[
+                            ("Version", "2.12.1".to_string()),
+                            ("Source", "official GitHub release maestro.zip".to_string()),
+                            (
+                                "SHA-256",
+                                "54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7"
+                                    .to_string(),
+                            ),
+                            (
+                                "Target",
+                                "%LOCALAPPDATA%\\AndroidForge\\tools\\maestro\\2.12.1"
+                                    .to_string(),
+                            ),
+                        ],
+                    );
+                    muted(
+                        ui,
+                        "Java 17 or newer is required. The CLI verifies the archive hash before extraction.",
+                    );
+                }
                 ConfirmAction::InstallCli {
                     staged,
                     target,

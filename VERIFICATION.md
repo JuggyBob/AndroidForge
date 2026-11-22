@@ -1,12 +1,172 @@
 # Verification record
 
-This document records what was actually run for the `0.12.1` dependency and supply-chain patch, the
-`0.12.0` stable pre-1.0 release, the `0.11.0` desktop and agent-onboarding beta, the `0.10.0`
-agent-surface release, the `0.9.4` safety and repeatability release, the `0.9.3` contract and coverage
-release, the `0.9.2` patch, the `0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0` delivery, the
-`0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It separates automated
-checks, real Android validation, desktop workflow validation and packaging validation from areas that
-were not exercised.
+This document records what was actually run for the `0.13.0` optional Maestro/tool-database/MCP release,
+the `0.12.1` dependency and supply-chain patch, the `0.12.0` stable pre-1.0 release, the `0.11.0`
+desktop and agent-onboarding beta, the `0.10.0` agent-surface release, the `0.9.4` safety and
+repeatability release, the `0.9.3` contract and coverage release, the `0.9.2` patch, the `0.9.1` patch,
+the `0.9.0` Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`,
+`0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
+validation and packaging validation from areas that were not exercised.
+
+## v0.13.0 verification (2026-11-22)
+
+### Scope
+
+1. Optional pinned Maestro CLI installation, status, uninstall and desktop UI.
+2. Desktop Tool database generated from the complete CLI catalog.
+3. Complete MCP command surface generated from the same catalog, with unsafe commands excluded.
+4. Compatibility/deprecation policy and catalog schema.
+5. Security-hardening fixes from five delegated audits, including a final regression audit.
+6. Multi-emulator + physical-device session ownership, evidence and cleanup campaign.
+
+### Environment
+
+- Windows 11 host, Rust `1.100`, workspace version `0.13.0`.
+- Two disposable Android emulators plus the user-approved Xiaomi POCO X4 GT physical device
+  (`DM9X8LFQYHSSQKIN`, Android 14/API 34).
+- Isolated `ANDROIDFORGE_HOME` per workstream; unique owners; physical mutation limited to
+  `com.aster.localai.debug`.
+- All delegated test workstreams used exactly `opencode-go/hy4-flash-free#high`.
+
+### Automated gates
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo test --workspace`: 363 passed / 0 failed (18 test targets + doc tests).
+- `cargo deny check advisories bans licenses sources`: clean.
+- `tools catalog`: 191 commands; `tools schema --format mcp`: 192 tools.
+- `schema list`: 31 schemas including `tools-catalog.schema.json`.
+
+### Maestro installer
+
+- `tools install maestro --dry-run` reports the pinned URL/hash/target.
+- `tools install maestro --yes` downloads 349,832,427 bytes, verifies
+  `54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7`, extracts to the managed tools
+  directory and reports `installed:true`.
+- `tools status maestro`: `managed:true`, `source:androidforge-managed`, version `2.12.1`, Java path
+  present.
+- `doctor` reports `maestro` status `ok`, detail `2.12.1`, and the managed path.
+- Desktop Setup → Environment shows the Install button/confirmation and active path; verified in the
+  desktop smoke campaign.
+- End-to-end on a disposable API 36 emulator (isolated home): a passing flow executed twice with
+  `status:"success"`, `success:true` and `result.version:"2.12.1"`; both report steps carried
+  `details.maestro_version:"2.12.1"`. Each run had five distinct artifacts, exactly one
+  `maestro/stdout.txt` and no duplicate paths; a supplementary run with forced child stderr produced
+  exactly one `maestro/stderr.txt` (108 bytes). A deliberately failing `assertVisible` returned exit
+  `6` / `E_COMMAND_FAILED` and preserved screenshots, hierarchy, logcat and Maestro output.
+  `tools uninstall maestro --yes` removed only the managed copy and `doctor` returned to
+  `warn / not found`.
+- The first delegated Maestro run exposed a real defect: the version probe copied Maestro's first-run
+  analytics banner into `result.version`, and the analytics probe touched `~/.maestro/analytics.json`.
+  The probe now sets `MAESTRO_CLI_NO_ANALYTICS=1` /
+  `MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED=true` and extracts the first semantic version from
+  combined output. `~/.maestro/analytics.json` kept an identical mtime/hash across the re-verification
+  install, three runs and uninstall. Duplicate `maestro/stdout.txt` registration was also fixed.
+
+### Desktop Tool database
+
+- `tools catalog --json` returns 191 commands with paths, args, examples and safety classes.
+- Desktop UIAutomation interaction: the Workspace **Tool database** page renders 191 rows with
+  Tool/Safety/Summary columns; searching `maestro` filters 191 → 4 (`tools uninstall`, `tools status`,
+  `tools install`, `test maestro`); sort toggles Z-A/A-Z and row order changes; clicking a row opens the
+  detail page (larger bold title, Usage, Examples, Arguments, MCP) and back returns to the list.
+- The 15-page smoke harness failed `--page tools` because the desktop argument parser omitted the new
+  page. `desktop/src/main.rs` now accepts it (with a unit test) and `--help` lists it.
+- The smoke harness also recorded blank `devices` and `matrix` captures as PASS. It now enumerates the
+  real titled `AndroidForge` window, restores it, waits for the UIA tree to populate and requires a
+  non-blank screenshot. Two final 15-page runs passed 15/15 with titled-window captures (for example
+  tools 156,831 B / 23 colours / 809 UIA elements; devices 84,132 B / 12 colours / 38 elements;
+  matrix 103,843 B / 13 colours / 46 elements).
+- Accepted cosmetic issue: a transient toast can overlay the page subtitle for a few seconds on Tool
+  database/Setup. Content remains reachable and the toast can be dismissed; no functional impact.
+
+### MCP surface
+
+- `tools/list` returns 192 tools; `resources/list` returns 37 resources (6 fixed resources plus 31
+  schemas). Protocol `2025-06-18`; server reports version `0.13.0`.
+- `androidforge_adb` and `androidforge_run_exec` are absent (unsafe). Long-running server commands are
+  also excluded from generated tools.
+- Generated tool calls for `androidforge_tools_status` (Maestro status), `androidforge_tools_catalog`
+  (191 commands) and `androidforge_session_list` (`--mine` and explicit owner) returned structured
+  content.
+- Mutating generated tools reject missing `confirm=true`; `allow_physical_mutation` appears in 0/192
+  input schemas and is stripped before argv.
+- `androidforge_network_mock_serve` rejects `max_requests=0` without a duration immediately instead of
+  hanging.
+- `androidforge://catalog` (262,229 bytes, 191 commands) and `androidforge://tools` (216,126 bytes, 192
+  tools) read successfully.
+- `tools/list` serializes to one 121,136-byte NDJSON line; all responses parsed as JSON-RPC 2.0 with
+  matching ids, `shutdown` exited `0`, stderr was empty and no diagnostics corrupted stdout.
+
+### Physical device validation
+
+- Isolated package `com.aster.localai.debug` only; no other package/data touched.
+- Baseline hash `22DDD58E455EB32351EBAD42D497C2AFC6EFE8B8A8BFC960CEEEA084C2C0E221`, modified hash
+  `198A1EF369EEA9D0FB966663D26D92AB19E44713654A8D44ECE6D4950F77F7EE`, shared cert
+  `C1FD411DC1DA096FD12001EC5B71DA212C91E13442BA289D2C8F36A72F0ED691`.
+- Baseline install, verify-installed/status, same-version byte-different `--only-if-changed`
+  (`reason:content_different`), UI dump/find/tap, screenshot, 5s MP4 recording and out-of-band
+  `adb install -r` refresh all passed.
+- Cleanup uninstalled only the test package and released the session; `com.remerer.mobiledeck` remained.
+
+### Security review
+
+Four delegated read-only audits covered command execution, desktop trust boundaries, device/data
+boundaries and network/files. A fifth final regression audit re-checked the complete diff. Fixed
+findings include MCP unsafe-command exposure, MCP physical
+self-approval, MCP unbounded child execution, fail-open device classification, package traversal,
+missing app-process guards, tar member validation, stale-session reclaim, mock timeouts/redaction/CRLF,
+predictable staging directories and desktop pipe/preview bounds. Remaining accepted risks are listed in
+`COMPATIBILITY.md` and the release notes.
+
+A final regression audit found one additional critical issue: `tools/call` dispatched any name accepted
+by the generated catalog fallback, so the hidden (unadvertised) `androidforge_adb` and
+`androidforge_run_exec` wrappers remained callable even though `tools/list` omitted them. The server now
+rejects any name not present in the advertised `tool_definitions()` before building argv, and the
+generated fallback independently refuses `unsafe`/`long-running` catalog entries. Regression tests cover
+both layers. Dynamic verification with an isolated home confirmed the 192-tool advertised surface is
+intact and a legitimate `tools_status` call still succeeds, while `androidforge_adb`,
+`androidforge_run_exec` and `androidforge_mcp_serve` return `isError:true` /
+`unknown AndroidForge tool`. The same pass also corrected the generated `agent matrix` schema so its
+`serial` target array is forwarded, and reclassified `report prune` / `app data-restore` as
+`destructive` and `doze unforce` as `device-mutation`.
+
+### Multi-device campaign
+
+- Two headless emulators and the physical device were held concurrently with distinct owners:
+  `af_campaign_a` API 34 on `emulator-5560` / `ses-8ec471147dc4` / ownerA and `af_campaign_b` API 36 on
+  `emulator-5562` / `ses-35e7701ee46e` / ownerB; both reached ready/boot-completed.
+- `session list --mine --active` showed only the caller's session for ownerA and ownerB; the unscoped
+  list showed both. Wrong-owner `session release` and `session stop` failed with exit 4 /
+  `E_SESSION_OWNERSHIP_MISMATCH` and did not affect the other emulator.
+- UI dump/find/tap succeeded on both emulators (one 15s `ui wait --for-idle` timeout on the churning
+  API 36 Settings screen succeeded at 30s). Screenshots and 5s MP4 recordings were produced and
+  verified non-zero: A PNG 148,939 B / MP4 74,022 B; B PNG 37,949 B / MP4 104,095 B.
+- `session gc --reclaim --dry-run` and live `session gc --reclaim` (without `--stop`) reclaimed nothing
+  while both sessions were live and left both session ids unchanged. Genuine staleness was not
+  fabricated, so stale-specific reclamation is N/A here.
+- The physical device was attached read-only (`--no-wake`, no `--prepare`, no app interaction) as
+  `ses-9a6085943030` / ownerC; scoped lists were correct and release left the screen off. No physical
+  mutation flag was used in this campaign.
+- Cleanup stopped/released all sessions, removed the 18 campaign run directories, both disposable AVDs
+  and their `.ini` descriptors, and the isolated home. Final `devices list` showed only the physical
+  device.
+
+### Not validated
+
+- A real instrumentation test APK.
+- Snapshot restore and root-only time changes.
+- macOS/Linux hosts and code signing.
+- Long-duration stress beyond the bounded campaigns above.
+- A silent installer install/uninstall cycle was not executed on the host; the Inno Setup build,
+  version metadata, embedded payload and checksums were verified instead.
+- Stale-session reclamation with a genuinely stale session (the live-GC paths were verified; no
+  falsified staleness was used).
+
+### Release publication
+
+Release publication details and published checksums are added after the tag and release workflow
+complete.
 
 ## v0.12.1 verification (2026-11-22)
 

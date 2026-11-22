@@ -894,6 +894,7 @@ async fn launch(ctx: &CliContext, args: &AppLaunchArgs) -> Result<CommandSuccess
         || !spec.categories.is_empty()
         || !spec.extras.is_empty()
         || !spec.flags.is_empty();
+    ctx.ensure_physical_mutation_allowed(&device, "launching an app or intent")?;
     execute_in_run!(
         ctx,
         if uses_intent {
@@ -1022,6 +1023,7 @@ async fn broadcast(ctx: &CliContext, args: &AppBroadcastArgs) -> Result<CommandS
             format!("Would broadcast {:?}\n", spec.action),
         ));
     }
+    ctx.ensure_physical_mutation_allowed(&device, "broadcasting an intent")?;
     execute_in_run!(
         ctx,
         "app.broadcast",
@@ -1088,6 +1090,7 @@ async fn service(ctx: &CliContext, args: &AppServiceArgs) -> Result<CommandSucce
             ),
         ));
     }
+    ctx.ensure_physical_mutation_allowed(&device, "starting or stopping a service")?;
     execute_in_run!(
         ctx,
         "app.service",
@@ -1131,6 +1134,7 @@ async fn force_stop(ctx: &CliContext, args: &AppPackageArgs) -> Result<CommandSu
         ));
     }
     let package = args.package.clone();
+    ctx.ensure_physical_mutation_allowed(&device, "force-stopping an app")?;
     execute_in_run!(
         ctx,
         "app.force-stop",
@@ -1165,6 +1169,7 @@ async fn kill(ctx: &CliContext, args: &AppPackageArgs) -> Result<CommandSuccess>
         ));
     }
     let package = args.package.clone();
+    ctx.ensure_physical_mutation_allowed(&device, "killing an app process")?;
     execute_in_run!(
         ctx,
         "app.kill",

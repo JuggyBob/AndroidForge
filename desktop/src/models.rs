@@ -93,6 +93,60 @@ pub struct Tool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CatalogArg {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub long: Option<String>,
+    #[serde(default)]
+    pub short: Option<char>,
+    #[serde(default)]
+    pub positional: bool,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub value_name: Option<String>,
+    #[serde(default)]
+    pub help: Option<String>,
+    #[serde(default)]
+    pub possible_values: Vec<String>,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CatalogCommand {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub tool_name: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub usage: String,
+    #[serde(default)]
+    pub safety: String,
+    #[serde(default)]
+    pub arguments: Vec<CatalogArg>,
+    #[serde(default)]
+    pub examples: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CommandCatalog {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub generated_by: String,
+    #[serde(default)]
+    pub commands: Vec<CatalogCommand>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DoctorResult {
     #[serde(default)]
     pub status: String,

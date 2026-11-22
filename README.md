@@ -6,10 +6,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Stable](https://img.shields.io/badge/status-stable-green.svg)](#project-status)
 
-> **Stable `v0.12.1`.** AndroidForge is usable today for emulator-driven development and agent
-> workflows. Windows is the tested host; physical devices, Maestro, instrumentation, snapshot restore
-> and root-only operations are not yet fully validated. Read [Project status](#project-status) before
-> relying on it.
+> **Stable `v0.13.0`.** AndroidForge is usable today for emulator-driven development and agent
+> workflows. Windows is the tested host; physical-device Maestro flows, instrumentation, snapshot
+> restore and root-only operations are not yet fully validated. Read [Project status](#project-status)
+> before relying on it.
 
 AndroidForge is a local-first Rust toolkit: a single native CLI for automation plus an optional native
 desktop cockpit for humans. The CLI gives an AI coding agent a reliable way to acquire an Android
@@ -75,15 +75,16 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Agent context | `context`, `agent brief`, compact observations/diffs, stable refs, action receipts, postconditions and exact next-action argv |
 | Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints, recurrence memory, `report explain/history/recurrences` and diagnostic bundles |
 | Orchestration | Idempotent and waitable `session ensure`, read-only `doctor fix --plan`, transparent `agent test`, APK resolution, `--only-if-changed` and parallel `agent matrix` |
-| Desktop | Native egui/eframe cockpit: onboarding, context, matrix, ownership, devices with health/wireless, sessions, runs, triage with explanations/receipts/recurrence/bundle previews, comparison, live logcat, inspector, repair planning, maintenance and updates |
+| Desktop | Native egui/eframe cockpit: onboarding, context, matrix, ownership, devices with health/wireless, sessions, runs, triage with explanations/receipts/recurrence/bundle previews, comparison, live logcat, inspector, searchable tool database, repair planning, maintenance and updates |
 | Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
-| Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas |
+| Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas, optional pinned Maestro installer |
 | Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
 
 ## Screenshots
 
-Real captures from the v0.11.0 native desktop cockpit. The v0.12.0 release does not change the desktop UI, so this gallery still represents it. The full 16-image gallery is in
+Real captures from the v0.11.0 native desktop cockpit. The visual system is unchanged; v0.13.0 adds
+the **Tool database** page, which is not yet in this gallery. The full 16-image gallery is in
 [docs/screenshots/v0.11.0/](docs/screenshots/v0.11.0/README.md).
 
 | Setup / Agent Handoff | Overview |
@@ -93,6 +94,37 @@ Real captures from the v0.11.0 native desktop cockpit. The v0.12.0 release does 
 | [![Sessions](docs/screenshots/v0.11.0/06-sessions.png)](docs/screenshots/v0.11.0/06-sessions.png) | [![Inspector](docs/screenshots/v0.11.0/13-inspector.png)](docs/screenshots/v0.11.0/13-inspector.png) |
 | **Settings** | **Light theme** |
 | [![Settings](docs/screenshots/v0.11.0/15-settings.png)](docs/screenshots/v0.11.0/15-settings.png) | [![Light theme overview](docs/screenshots/v0.11.0/16-overview-light.png)](docs/screenshots/v0.11.0/16-overview-light.png) |
+
+## What is new in v0.13.0
+
+**Optional Maestro, a complete tool database and a 192-tool MCP surface.** The 0.13 line keeps the
+truthful verification work and adds discoverability, optional external tooling and a documented
+compatibility contract.
+
+- **Optional Maestro installer:** `tools install maestro` downloads the pinned, checksum-verified
+  Maestro CLI 2.12.1 Windows build, installs it under `%LOCALAPPDATA%\AndroidForge\tools\maestro`, and
+  `tools status` reports the active path/source. The desktop Setup → Environment page shows an Install
+  Maestro button, the active version/path and Copy path. Maestro remains optional and best-effort.
+- **Desktop Tool database:** a new sidebar page under Workspace, generated from the same clap parser as
+  the CLI. Search commands, arguments and help text; sort A-Z/Z-A; click a row to open a full detail page
+  with usage, examples, an argument table, safety classification and the generated MCP tool name, with a
+  slide/fade transition.
+- **Complete MCP surface:** the server now exposes 192 tools. Curated safety-reviewed tools keep their
+  friendly schemas; every other bounded, non-unsafe CLI leaf command is generated from
+  `tools catalog --json`. Raw `adb` and `run exec` are deliberately excluded, and generated tools skip
+  long-running catalog entries; the curated mock-server tool stays bounded by
+  `max_requests`/`duration`. Mutating generated tools require `confirm=true`; physical mutation cannot
+  be self-approved from the MCP JSON object.
+- **Compatibility policy:** [COMPATIBILITY.md](COMPATIBILITY.md) defines stable CLI/JSON/exit-code/
+  report/MCP surfaces, additive changes and the deprecation window. A new `tools-catalog.schema.json`
+  documents the catalog.
+- **Security hardening:** fail-closed physical-device classification, package-name validation for
+  external file paths, physical guards on app launch/broadcast/service/force-stop/kill, tar member
+  validation for app-data restore, bounded MCP execution/output, mock-server timeouts/connection caps,
+  redacted mock body logs, secure update staging and stricter release URL handling.
+- **Physical device validation:** install, verify, same-version `--only-if-changed`, UI observation/
+  screenshot/recording, out-of-band refresh and cleanup passed on the Xiaomi POCO X4 GT for an isolated
+  debug test package.
 
 ## What is new in v0.12.0
 
@@ -197,7 +229,7 @@ Seven agent-facing capabilities, delivered together:
 - **Bounded observation storage:** `[storage] observation_retention` (default 20, range 2-1000) controls how many observation records are kept per session. Token allocation, writes and pruning are serialized with a cross-process `StateLock`, so parallel commands cannot reuse a token or race retention.
 - **Empty hierarchy recovery:** a valid but empty UIAutomator hierarchy is treated as a transient capture failure and retried instead of being returned as a blank successful screen.
 - **Certification coverage:** the 26 checks that were `NOT RUN` in the v0.9.1/v0.9.2 certification record were exercised against a clean API 36 AVD, including session restart, warm/cold performance, flaky analysis, reconcile, JUnit import failure, bundle screenshot handling, mismatched adapters and a 10-cycle app soak.
-- **Desktop render gate:** `desktop/tests/smoke.ps1` launches all 14 pages, captures a screenshot per page, checks the window rendered, records the Windows UI Automation tree and invokes Refresh on overview. The v0.11.0 local release run passed 14/14 pages.
+- **Desktop render gate:** `desktop/tests/smoke.ps1` launches all 15 pages, captures a screenshot per page, checks the window rendered, records the Windows UI Automation tree and invokes Refresh on overview. The v0.11.0 run covered 14 pages; v0.13 adds the Tool database page.
 - **Exit-code drift test:** `EXIT_CODES.md` is now checked against `ErrorCode::ALL`; `session stop` is documented as owner-guarded rather than `--yes`-guarded.
 - **Physical device:** not validated. The Poco X4 GT / HyperOS 2 device was not connected during this release, so item 4 is recorded as **BLOCKED** in [VERIFICATION.md](VERIFICATION.md), not passed.
 
@@ -318,7 +350,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.12.1` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.13.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -541,7 +573,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Stable `v0.12.1` (pre-1.0).** The CLI has been exercised against real apps on Android 16 and Android
+**Stable `v0.13.0` (pre-1.0).** The CLI has been exercised against real apps on Android 16 and Android
 14 emulators, including a two-AVD parallel matrix, and against a Xiaomi HyperOS device for read-only and
 safe UI paths. v0.12.0 closes the IronPulse 5.1.2 truth and automation gaps: live install metadata,
 byte-truthful `--only-if-changed`, verification commands, configurable gestures and waits, app-data
@@ -604,7 +636,7 @@ Validated:
 - v0.9.3 contract and coverage validation: all released schemas compiled and representative payloads
   validated, nested unknown adapter fields rejected, configurable observation retention with
   cross-process locking, empty-hierarchy retry, and the 26 previously `NOT RUN` certification checks
-  exercised on a clean API 36 AVD. The desktop smoke harness rendered all 14 pages with UI Automation
+  exercised on a clean API 36 AVD. The desktop smoke harness rendered all 15 pages with UI Automation
   and invoked Refresh.
 - v0.10.0 agent-surface validation: MCP handshake/tools/resources (31 tools, 29 resources), selector
   v2 and OCR fallback, checkpoint/resume/event/repro, structured logcat query/watch, intent/broadcast
@@ -627,8 +659,10 @@ Not yet validated:
   verification host, so recognition quality is engine- and language-data-dependent.
 - MCP transports other than local stdio (no HTTP/SSE server is shipped), and MCP client-specific
   tool-calling behavior beyond the recorded JSON-RPC handshake and calls.
-- Maestro and instrumentation execution remain `best-effort` and were not end-to-end validated in
-  this release; missing Maestro returns `E_MAESTRO_NOT_FOUND`. Instrumentation requires a test APK.
+- Maestro flows were validated on a disposable API 36 emulator, including a passing flow and a
+  deliberately failing assertion. Maestro remains `best-effort`; physical-device Maestro flows and a
+  real instrumentation test APK were not end-to-end validated. Missing Maestro returns
+  `E_MAESTRO_NOT_FOUND`.
 - Snapshot load/restore and root-only time changes.
 - macOS and Linux hosts (the desktop is Windows-validated; the CLI is not validated there either).
 - Very large test suites or long-duration stress runs.
@@ -645,8 +679,9 @@ that was not exercised is not claimed as verified.
 - [USER_GUIDE.md](USER_GUIDE.md) — setup, devices, sessions, diagnostics, troubleshooting
 - [ARCHITECTURE.md](ARCHITECTURE.md) — crates, data flow, locking, process and report model
 - [desktop/README.md](desktop/README.md) - building and testing the native desktop cockpit
-- [docs/screenshots/v0.11.0/README.md](docs/screenshots/v0.11.0/README.md) - desktop UI screenshot gallery (desktop unchanged in v0.12.0)
+- [docs/screenshots/v0.11.0/README.md](docs/screenshots/v0.11.0/README.md) - desktop UI screenshot gallery (visual system unchanged; v0.13 adds the Tool database page)
 - [docs/release-notes/v0.12.0.md](docs/release-notes/v0.12.0.md) - v0.12.0 release notes
+- [docs/release-notes/v0.13.0.md](docs/release-notes/v0.13.0.md) - v0.13.0 optional Maestro, tool database and MCP surface
 - [docs/release-notes/v0.12.1.md](docs/release-notes/v0.12.1.md) - v0.12.1 dependency/security patch
 - [PROJECT_ADAPTER.md](PROJECT_ADAPTER.md) — project config, fixtures, hooks and conformance
 - [SCHEMA.md](SCHEMA.md) — report, metadata, manifest and JSON shapes
@@ -655,7 +690,8 @@ that was not exercised is not claimed as verified.
 - [GLOSSARY.md](GLOSSARY.md) — terms used across the docs
 - [VERIFICATION.md](VERIFICATION.md) — exactly what was run, including limitations
 - [ACCEPTANCE.md](ACCEPTANCE.md) and [PORTFOLIO.md](PORTFOLIO.md) — acceptance flows and app coverage
-- [CHANGELOG.md](CHANGELOG.md) — release history
+- [CHANGELOG.md](CHANGELOG.md) - release history
+- [COMPATIBILITY.md](COMPATIBILITY.md) - stable surfaces, deprecation process and MCP compatibility policy
 - [SECURITY.md](SECURITY.md) — trust boundaries and private reporting
 
 ## Development

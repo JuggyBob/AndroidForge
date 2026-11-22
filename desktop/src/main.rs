@@ -8,7 +8,7 @@ fn main() -> eframe::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "AndroidForge desktop {}\n\nUsage:\n  androidforge-desktop.exe [--page <name>]\n\nOptions:\n  --page <name>    Open a page: setup, overview, context, devices, sessions,\n                   matrix, ownership, runs, triage, compare, logcat, inspector, maintenance, settings\n  -h, --help       Print this help and exit\n  -V, --version    Print the desktop version and exit\n\nThe desktop is a GUI; all AndroidForge operations go through the adjacent\nandroidforge.exe CLI sidecar.",
+            "AndroidForge desktop {}\n\nUsage:\n  androidforge-desktop.exe [--page <name>]\n\nOptions:\n  --page <name>    Open a page: setup, tools, overview, context, devices, sessions,\n                   matrix, ownership, runs, triage, compare, logcat, inspector, maintenance, settings\n  -h, --help       Print this help and exit\n  -V, --version    Print the desktop version and exit\n\nThe desktop is a GUI; all AndroidForge operations go through the adjacent\nandroidforge.exe CLI sidecar.",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -55,6 +55,7 @@ fn main() -> eframe::Result<()> {
 fn parse_page(value: &str) -> androidforge_desktop::state::Page {
     match value.to_ascii_lowercase().as_str() {
         "setup" => androidforge_desktop::state::Page::Setup,
+        "tools" => androidforge_desktop::state::Page::Tools,
         "overview" => androidforge_desktop::state::Page::Overview,
         "context" => androidforge_desktop::state::Page::Context,
         "matrix" => androidforge_desktop::state::Page::Matrix,
@@ -74,5 +75,18 @@ fn parse_page(value: &str) -> androidforge_desktop::state::Page {
             );
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tool_database_page() {
+        assert_eq!(
+            parse_page("tools"),
+            androidforge_desktop::state::Page::Tools
+        );
     }
 }

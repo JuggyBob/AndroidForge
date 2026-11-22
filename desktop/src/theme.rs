@@ -382,6 +382,7 @@ pub fn paint_gear_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32
 #[derive(Debug, Clone, Copy)]
 pub enum NavIcon {
     Setup,
+    Help,
     Overview,
     Context,
     Matrix,
@@ -417,6 +418,16 @@ pub fn paint_nav_icon(painter: &egui::Painter, rect: egui::Rect, icon: NavIcon, 
                     egui::pos2(r.center().x - 2.0, r.bottom() - 2.0),
                 ],
                 stroke,
+            );
+        }
+        NavIcon::Help => {
+            painter.circle_stroke(r.center(), r.width().min(r.height()) / 2.0 - 1.0, stroke);
+            painter.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                "?",
+                egui::FontId::proportional(12.0),
+                color,
             );
         }
         NavIcon::Overview => {

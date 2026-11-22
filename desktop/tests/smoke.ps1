@@ -17,7 +17,7 @@ param(
     [string]$DesktopPath = "",
     [string]$CliPath = "",
     [string]$EvidenceDir = "",
-    [int]$PageTimeoutSeconds = 15,
+    [int]$PageTimeoutSeconds = 20,
     [int]$SettleMilliseconds = 900,
     [switch]$UseExistingHome
 )
@@ -50,8 +50,23 @@ if (-not $EvidenceDir) {
 }
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 
+$desktopVersionOutput = (& $DesktopPath --version | Out-String).Trim()
+if ($desktopVersionOutput -notmatch "androidforge-desktop\s+(\S+)") {
+    throw "Could not read the desktop version from '$desktopVersionOutput'."
+}
+$desktopVersion = $Matches[1]
+$cliVersionOutput = (& $CliPath --version | Out-String).Trim()
+if ($cliVersionOutput -notmatch "androidforge\s+(\S+)") {
+    throw "Could not read the CLI version from '$cliVersionOutput'."
+}
+$cliVersion = $Matches[1]
+if ($desktopVersion -ne $cliVersion) {
+    throw "Desktop version $desktopVersion does not match CLI version $cliVersion."
+}
+
 $pages = @(
     "setup",
+    "tools",
     "overview",
     "context",
     "devices",
@@ -76,11 +91,54 @@ using System.Runtime.InteropServices;
 public static class AndroidForgeSmokeWin32 {
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint flags);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    public const int SW_RESTORE = 9;
 }
 "@
+
+function Get-SmokeWindow {
+    param([int]$ProcessId)
+    $script:SmokeWindows = @()
+    $callback = [AndroidForgeSmokeWin32+EnumWindowsProc]{
+        param([IntPtr]$handle, [IntPtr]$param)
+        [uint32]$owner = 0
+        [AndroidForgeSmokeWin32]::GetWindowThreadProcessId($handle, [ref]$owner) | Out-Null
+        if ($owner -eq $ProcessId) {
+            $text = New-Object System.Text.StringBuilder 512
+            [AndroidForgeSmokeWin32]::GetWindowText($handle, $text, 512) | Out-Null
+            $rect = New-Object AndroidForgeSmokeWin32+RECT
+            [AndroidForgeSmokeWin32]::GetWindowRect($handle, [ref]$rect) | Out-Null
+            $script:SmokeWindows += [pscustomobject]@{
+                Handle = $handle
+                Title = $text.ToString()
+                Visible = [AndroidForgeSmokeWin32]::IsWindowVisible($handle)
+                Width = ($rect.Right - $rect.Left)
+                Height = ($rect.Bottom - $rect.Top)
+            }
+        }
+        return $true
+    }
+    [AndroidForgeSmokeWin32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+    # `MainWindowHandle` can point at a hidden 18x18 helper, and the process
+    # also owns a console window whose title is the executable path. Only the
+    # real cockpit window has the exact "AndroidForge" title; do not fall back
+    # to an untitled/largest window or the next capture will race the real one.
+    $candidates = @($script:SmokeWindows |
+        Where-Object { $_.Title -eq "AndroidForge" -and $_.Width -ge 600 -and $_.Height -ge 400 } |
+        Sort-Object { $_.Width * $_.Height } -Descending)
+    if ($candidates.Count -gt 0) {
+        return $candidates[0]
+    }
+    return $null
+}
 
 function Save-WindowScreenshot {
     param([IntPtr]$Handle, [string]$Path)
@@ -225,45 +283,64 @@ try {
         try {
             $process = Start-Process -FilePath $DesktopPath -ArgumentList @("--page", $page) -PassThru
             $deadline = (Get-Date).AddSeconds($PageTimeoutSeconds)
-            while ((Get-Date) -lt $deadline -and $process.MainWindowHandle -eq 0 -and -not $process.HasExited) {
+            $window = $null
+            while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
                 Start-Sleep -Milliseconds 250
                 $process.Refresh()
+                if (-not $process.HasExited) {
+                    $window = Get-SmokeWindow -ProcessId $process.Id
+                }
+                if ($window -and $window.Title -eq "AndroidForge") {
+                    break
+                }
             }
             if ($process.HasExited) {
                 $status = "FAIL"
                 $reason = "process exited before a window appeared (exit $($process.ExitCode))"
             }
-            elseif ($process.MainWindowHandle -eq 0) {
+            elseif (-not $window) {
                 $status = "FAIL"
-                $reason = "no main window appeared within $PageTimeoutSeconds seconds"
+                $reason = "no cockpit window appeared within $PageTimeoutSeconds seconds"
             }
             else {
-                # A window handle can exist before the first frame is painted,
-                # especially when the real state contains many sessions/runs.
-                # Wait for a title, then retry blank captures before failing.
-                $titleDeadline = (Get-Date).AddSeconds(5)
-                while (((Get-Date) -lt $titleDeadline) -and [string]::IsNullOrWhiteSpace($process.MainWindowTitle) -and (-not $process.HasExited)) {
-                    Start-Sleep -Milliseconds 200
+                # A window handle can exist before the first frame is painted.
+                # Restore it, wait for the UIA tree to populate, then retry blank
+                # captures. A title bar plus scrollbar alone is not a rendered page.
+                [AndroidForgeSmokeWin32]::ShowWindow($window.Handle, [AndroidForgeSmokeWin32]::SW_RESTORE) | Out-Null
+                Start-Sleep -Milliseconds 350
+                $process.Refresh()
+                if ($window.Title) {
+                    $title = $window.Title
+                }
+                $automation = Get-AutomationSummary -Handle $window.Handle
+                $uiDeadline = (Get-Date).AddSeconds(8)
+                while ((Get-Date) -lt $uiDeadline -and -not $process.HasExited -and $automation.available -and $automation.count -lt 8) {
+                    Start-Sleep -Milliseconds 300
                     $process.Refresh()
+                    $automation = Get-AutomationSummary -Handle $window.Handle
                 }
                 Start-Sleep -Milliseconds $SettleMilliseconds
                 $process.Refresh()
-                $title = $process.MainWindowTitle
-                $captured = Save-WindowScreenshot -Handle $process.MainWindowHandle -Path $screenshot
+                $captured = Save-WindowScreenshot -Handle $window.Handle -Path $screenshot
                 $attempt = 1
                 while ($captured -and (Test-Path $screenshot)) {
                     $size = (Get-Item $screenshot).Length
                     $renderScore = Get-RenderScore -Path $screenshot
-                    if ($size -ge 1024 -and $renderScore -ge 3) {
+                    $uiReady = (-not $automation.available) -or ($automation.count -ge 8)
+                    if ($size -ge 20000 -and $renderScore -ge 6 -and $uiReady) {
                         break
                     }
-                    if ($attempt -ge 4) {
+                    if ($attempt -ge 5 -or $process.HasExited) {
                         break
                     }
                     $attempt += 1
                     Start-Sleep -Milliseconds 700
                     $process.Refresh()
-                    $captured = Save-WindowScreenshot -Handle $process.MainWindowHandle -Path $screenshot
+                    if ($process.HasExited) {
+                        break
+                    }
+                    $automation = Get-AutomationSummary -Handle $window.Handle
+                    $captured = Save-WindowScreenshot -Handle $window.Handle -Path $screenshot
                 }
                 if (-not $captured -or -not (Test-Path $screenshot)) {
                     $status = "FAIL"
@@ -272,15 +349,22 @@ try {
                 else {
                     $size = (Get-Item $screenshot).Length
                     $renderScore = Get-RenderScore -Path $screenshot
-                    if ($size -lt 1024 -or $renderScore -lt 3) {
+                    if ($size -lt 20000 -or $renderScore -lt 6) {
                         $status = "FAIL"
                         $reason = "screenshot is blank or too small (bytes=$size colors=$renderScore)"
                     }
-                    $automation = Get-AutomationSummary -Handle $process.MainWindowHandle
+                    elseif ([string]::IsNullOrWhiteSpace($title)) {
+                        $status = "FAIL"
+                        $reason = "cockpit window has no title"
+                    }
+                    elseif ($automation.available -and $automation.count -lt 8) {
+                        $status = "FAIL"
+                        $reason = "UI Automation tree did not populate (elements=$($automation.count))"
+                    }
                 }
             }
             if ($status -eq "PASS" -and $page -eq "overview") {
-                $interaction = Invoke-AutomationButton -Handle $process.MainWindowHandle -NamePattern "Refresh"
+                $interaction = Invoke-AutomationButton -Handle $window.Handle -NamePattern "Refresh"
                 Start-Sleep -Seconds 1
                 $process.Refresh()
                 if ($process.HasExited) {
@@ -323,6 +407,8 @@ finally {
 $summary = [pscustomobject]@{
     desktop = $DesktopPath
     cli = $CliPath
+    desktop_version = $desktopVersion
+    cli_version = $cliVersion
     evidence_dir = $EvidenceDir
     pages = $results
     pass = @($results | Where-Object { $_.status -eq "PASS" }).Count

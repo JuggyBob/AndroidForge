@@ -13,6 +13,7 @@ pub mod runs;
 pub mod sessions;
 pub mod settings;
 pub mod setup;
+pub mod tools;
 pub mod triage;
 
 use eframe::egui;
@@ -33,6 +34,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     }
     match app.page {
         Page::Setup => setup::show(app, ui),
+        Page::Tools => tools::show(app, ui),
         Page::Overview => overview::show(app, ui),
         Page::Context => context::show(app, ui),
         Page::Matrix => matrix::show(app, ui),

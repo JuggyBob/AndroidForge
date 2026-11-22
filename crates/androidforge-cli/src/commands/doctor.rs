@@ -155,7 +155,14 @@ pub async fn doctor(cli: &Cli) -> Result<CommandSuccess> {
         ("java", toolchain.java.as_ref(), Some("-version")),
         ("maestro", toolchain.maestro.as_ref(), Some("--version")),
     ] {
-        let info = inspect_tool(name, path, version_arg, cli.trace).await;
+        let info = inspect_tool(
+            name,
+            path,
+            version_arg,
+            cli.trace,
+            toolchain.java.as_deref(),
+        )
+        .await;
         checks.push(Check {
             name: name.to_string(),
             status: if info.available { "ok" } else { "warn" }.to_string(),
@@ -491,16 +498,37 @@ async fn inspect_tool(
     path: Option<&std::path::PathBuf>,
     version_arg: Option<&str>,
     trace: bool,
+    java: Option<&Path>,
 ) -> androidforge_core::model::ToolInfo {
     let Some(path) = path else {
         return androidforge_core::model::ToolInfo::missing(name, "not found");
     };
     let version = if let Some(arg) = version_arg {
-        let spec = CommandSpec::new(path.to_string_lossy().into_owned())
+        let mut spec = CommandSpec::new(path.to_string_lossy().into_owned())
             .args([arg])
             .timeout(Duration::from_secs(15))
             .trace(trace)
             .hide_window(true);
+        if name == "maestro" {
+            spec = spec.env("MAESTRO_CLI_NO_ANALYTICS", "1");
+        }
+        if name == "maestro"
+            && let Some(java) = java
+            && let Some(home) = java.parent().and_then(Path::parent)
+        {
+            let mut paths = vec![java.parent().map(Path::to_path_buf).unwrap_or_default()];
+            if let Some(existing) = std::env::var_os("PATH") {
+                paths.extend(std::env::split_paths(&existing));
+            }
+            spec = spec
+                .env("JAVA_HOME", home.to_string_lossy().into_owned())
+                .env(
+                    "PATH",
+                    std::env::join_paths(paths)
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
+        }
         Runner::new(trace).run(spec).await.ok().map(|output| {
             output
                 .combined_text()
@@ -906,7 +934,7 @@ pub async fn fix_plan(cli: &Cli, args: &DoctorFixArgs) -> Result<CommandSuccess>
             "Maestro",
             "Only Maestro-based flows need it; other AndroidForge features work without it.",
             repair("manual", None, None, true, true),
-            Some("Install Maestro separately and ensure it is on PATH, or disable the maestro integration in configuration.".to_string()),
+            Some("Run `androidforge tools install maestro --yes` to install the pinned Windows build, or disable the maestro integration in configuration.".to_string()),
         ));
     }
     if let Some(sdk) = &sdk_root {
@@ -1645,6 +1673,10 @@ pub(crate) fn schema_files() -> Vec<(&'static str, &'static str)> {
         (
             "session-list.schema.json",
             include_str!("../../../../schema/session-list.schema.json"),
+        ),
+        (
+            "tools-catalog.schema.json",
+            include_str!("../../../../schema/tools-catalog.schema.json"),
         ),
         (
             "bundle.schema.json",

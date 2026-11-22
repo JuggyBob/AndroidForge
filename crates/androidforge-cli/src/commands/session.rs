@@ -1401,7 +1401,7 @@ async fn restore_prepared(ctx: &CliContext, session: &mut Session) -> Vec<String
 
 async fn gc(ctx: &CliContext, args: &SessionGcArgs) -> Result<CommandSuccess> {
     let before = list_sessions(&ctx.paths)?;
-    let report = gc_sessions(&ctx.paths, args.reclaim, ctx.dry_run)?;
+    let report = gc_sessions(&ctx.paths, args.reclaim, args.stop, ctx.dry_run)?;
     let mut warnings = Vec::new();
     if args.stop && !ctx.dry_run {
         for id in &report.reclaimed_sessions {

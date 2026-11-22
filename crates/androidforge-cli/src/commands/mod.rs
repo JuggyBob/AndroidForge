@@ -4,6 +4,7 @@ pub mod apk;
 pub mod app;
 pub mod automation;
 pub mod bundle;
+pub mod catalog;
 pub mod common;
 pub mod context;
 pub mod devices;
@@ -42,7 +43,7 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
         Command::Agent { command } => agent::agent(cli, command).await,
         Command::Capabilities => doctor::capabilities(cli).await,
         Command::Mcp { command } => mcp::mcp(command),
-        Command::Tools { command } => mcp::tools(command),
+        Command::Tools { command } => mcp::tools(cli, command),
         Command::Schema { command } => doctor::schema(command),
         Command::Init(args) => doctor::init(cli, args),
         Command::Config { command } => doctor::config(cli, command).await,

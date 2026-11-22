@@ -623,7 +623,12 @@ pub fn clear_build(paths: &ForgePaths, id: &str, package: &str) -> Result<()> {
     })
 }
 
-pub fn gc_sessions(paths: &ForgePaths, reclaim: bool, dry_run: bool) -> Result<SessionGcReport> {
+pub fn gc_sessions(
+    paths: &ForgePaths,
+    reclaim: bool,
+    stop_live_emulators: bool,
+    dry_run: bool,
+) -> Result<SessionGcReport> {
     let sessions = list_sessions(paths)?;
     let mut report = SessionGcReport {
         sessions_scanned: sessions.len(),
@@ -661,6 +666,19 @@ pub fn gc_sessions(paths: &ForgePaths, reclaim: bool, dry_run: bool) -> Result<S
         {
             report.stale_sessions.push(session.id.clone());
             if reclaim {
+                // A live process operation or emulator must not lose its device
+                // lock merely because the heartbeat is old. `--stop` explicitly
+                // authorizes reclaiming an emulator-backed session.
+                let operation_alive = session
+                    .operation
+                    .as_ref()
+                    .is_some_and(|operation| androidforge_process::process_exists(operation.pid));
+                let emulator_alive = session
+                    .emulator_pid
+                    .is_some_and(androidforge_process::process_exists);
+                if operation_alive || (emulator_alive && !stop_live_emulators) {
+                    continue;
+                }
                 report.reclaimed_sessions.push(session.id.clone());
                 if !dry_run {
                     if let Some(serial) = &session.serial {

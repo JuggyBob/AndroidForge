@@ -61,7 +61,12 @@ pub fn parse_duration(value: &str) -> std::result::Result<Duration, String> {
     if !amount.is_finite() || amount <= 0.0 {
         return Err(format!("duration '{value}' must be greater than zero"));
     }
-    Ok(Duration::from_secs_f64(amount * multiplier))
+    let seconds = amount * multiplier;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(format!("duration '{value}' must be greater than zero"));
+    }
+    Duration::try_from_secs_f64(seconds)
+        .map_err(|_| format!("duration '{value}' is outside the supported range"))
 }
 
 pub fn slugify(value: &str, max_len: usize) -> String {
@@ -153,16 +158,19 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         })?;
     }
     let temp = temp_path_for(path);
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp)
-        .map_err(|error| {
-            ForgeError::new(
-                crate::error::ErrorCode::ArtifactWriteFailed,
-                format!("could not create {}: {error}", temp.display()),
-            )
-        })?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp).map_err(|error| {
+        ForgeError::new(
+            crate::error::ErrorCode::ArtifactWriteFailed,
+            format!("could not create {}: {error}", temp.display()),
+        )
+    })?;
     if let Err(error) = file.write_all(bytes) {
         let _ = fs::remove_file(&temp);
         return Err(ForgeError::new(
@@ -371,6 +379,38 @@ pub fn is_dir_writable(path: &Path) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Validate an Android application package name before it is interpolated into
+/// a remote path or passed to `run-as`/`pm`.
+pub fn is_valid_package_name(package: &str) -> bool {
+    if package.is_empty() || package.len() > 255 {
+        return false;
+    }
+    let mut segments = package.split('.');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    if !valid_package_segment(first) {
+        return false;
+    }
+    let mut count = 1;
+    for segment in segments {
+        if !valid_package_segment(segment) {
+            return false;
+        }
+        count += 1;
+    }
+    count >= 2
+}
+
+fn valid_package_segment(segment: &str) -> bool {
+    let mut characters = segment.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 pub fn sanitize_serial(serial: &str) -> String {

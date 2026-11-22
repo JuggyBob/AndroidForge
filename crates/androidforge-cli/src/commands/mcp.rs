@@ -4,14 +4,19 @@
 //! keeps the MCP surface, the CLI and the JSON contract on one implementation
 //! instead of creating a second command engine.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Cursor, Read, Write};
 use std::process::Command;
 
+use androidforge_core::config::ForgeConfig;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
+use androidforge_core::maestro;
 use androidforge_core::output::CommandSuccess;
+use androidforge_core::paths::ForgePaths;
+use androidforge_core::toolchain::Toolchain;
+use androidforge_core::util::sha256_hex;
 use serde_json::{Value, json};
 
-use crate::cli::{McpCommand, ToolsCommand, ToolsSchemaArgs};
+use crate::cli::{Cli, McpCommand, ToolsCommand, ToolsSchemaArgs};
 
 pub fn mcp(command: &McpCommand) -> Result<CommandSuccess> {
     match command {
@@ -23,10 +28,413 @@ pub fn mcp(command: &McpCommand) -> Result<CommandSuccess> {
     }
 }
 
-pub fn tools(command: &ToolsCommand) -> Result<CommandSuccess> {
+pub fn tools(cli: &Cli, command: &ToolsCommand) -> Result<CommandSuccess> {
     match command {
         ToolsCommand::Schema(args) => tools_schema(args),
+        ToolsCommand::Catalog => {
+            let catalog = crate::commands::catalog::catalog();
+            let count = catalog.commands.len();
+            Ok(CommandSuccess::new(
+                "tools.catalog",
+                serde_json::to_value(&catalog)?,
+                format!("{count} CLI commands.\n"),
+            ))
+        }
+        ToolsCommand::Install { tool, force } => install_tool(cli, tool, *force),
+        ToolsCommand::Status { tool } => tool_status(cli, tool.as_deref()),
+        ToolsCommand::Uninstall { tool } => uninstall_tool(cli, tool),
     }
+}
+
+fn install_tool(cli: &Cli, tool: &str, force: bool) -> Result<CommandSuccess> {
+    if !tool.eq_ignore_ascii_case("maestro") {
+        return Err(
+            ForgeError::invalid_argument(format!("unknown optional tool '{tool}'"))
+                .with_suggestion("Use `androidforge tools install maestro`."),
+        );
+    }
+    if !cfg!(windows) {
+        return Err(ForgeError::new(
+            ErrorCode::UnsupportedOperation,
+            "automatic Maestro installation is currently supported on Windows only",
+        )
+        .with_suggestion("Install Maestro manually and set [sdk].maestro or [maestro].binary.")
+        .with_suggestion("Native `androidforge ui` commands do not require Maestro."));
+    }
+    let paths = ForgePaths::discover(None, cli.project.clone())?;
+    let config = ForgeConfig::load(&paths)?;
+    let version = maestro::MAESTRO_PINNED_VERSION;
+    let target = paths.tools_dir().join("maestro").join(version);
+    let launcher = target
+        .join("maestro")
+        .join("bin")
+        .join(maestro::maestro_launcher_name());
+    if launcher.is_file() && !force {
+        return Ok(tool_success(
+            "tools.install",
+            json!({
+                "tool": "maestro",
+                "version": version,
+                "installed": true,
+                "already_installed": true,
+                "path": launcher.to_string_lossy(),
+                "managed_dir": target.to_string_lossy(),
+                "sha256": maestro::MAESTRO_PINNED_ZIP_SHA256,
+            }),
+            format!(
+                "Maestro {version} is already installed at {}.\n",
+                launcher.display()
+            ),
+        ));
+    }
+    if cli.dry_run {
+        return Ok(tool_success(
+            "tools.install",
+            json!({
+                "dry_run": true,
+                "tool": "maestro",
+                "version": version,
+                "url": maestro::MAESTRO_PINNED_ZIP_URL,
+                "sha256": maestro::MAESTRO_PINNED_ZIP_SHA256,
+                "target": target.to_string_lossy(),
+                "requires_confirmation": true,
+            }),
+            format!(
+                "Would download Maestro {version} from {}\ntarget: {}\nverify SHA-256: {}\n",
+                maestro::MAESTRO_PINNED_ZIP_URL,
+                target.display(),
+                maestro::MAESTRO_PINNED_ZIP_SHA256
+            ),
+        ));
+    }
+    if Toolchain::discover(&config).java.is_none() {
+        return Err(ForgeError::new(
+            ErrorCode::ToolNotFound,
+            "Java is required to run Maestro, but no Java runtime was found",
+        )
+        .with_suggestion("Install a JDK 17 or newer, or set [sdk].java / JAVA_HOME.")
+        .with_suggestion("Run `androidforge doctor --json` to inspect Java discovery."));
+    }
+    if !cli.yes {
+        return Err(ForgeError::invalid_argument(
+            "installing Maestro downloads about 350 MB; pass --yes to confirm",
+        )
+        .with_suggestion("Use `--dry-run` to inspect the pinned URL, hash and target first."));
+    }
+    eprintln!(
+        "Downloading Maestro {} (about 350 MB) from {}",
+        version,
+        maestro::MAESTRO_PINNED_ZIP_URL
+    );
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(900)))
+        .build()
+        .into();
+    let mut response = agent
+        .get(maestro::MAESTRO_PINNED_ZIP_URL)
+        .header(
+            "User-Agent",
+            format!("AndroidForge/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .call()
+        .map_err(|error| {
+            ForgeError::new(
+                ErrorCode::CommandFailed,
+                format!("could not download Maestro: {error}"),
+            )
+            .with_suggestion("Check network access and try again.")
+        })?;
+    let bytes = response
+        .body_mut()
+        .with_config()
+        .limit(420 * 1024 * 1024)
+        .read_to_vec()
+        .map_err(|error| {
+            ForgeError::new(
+                ErrorCode::CommandFailed,
+                format!("could not read the Maestro download: {error}"),
+            )
+        })?;
+    let actual = sha256_hex(&bytes);
+    if actual != maestro::MAESTRO_PINNED_ZIP_SHA256 {
+        return Err(ForgeError::new(
+            ErrorCode::SignatureVerificationFailed,
+            format!(
+                "Maestro download checksum mismatch: expected {}, got {actual}",
+                maestro::MAESTRO_PINNED_ZIP_SHA256
+            ),
+        )
+        .with_suggestion(
+            "Do not run the downloaded file. Retry the install, and report this if it repeats.",
+        ));
+    }
+    let staging = paths
+        .tools_dir()
+        .join("maestro")
+        .join(format!(".install-{version}-{}", std::process::id()));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(|error| {
+            ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                format!("could not clear {}: {error}", staging.display()),
+            )
+        })?;
+    }
+    androidforge_core::util::ensure_dir(&staging)?;
+    if let Err(error) = extract_maestro_zip(&bytes, &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    let staged_launcher = staging
+        .join("maestro")
+        .join("bin")
+        .join(maestro::maestro_launcher_name());
+    if !staged_launcher.is_file() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(ForgeError::new(
+            ErrorCode::ArtifactWriteFailed,
+            "the Maestro archive did not contain maestro/bin/maestro.bat",
+        ));
+    }
+    if target.exists()
+        && let Err(error) = std::fs::remove_dir_all(&target)
+    {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(ForgeError::new(
+            ErrorCode::ArtifactWriteFailed,
+            format!("could not replace {}: {error}", target.display()),
+        ));
+    }
+    if let Some(parent) = target.parent() {
+        androidforge_core::util::ensure_dir(parent)?;
+    }
+    std::fs::rename(&staging, &target).map_err(|error| {
+        let _ = std::fs::remove_dir_all(&staging);
+        ForgeError::new(
+            ErrorCode::ArtifactWriteFailed,
+            format!(
+                "could not activate Maestro at {}: {error}",
+                target.display()
+            ),
+        )
+    })?;
+    let installed_launcher = target
+        .join("maestro")
+        .join("bin")
+        .join(maestro::maestro_launcher_name());
+    let metadata = json!({
+        "tool": "maestro",
+        "version": version,
+        "url": maestro::MAESTRO_PINNED_ZIP_URL,
+        "sha256": maestro::MAESTRO_PINNED_ZIP_SHA256,
+        "archive_bytes": bytes.len(),
+        "installed_at": androidforge_core::util::now_rfc3339(),
+        "launcher": installed_launcher.to_string_lossy(),
+    });
+    androidforge_core::util::write_json_atomic(&target.join("install.json"), &metadata)?;
+    Ok(tool_success(
+        "tools.install",
+        json!({
+            "tool": "maestro",
+            "version": version,
+            "installed": true,
+            "already_installed": false,
+            "path": installed_launcher.to_string_lossy(),
+            "managed_dir": target.to_string_lossy(),
+            "sha256": maestro::MAESTRO_PINNED_ZIP_SHA256,
+            "verified": true,
+        }),
+        format!(
+            "Installed Maestro {version} at {}.\nVerified SHA-256 {}.\n",
+            installed_launcher.display(),
+            maestro::MAESTRO_PINNED_ZIP_SHA256
+        ),
+    ))
+}
+
+fn extract_maestro_zip(bytes: &[u8], destination: &std::path::Path) -> Result<()> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|error| {
+        ForgeError::new(
+            ErrorCode::ArtifactWriteFailed,
+            format!("the Maestro download is not a valid ZIP: {error}"),
+        )
+    })?;
+    if archive.len() > 20_000 {
+        return Err(ForgeError::new(
+            ErrorCode::ArtifactWriteFailed,
+            "the Maestro archive has an unexpected number of entries",
+        ));
+    }
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| {
+            ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                format!("could not read Maestro archive entry {index}: {error}"),
+            )
+        })?;
+        let Some(relative) = entry.enclosed_name() else {
+            return Err(ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                format!(
+                    "Maestro archive entry '{}' escapes the install directory",
+                    entry
+                        .name()
+                        .map(|name| name.into_owned())
+                        .unwrap_or_else(|_| "<invalid>".to_string())
+                ),
+            ));
+        };
+        total = total.saturating_add(entry.size());
+        if total > 600 * 1024 * 1024 {
+            return Err(ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                "the Maestro archive expands beyond the 600 MB safety limit",
+            ));
+        }
+        let path = destination.join(&relative);
+        if entry.is_dir() {
+            androidforge_core::util::ensure_dir(&path)?;
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            androidforge_core::util::ensure_dir(parent)?;
+        }
+        let mut output = std::fs::File::create(&path).map_err(|error| {
+            ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                format!("could not create {}: {error}", path.display()),
+            )
+        })?;
+        std::io::copy(&mut entry, &mut output).map_err(|error| {
+            ForgeError::new(
+                ErrorCode::ArtifactWriteFailed,
+                format!("could not extract {}: {error}", path.display()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn tool_status(cli: &Cli, requested: Option<&str>) -> Result<CommandSuccess> {
+    if let Some(tool) = requested
+        && !tool.eq_ignore_ascii_case("maestro")
+    {
+        return Err(
+            ForgeError::invalid_argument(format!("unknown optional tool '{tool}'"))
+                .with_suggestion("Use `androidforge tools status maestro`."),
+        );
+    }
+    let paths = ForgePaths::discover(None, cli.project.clone())?;
+    let config = ForgeConfig::load(&paths)?;
+    let toolchain = Toolchain::discover(&config);
+    let managed = maestro::latest_installed();
+    let path_on_disk = toolchain.maestro.clone();
+    let managed_path = managed.as_ref().map(|install| install.launcher.clone());
+    let installed = path_on_disk.is_some();
+    let managed_active = match (&path_on_disk, &managed_path) {
+        (Some(active), Some(managed)) => active == managed,
+        _ => false,
+    };
+    let source = match (&path_on_disk, managed_active) {
+        (Some(_), true) => "androidforge-managed",
+        (Some(_), false) => "external",
+        (None, _) => "not-installed",
+    };
+    let value = json!({
+        "tool": "maestro",
+        "installed": installed,
+        "path": path_on_disk.clone().map(|path| path.to_string_lossy().into_owned()),
+        "source": source,
+        "managed": managed_active,
+        "pinned_version": maestro::MAESTRO_PINNED_VERSION,
+        "managed_version": managed.as_ref().map(|install| install.version.clone()),
+        "managed_dir": managed.as_ref().and_then(|install| install.root.parent().map(|parent| parent.to_string_lossy().into_owned())),
+        "java": toolchain.java.as_ref().map(|path| path.to_string_lossy().into_owned()),
+        "install_command": "androidforge tools install maestro --yes",
+    });
+    let human = if let Some(path) = &path_on_disk {
+        format!(
+            "maestro installed ({})\npath: {}\nmanaged: {}\nversion: {}\n",
+            source,
+            path.display(),
+            managed_active,
+            managed
+                .as_ref()
+                .map(|install| install.version.as_str())
+                .unwrap_or("-")
+        )
+    } else {
+        format!(
+            "maestro not installed\ninstall: androidforge tools install maestro --yes\npinned version: {}\n",
+            maestro::MAESTRO_PINNED_VERSION
+        )
+    };
+    Ok(tool_success("tools.status", value, human))
+}
+
+fn uninstall_tool(cli: &Cli, tool: &str) -> Result<CommandSuccess> {
+    if !tool.eq_ignore_ascii_case("maestro") {
+        return Err(
+            ForgeError::invalid_argument(format!("unknown optional tool '{tool}'"))
+                .with_suggestion("Use `androidforge tools uninstall maestro`."),
+        );
+    }
+    if cli.dry_run {
+        return Ok(tool_success(
+            "tools.uninstall",
+            json!({"dry_run": true, "tool": "maestro"}),
+            "Would remove the AndroidForge-managed Maestro installation.\n".to_string(),
+        ));
+    }
+    if !cli.yes {
+        return Err(ForgeError::invalid_argument(
+            "uninstalling Maestro removes the managed installation; pass --yes",
+        ));
+    }
+    let paths = ForgePaths::discover(None, cli.project.clone())?;
+    let root = paths.tools_dir().join("maestro");
+    let managed = maestro::latest_installed();
+    let Some(install) = managed else {
+        return Err(ForgeError::new(
+            ErrorCode::ToolNotFound,
+            "no AndroidForge-managed Maestro installation was found",
+        )
+        .with_suggestion(
+            "Only manager-installed copies can be removed here; remove external installs manually.",
+        ));
+    };
+    let version_dir = install
+        .root
+        .parent()
+        .ok_or_else(|| ForgeError::internal("invalid managed Maestro path"))?
+        .to_path_buf();
+    if !version_dir.starts_with(&root) {
+        return Err(ForgeError::new(
+            ErrorCode::Internal,
+            "refusing to remove a Maestro path outside the managed tools directory",
+        ));
+    }
+    std::fs::remove_dir_all(&version_dir).map_err(|error| {
+        ForgeError::new(
+            ErrorCode::ArtifactWriteFailed,
+            format!("could not remove {}: {error}", version_dir.display()),
+        )
+    })?;
+    Ok(tool_success(
+        "tools.uninstall",
+        json!({
+            "tool": "maestro",
+            "removed": true,
+            "version": install.version,
+            "path": version_dir.to_string_lossy(),
+        }),
+        format!("Removed managed Maestro {}.\n", install.version),
+    ))
+}
+
+fn tool_success(command: &str, value: Value, human: String) -> CommandSuccess {
+    CommandSuccess::new(command, value, human)
 }
 
 fn tools_schema(args: &ToolsSchemaArgs) -> Result<CommandSuccess> {
@@ -679,7 +1087,112 @@ pub fn tool_definitions() -> Vec<Value> {
             &["run"],
         ),
     ));
+    // Every remaining CLI leaf command gets a generated MCP tool. Curated tools
+    // above stay authoritative for the high-traffic, safety-sensitive paths.
+    let mut existing = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+        .collect::<std::collections::HashSet<_>>();
+    for command in crate::commands::catalog::command_catalog() {
+        if command.safety == "long-running" || command.safety == "unsafe" {
+            continue;
+        }
+        if !existing.insert(command.tool_name.clone()) {
+            continue;
+        }
+        tools.push(generated_tool(&command));
+    }
     tools
+}
+
+fn generated_tool(command: &crate::commands::catalog::CatalogCommand) -> Value {
+    let mut properties = serde_json::Map::new();
+    properties.insert("session".to_string(), json!({"type": "string"}));
+    properties.insert("project".to_string(), json!({"type": "string"}));
+    if !serial_is_array(command) {
+        properties.insert("serial".to_string(), json!({"type": "string"}));
+    }
+    properties.insert(
+        "output_profile".to_string(),
+        json!({"type": "string", "enum": ["full", "compact", "brief"]}),
+    );
+    properties.insert("dry_run".to_string(), json!({"type": "boolean"}));
+    if command.safety != "read-only" {
+        properties.insert(
+            "confirm".to_string(),
+            json!({"type": "boolean", "description": "Required for mutating commands."}),
+        );
+    }
+    let mut required = Vec::new();
+    for argument in &command.arguments {
+        let key = argument.long.clone().unwrap_or_else(|| argument.id.clone());
+        if matches!(
+            key.as_str(),
+            "session"
+                | "project"
+                | "serial"
+                | "output_profile"
+                | "confirm"
+                | "allow_physical_mutation"
+                | "dry_run"
+        ) && !(key == "serial" && serial_is_array(command))
+        {
+            continue;
+        }
+        let schema = match argument.kind.as_str() {
+            "boolean" => json!({"type": "boolean"}),
+            "enum" => json!({
+                "type": "string",
+                "enum": argument.possible_values,
+            }),
+            "array" => json!({
+                "type": "array",
+                "items": {"type": "string"},
+            }),
+            _ => json!({"type": "string"}),
+        };
+        let schema = match &argument.help {
+            Some(help) if !help.is_empty() => {
+                let mut value = schema;
+                value["description"] = Value::String(help.clone());
+                value
+            }
+            _ => schema,
+        };
+        if argument.required {
+            required.push(Value::String(key.clone()));
+        }
+        properties.insert(key, schema);
+    }
+    let description = if command.arguments.is_empty() {
+        format!(
+            "{} Safety: {}. Run `androidforge {} --help` for the complete contract.",
+            command.summary, command.safety, command.path
+        )
+    } else {
+        format!(
+            "{} Safety: {}. Arguments mirror the CLI. Run `androidforge {} --help` for details.",
+            command.summary, command.safety, command.path
+        )
+    };
+    tool(
+        &command.tool_name,
+        &description,
+        schema(
+            Value::Object(properties),
+            &required
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+        ),
+    )
+}
+
+fn serial_is_array(command: &crate::commands::catalog::CatalogCommand) -> bool {
+    command
+        .arguments
+        .iter()
+        .any(|argument| argument.id == "serial" && argument.kind == "array")
 }
 
 fn merge_common_selector(base: Value, extra: Value) -> Value {
@@ -709,6 +1222,12 @@ fn resource_definitions() -> Vec<Value> {
             "uri": "androidforge://tools",
             "name": "AndroidForge tool catalog",
             "description": "MCP/function-calling definitions for the current build.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "androidforge://catalog",
+            "name": "AndroidForge CLI command catalog",
+            "description": "Every CLI leaf command, its arguments, safety class and examples.",
             "mimeType": "application/json"
         }),
         json!({
@@ -750,13 +1269,45 @@ fn resource_definitions() -> Vec<Value> {
 pub fn serve_stdio() -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
-    for line in stdin.lock().lines() {
-        let line = line
+    let mut reader = std::io::BufReader::new(stdin.lock());
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        let read = reader
+            .read_until(b'\n', &mut buffer)
             .map_err(|error| ForgeError::internal(format!("could not read MCP stdin: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        if buffer.len() > 16 * 1024 * 1024 {
+            write_response(
+                &mut stdout,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": {"code": -32700, "message": "MCP request line exceeded the 16 MiB limit"}
+                }),
+            )?;
+            continue;
+        }
+        let line = match std::str::from_utf8(&buffer) {
+            Ok(line) => line,
+            Err(error) => {
+                write_response(
+                    &mut stdout,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": Value::Null,
+                        "error": {"code": -32700, "message": format!("MCP request was not UTF-8: {error}")}
+                    }),
+                )?;
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
-        let request: Value = match serde_json::from_str(&line) {
+        let request: Value = match serde_json::from_str(line) {
             Ok(value) => value,
             Err(error) => {
                 write_response(
@@ -860,6 +1411,21 @@ fn call_tool(id: Value, params: &Value) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return error_response(id, -32602, "tools/call requires a tool name");
     };
+    // The advertised tool list is the dispatch boundary. Without this check a
+    // caller can invoke a hidden catalog entry (for example the unsafe `adb` or
+    // `run exec` wrappers) by name even though `tools/list` omits it.
+    if !tool_definitions()
+        .iter()
+        .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+    {
+        return result_response(
+            id,
+            json!({
+                "content": [{"type": "text", "text": format!("unknown AndroidForge tool: {name}")}],
+                "isError": true,
+            }),
+        );
+    }
     let arguments = params
         .get("arguments")
         .cloned()
@@ -897,6 +1463,9 @@ fn call_tool(id: Value, params: &Value) -> Value {
 }
 
 fn run_cli(argv: &[String]) -> (bool, String, String) {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
@@ -907,15 +1476,71 @@ fn run_cli(argv: &[String]) -> (bool, String, String) {
             );
         }
     };
-    let output = match Command::new(exe).args(argv).output() {
-        Ok(output) => output,
+    let mut child = match Command::new(exe)
+        .args(argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
         Err(error) => return (false, String::new(), format!("could not run CLI: {error}")),
     };
+    let pid = child.id();
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let stdout_reader = std::thread::spawn(move || read_limited(stdout_pipe, 32 * 1024 * 1024));
+    let stderr_reader = std::thread::spawn(move || read_limited(stderr_pipe, 8 * 1024 * 1024));
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < Duration::from_secs(600) => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) => {
+                timed_out = true;
+                androidforge_process::kill_tree(pid);
+                let _ = child.wait();
+                break None;
+            }
+            Err(error) => {
+                androidforge_process::kill_tree(pid);
+                let _ = child.wait();
+                return (
+                    false,
+                    String::new(),
+                    format!("could not wait for CLI: {error}"),
+                );
+            }
+        }
+    };
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    if timed_out {
+        return (
+            false,
+            stdout,
+            format!(
+                "{stderr}\nMCP tool execution exceeded the 600 second limit and was terminated."
+            ),
+        );
+    }
     (
-        output.status.success(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
+        status.is_some_and(|status| status.success()),
+        stdout,
+        stderr,
     )
+}
+
+fn read_limited<R: std::io::Read>(pipe: Option<R>, limit: u64) -> String {
+    let Some(pipe) = pipe else {
+        return String::new();
+    };
+    let mut bytes = Vec::new();
+    let _ = pipe.take(limit).read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn arg_str(arguments: &Value, key: &str) -> Option<String> {
@@ -1380,6 +2005,16 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             }
         }
         "androidforge_network_mock_serve" => {
+            let max_requests = arguments
+                .get("max_requests")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if max_requests == 0 && arg_str(arguments, "duration").is_none() {
+                return Err(
+                    "androidforge_network_mock_serve requires max_requests > 0 or duration"
+                        .to_string(),
+                );
+            }
             argv.extend([
                 "network".to_string(),
                 "mock".to_string(),
@@ -1804,9 +2439,148 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             ]);
             push_global(&mut argv, arguments);
         }
-        other => return Err(format!("unknown AndroidForge tool: {other}")),
+        other => {
+            let catalog = crate::commands::catalog::command_catalog();
+            let Some(command) = catalog.iter().find(|command| command.tool_name == other) else {
+                return Err(format!("unknown AndroidForge tool: {other}"));
+            };
+            // Defense in depth: even if a hidden name reaches this fallback,
+            // never build argv for an unsafe or long-running catalog entry.
+            if command.safety == "unsafe" || command.safety == "long-running" {
+                return Err(format!(
+                    "AndroidForge tool '{other}' is not exposed over MCP ({})",
+                    command.safety
+                ));
+            }
+            append_generated_argv(&mut argv, arguments, command)?;
+        }
     }
     Ok(argv)
+}
+
+fn append_generated_argv(
+    argv: &mut Vec<String>,
+    arguments: &Value,
+    command: &crate::commands::catalog::CatalogCommand,
+) -> std::result::Result<(), String> {
+    argv.extend(command.path.split_whitespace().map(str::to_string));
+    push_global(argv, arguments);
+    if !serial_is_array(command)
+        && let Some(serial) = arg_str(arguments, "serial")
+    {
+        argv.push("--serial".to_string());
+        argv.push(serial);
+    }
+    let mut positionals = Vec::new();
+    for argument in &command.arguments {
+        let key = argument.long.clone().unwrap_or_else(|| argument.id.clone());
+        if matches!(
+            key.as_str(),
+            "session"
+                | "project"
+                | "serial"
+                | "output_profile"
+                | "confirm"
+                | "allow_physical_mutation"
+                | "dry_run"
+        ) && !(key == "serial" && serial_is_array(command))
+        {
+            continue;
+        }
+        let value = arguments.get(&key);
+        let required = argument.required;
+        if value.is_none() {
+            if required {
+                return Err(format!("{} requires '{}'", command.tool_name, key));
+            }
+            continue;
+        }
+        let flag = if argument.positional {
+            None
+        } else if let Some(long) = &argument.long {
+            Some(format!("--{long}"))
+        } else {
+            argument.short.map(|short| format!("-{short}"))
+        };
+        match argument.kind.as_str() {
+            "boolean" => {
+                if value.and_then(Value::as_bool).unwrap_or(false)
+                    && let Some(flag) = flag
+                {
+                    argv.push(flag);
+                }
+            }
+            "array" => {
+                let values = match value {
+                    Some(Value::Array(values)) => values.clone(),
+                    Some(value) => vec![value.clone()],
+                    None => Vec::new(),
+                };
+                for value in values {
+                    let text = value_to_arg(&value).ok_or_else(|| {
+                        format!(
+                            "{} argument '{}' must be a string, number or boolean",
+                            command.tool_name, key
+                        )
+                    })?;
+                    if let Some(flag) = &flag {
+                        argv.push(flag.clone());
+                    }
+                    if argument.positional {
+                        positionals.push(text);
+                    } else {
+                        argv.push(text);
+                    }
+                }
+            }
+            _ => {
+                let Some(value) = value else { continue };
+                let text = value_to_arg(value).ok_or_else(|| {
+                    format!(
+                        "{} argument '{}' must be a string, number or boolean",
+                        command.tool_name, key
+                    )
+                })?;
+                if argument.positional {
+                    positionals.push(text);
+                } else if let Some(flag) = flag {
+                    argv.push(flag);
+                    argv.push(text);
+                } else {
+                    positionals.push(text);
+                }
+            }
+        }
+    }
+    if command.safety == "destructive" || command.safety == "device-mutation" {
+        if !arg_bool(arguments, "confirm") {
+            return Err(format!(
+                "{} is a {} command and requires confirm=true",
+                command.tool_name, command.safety
+            ));
+        }
+        argv.push("--yes".to_string());
+    }
+    if arg_bool(arguments, "dry_run") {
+        argv.push("--dry-run".to_string());
+    }
+    argv.push("--json".to_string());
+    if !positionals.is_empty() {
+        // Keep a positional that starts with '-' from being interpreted as a
+        // global flag. Flags are emitted before this delimiter.
+        argv.push("--".to_string());
+        argv.extend(positionals);
+    }
+    Ok(())
+}
+
+fn value_to_arg(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
 }
 
 fn read_resource(id: Value, params: &Value) -> Value {
@@ -1817,6 +2591,10 @@ fn read_resource(id: Value, params: &Value) -> Value {
         "androidforge://tools" => (
             "application/json",
             serde_json::to_string_pretty(&json!({"tools": tool_definitions()})).unwrap_or_default(),
+        ),
+        "androidforge://catalog" => (
+            "application/json",
+            serde_json::to_string_pretty(&crate::commands::catalog::catalog()).unwrap_or_default(),
         ),
         "androidforge://schemas" => {
             let names = crate::commands::doctor::schema_files()
@@ -1982,5 +2760,169 @@ mod tests {
         assert!(argv.contains(&"Save|Apply".to_string()));
         assert!(argv.contains(&"--role".to_string()));
         assert!(argv.contains(&"--ocr-fallback".to_string()));
+    }
+
+    #[test]
+    fn report_prune_requires_confirmation_and_forwards_yes() {
+        let error = tool_argv("androidforge_report_prune", &json!({})).unwrap_err();
+        assert!(error.contains("confirm=true"), "{error}");
+        let argv = tool_argv(
+            "androidforge_report_prune",
+            &json!({"confirm": true, "older_than": "7d"}),
+        )
+        .unwrap();
+        assert_eq!(argv[0], "report");
+        assert_eq!(argv[1], "prune");
+        assert!(argv.contains(&"--yes".to_string()), "{argv:?}");
+    }
+
+    #[test]
+    fn hidden_unsafe_and_long_running_tools_are_not_dispatchable() {
+        for name in [
+            "androidforge_adb",
+            "androidforge_run_exec",
+            "androidforge_mcp_serve",
+        ] {
+            let error = tool_argv(
+                name,
+                &json!({"args": ["shell", "id"], "name": "cmd", "program": "cmd"}),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("not exposed") || error.contains("unknown AndroidForge tool"),
+                "{name}: {error}"
+            );
+        }
+        let advertised = tool_definitions()
+            .into_iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+            .collect::<std::collections::HashSet<_>>();
+        for hidden in [
+            "androidforge_adb",
+            "androidforge_run_exec",
+            "androidforge_mcp_serve",
+        ] {
+            assert!(!advertised.contains(hidden), "{hidden} must stay hidden");
+        }
+    }
+
+    #[test]
+    fn call_tool_rejects_hidden_tools_before_argv() {
+        let response = call_tool(
+            json!(1),
+            &json!({
+                "name": "androidforge_adb",
+                "arguments": {"args": ["shell", "id"]}
+            }),
+        );
+        assert_eq!(response["result"]["isError"], true);
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("unknown AndroidForge tool")),
+            "{response}"
+        );
+    }
+
+    #[test]
+    fn generated_tools_cover_every_non_blocking_cli_command() {
+        let tools = tool_definitions()
+            .into_iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+            .collect::<std::collections::HashSet<_>>();
+        for command in crate::commands::catalog::command_catalog() {
+            if command.safety == "long-running" || command.safety == "unsafe" {
+                continue;
+            }
+            assert!(
+                tools.contains(&command.tool_name),
+                "MCP catalog is missing {}",
+                command.tool_name
+            );
+        }
+    }
+
+    #[test]
+    fn generated_argv_mirrors_cli_options_and_positionals() {
+        let argv = tool_argv(
+            "androidforge_tools_status",
+            &json!({"tool": "maestro", "session": "ses-1"}),
+        )
+        .unwrap();
+        assert_eq!(argv[0], "tools");
+        assert_eq!(argv[1], "status");
+        assert!(argv.contains(&"maestro".to_string()));
+        assert!(argv.contains(&"--json".to_string()));
+
+        let inspect =
+            tool_argv("androidforge_session_inspect", &json!({"session": "ses-1"})).unwrap();
+        assert_eq!(inspect[0], "session");
+        assert_eq!(inspect[1], "inspect");
+        assert!(inspect.contains(&"--session".to_string()));
+    }
+
+    #[test]
+    fn matrix_serial_array_is_forwarded() {
+        let argv = tool_argv(
+            "androidforge_agent_matrix",
+            &json!({"serial": ["emulator-5554", "emulator-5556"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            argv.iter()
+                .filter(|argument| *argument == "--serial")
+                .count(),
+            2,
+            "{argv:?}"
+        );
+        assert!(argv.contains(&"emulator-5554".to_string()));
+        assert!(argv.contains(&"emulator-5556".to_string()));
+
+        let single = tool_argv(
+            "androidforge_agent_matrix",
+            &json!({"serial": "emulator-5554"}),
+        )
+        .unwrap();
+        assert_eq!(
+            single
+                .iter()
+                .filter(|argument| *argument == "--serial")
+                .count(),
+            1,
+            "{single:?}"
+        );
+
+        let tool = tool_definitions()
+            .into_iter()
+            .find(|tool| tool["name"] == "androidforge_agent_matrix")
+            .expect("matrix tool");
+        assert_eq!(
+            tool["inputSchema"]["properties"]["serial"]["type"], "array",
+            "{tool}"
+        );
+    }
+
+    #[test]
+    fn generated_mutating_tools_require_confirmation() {
+        let error =
+            tool_argv("androidforge_session_stop", &json!({"session": "ses-1"})).unwrap_err();
+        assert!(error.contains("confirm=true"), "{error}");
+
+        let error = tool_argv(
+            "androidforge_app_data_restore",
+            &json!({"package": "com.example", "path": "backup.tar"}),
+        )
+        .unwrap_err();
+        assert!(error.contains("confirm=true"), "{error}");
+
+        let error = tool_argv("androidforge_doze_unforce", &json!({})).unwrap_err();
+        assert!(error.contains("confirm=true"), "{error}");
+
+        let argv = tool_argv(
+            "androidforge_session_stop",
+            &json!({"session": "ses-1", "confirm": true}),
+        )
+        .unwrap();
+        assert!(argv.contains(&"--yes".to_string()));
     }
 }

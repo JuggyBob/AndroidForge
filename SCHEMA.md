@@ -41,6 +41,7 @@ The schema files:
 | `network-mock.schema.json` | `network mock serve` bound server summary and request log path. |
 | `visual-diff.schema.json` | Screenshot baseline/region comparison metrics and pass/fail. |
 | `session-list.schema.json` | Session classification, age, reason and active/mine filters. |
+| `tools-catalog.schema.json` | Complete CLI command catalog used by the desktop tool database and generated MCP tools. |
 | `bundle.schema.json` | Diagnostic bundle manifest, checksummed payloads and exclusions. |
 | `health.schema.json` | Read-only device health report and unknown reasons. |
 | `matrix.schema.json` | Matrix plan/results, `parallel`, per-target health, child reports and cleanup. |
@@ -295,6 +296,3 @@ sessions, largest runs and the terminal-session list. `maintenance clean` defaul
 requires `--yes` for deletion; `--sessions`, `--runs`, `--older-than` and `--keep-last` select the
 eligible set. Active sessions and running runs are always excluded. The result lists every pruned
 session and deleted run. Both payloads are described by `schema/maintenance.schema.json`.
-
-
-

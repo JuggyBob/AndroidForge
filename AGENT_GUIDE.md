@@ -396,7 +396,7 @@ androidforge tools schema --format openai --json
 
 `mcp serve` speaks newline-delimited JSON-RPC on stdin/stdout. Only JSON-RPC lines go to stdout;
 diagnostics go to stderr. Destructive tools require `confirm=true`, and uninstall/fresh-install are
-guarded. `tools schema` exports the same 40-tool catalog.
+guarded. `tools schema` exports the same 192-tool catalog.
 
 Selector v2 and OCR:
 
@@ -483,6 +483,23 @@ skips only when package, version code, base APK hash and split hashes all match.
 resource-id alias and only works when the debug app enables `testTagsAsResourceId`; the failure
 includes that guidance. `session list --mine` uses `ANDROIDFORGE_OWNER` (or the OS user) and reports
 `classification`/`reason`; GC dry-run never mutates state and prints the exact apply command.
+
+Optional tools and discoverability:
+
+```powershell
+androidforge tools status maestro --json
+androidforge tools install maestro --dry-run --json
+androidforge tools install maestro --yes --json
+androidforge tools uninstall maestro --yes --json
+androidforge tools catalog --json
+```
+
+`tools install maestro` downloads the pinned Maestro CLI 2.12.1 Windows ZIP from the official release,
+verifies SHA-256 `54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7` and installs under
+the AndroidForge state directory. It requires Java 17+ and `--yes`. `tools status` reports the active
+path, source (`androidforge-managed` or `external`), managed version and Java. `tools catalog` emits the
+complete 191-command catalog used by the desktop **Tool database** and generated MCP tools. Maestro
+remains optional; native UI commands do not require it.
 
 Device waiting:
 
@@ -851,8 +868,9 @@ androidforge session stop --session ses-3457532120af --owner CalcSuiteAgent --js
 ```
 
 The actual command surface and current verified status are in [CAPABILITIES.md](CAPABILITIES.md) and
-[VERIFICATION.md](VERIFICATION.md). If a command is not listed as supported, expect a structured
-`E_UNSUPPORTED_OPERATION` rather than a fake success.
+[VERIFICATION.md](VERIFICATION.md). The stable CLI/JSON/exit-code/report/MCP contract and the
+deprecation process are in [COMPATIBILITY.md](COMPATIBILITY.md). If a command is not listed as
+supported, expect a structured `E_UNSUPPORTED_OPERATION` rather than a fake success.
 
 ## 12. Desktop cockpit
 

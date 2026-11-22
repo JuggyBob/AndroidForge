@@ -10,6 +10,112 @@ within its pre-1.0 release line.
 
 - Nothing yet.
 
+## [0.13.0] - 2026-11-22
+
+**Optional Maestro, desktop Tool database and a complete MCP command surface.** This release keeps the
+truthful verification work from 0.12 and adds discoverability, optional external tooling, a
+compatibility policy and a security-hardening pass.
+
+### Added
+
+- **Pinned optional Maestro installer:** `tools install maestro` downloads the official Maestro CLI
+  2.12.1 Windows ZIP (about 350 MB), verifies the compile-time pinned SHA-256
+  `54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7`, extracts with zip-slip and size
+  limits, and installs under the AndroidForge state tools directory. `tools status maestro` reports the
+  active path, source (`androidforge-managed` or `external`), managed version and Java. `tools uninstall
+  maestro --yes` removes only a managed copy. `--dry-run` previews URL/hash/target.
+- **Desktop Maestro controls:** Setup → Environment shows the Maestro check with an **Install Maestro**
+  button, a confirmation dialog listing the pinned version/URL/hash/target, progress state, and the
+  active path with Copy path. A CLI installation is detected automatically through the shared managed
+  tools directory.
+- **Desktop Tool database:** a new Workspace sidebar page with a help icon, search across command paths,
+  summaries, arguments and help text, A-Z/Z-A sorting, safety badges, and full detail pages with usage,
+  examples, argument tables and generated MCP tool names. Opening a tool uses a short slide/fade.
+- **Complete CLI catalog:** `tools catalog --json` derives 191 leaf commands from clap, including
+  arguments, required flags, possible values, defaults, examples and safety classes.
+  `tools-catalog.schema.json` documents the shape.
+- **Complete MCP surface:** the tool catalog now exposes **192 tools**. Existing curated tools keep
+  their hand-written schemas; every other bounded, non-unsafe CLI leaf command is generated from the
+  same catalog. Raw `adb`/`run exec` and the nested `mcp serve` are excluded; `network mock serve` is
+  exposed only through the bounded curated tool. `androidforge://catalog` exposes the full catalog as an MCP resource.
+- **Compatibility and deprecation policy:** `COMPATIBILITY.md` defines stable CLI flags, envelopes,
+  error/exit codes, report schema 1, curated MCP tools and the deprecation window; generated tools and
+  experimental/best-effort integrations are explicitly additive or exempt.
+- **Physical-device validation evidence:** install, live verification, same-version byte-different
+  `--only-if-changed`, UI dump/find/tap, screenshot, 5s recording and out-of-band refresh were exercised
+  on the Xiaomi POCO X4 GT for an isolated debug package, then the package was uninstalled.
+
+### Changed
+
+- Maestro remains optional/best-effort, but AndroidForge now owns a tested, pinned installation path
+  instead of requiring a floating global install.
+- MCP generated tools use a `--` delimiter for positionals and never auto-forward
+  `--allow-physical-mutation`; physical mutation requires an out-of-band CLI/user decision.
+- Raw `adb` and `run exec` are classified `unsafe`, hidden from generated MCP tools and shown with a red
+  safety badge in the desktop database. They remain available to a human/CLI that intentionally invokes
+  them.
+- Mock server exposes a confirmation-gated `--allow-external-bind`; loopback remains the default.
+- `tools schema` grows from 40 to 192 tools; README/guides use the new count.
+
+### Fixed / security hardening
+
+- Fail-closed device classification: only `emulator-*` serials are treated as unprotected emulators;
+  unknown/vendor devices require `--allow-physical-mutation`.
+- Physical-device guards added to `app launch`, `broadcast`, `service`, `force-stop` and `kill`.
+- Package names are validated before `run-as`/external path interpolation; external push/pull paths
+  cannot escape the app directory via `..`.
+- App-data restore validates tar members and rejects absolute/parent paths, symlinks, devices and other
+  non-regular entries.
+- Session GC no longer reclaims a stale session with a live emulator or live operation unless `--stop`
+  is explicit; device locks cannot be freed underneath a running operation.
+- MCP `tools/call` now accepts only names in the advertised tool set. A hidden catalog entry
+  (`androidforge_adb`, `androidforge_run_exec`, long-running servers) is rejected before argv
+  construction; the generated fallback enforces the same safety class check.
+- MCP `tools/call` has a 600s wall-clock limit, 32 MiB/8 MiB output caps and process-tree termination;
+  JSON-RPC request lines are capped at 16 MiB.
+- Generated MCP tools forward array-valued `serial` targets (for example `agent matrix`) instead of
+  dropping them, and catalog safety classes now require `confirm=true` for `report prune`,
+  `app data-restore` and `doze unforce`.
+- Mock server has per-connection timeouts, a 64-connection cap, exact `Content-Length` body slicing,
+  CRLF header validation and body-log redaction; sensitive headers are expanded.
+- Maestro staging cleans up on extraction/target errors; desktop updater uses random temp staging,
+  caps executable extraction and requires GitHub release URLs.
+- Desktop CLI pipe capture is capped; preview frames over 32 MiB are rejected; run paths must contain
+  `report.json` before desktop reads them.
+- Desktop Maestro install now goes through the normal confirmation dialog.
+
+### Validation
+
+- `cargo test --workspace`, strict clippy and fmt (delegated final gate).
+- `tools catalog`: 191 commands; `tools schema --format mcp`: 192 tools.
+- Maestro installer/status/uninstall tested in an isolated home; doctor reports version `2.12.1` and
+  the managed path. Passing and deliberately failing Maestro flows were executed on a disposable
+  API 36 emulator with `result.version:"2.12.1"` and no duplicate/analytics side effects.
+- Mock HTTP/TLS/redaction/timeout smoke, MCP generated tool calls, desktop 15-page smoke and
+  multi-emulator + physical session-ownership campaigns are recorded in `VERIFICATION.md`.
+- Physical-device evidence: baseline hash `22DDD58E…`, modified hash `198A1EF3…`, same cert, update
+  installed with `reason:content_different`, out-of-band refresh reported the baseline hash, cleanup
+  removed only `com.aster.localai.debug`.
+
+### Compatibility
+
+- Report schema remains `1`; v0.12 reports remain readable.
+- Existing CLI command names, envelope and exit codes are preserved.
+- New fields/schemas/MCP tools are additive; see `COMPATIBILITY.md`.
+- The desktop and CLI must both be `0.13.0`.
+- Desktop screenshots remain the v0.11.0 gallery because the visual system is unchanged; the new Tool
+  database is documented with its own page description.
+
+### Known limitations
+
+- Maestro is optional/best-effort. The installer is Windows-only and pins one tested version.
+- Physical-device validation covers one Xiaomi HyperOS debug package; other vendor ROM install flows
+  remain best-effort.
+- Maestro flows were validated end-to-end on a disposable API 36 emulator (passing and deliberately
+  failing). A real instrumentation test APK and physical-device Maestro flows were not validated.
+- Snapshot restore, root-only time changes, macOS/Linux hosts and code signing remain unverified.
+- Raw `adb`, `run exec`, and physical-device mutation are deliberately excluded from MCP self-service.
+
 ## [0.12.1] - 2026-11-22
 
 **Dependency and supply-chain patch for the v0.12.0 stable line.** This is a normal stable release and
@@ -1041,7 +1147,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.13.0
 [0.12.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.1
 [0.12.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.0
 [0.11.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.11.0
@@ -1060,5 +1167,3 @@ First public alpha of the local-first AndroidForge CLI.
 [0.3.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.1.0
-
-

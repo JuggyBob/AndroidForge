@@ -12,7 +12,7 @@ This guide is for a human setting up AndroidForge and for scripts that prefer a 
   - at least one AVD, if you use emulators
   - build-tools with `aapt2` and `apksigner`
   - a JDK 17 for `apksigner` (the SDK's bundled JDK is ideal)
-- Optional: Maestro CLI, an instrumentation test APK.
+- Optional: Maestro CLI (AndroidForge can install the pinned Windows build), an instrumentation test APK.
 
 AndroidForge discovers the SDK from `ANDROIDFORGE_SDK_ROOT`, `ANDROID_HOME` or `ANDROID_SDK_ROOT`, then common install locations such as `%LOCALAPPDATA%\Android\Sdk`. Java is discovered from `[sdk].java`, `ANDROIDFORGE_JAVA`, `JAVA_HOME`, the SDK's `jdk` directory, then `PATH`.
 
@@ -28,6 +28,34 @@ cargo build --workspace --release
 ```
 
 `doctor` exits `0` when required tooling is present, even if optional Maestro or a missing project adapter is a warning. Disk free space is measured; less than 1 GiB is a warning. Missing ADB/SDK is an environment failure (`3`). Read `checks[].status` rather than assuming every warning is fatal. The envelope's `status: success` means the doctor command ran; `result.status` is the health summary.
+
+### Optional Maestro installation
+
+Maestro is optional. Native `androidforge ui` commands do not require it. If a project has Maestro flows, AndroidForge can download a pinned, checksum-verified Windows build instead of relying on a floating global install:
+
+```powershell
+androidforge tools install maestro --dry-run --json
+androidforge tools install maestro --yes --json
+androidforge tools status maestro --json
+androidforge tools uninstall maestro --yes --json
+```
+
+- Pinned version: **Maestro CLI 2.12.1**.
+- Download: the official `cli-2.12.1/maestro.zip` release asset.
+- Verified SHA-256: `54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7`.
+- Install location: `%LOCALAPPDATA%\AndroidForge\tools\maestro\2.12.1` (or the equivalent under
+  `ANDROIDFORGE_HOME` / `ANDROIDFORGE_STATE_DIR`).
+- Java 17 or newer is required. AndroidForge uses the JDK it already discovered from the SDK or
+  `JAVA_HOME`.
+- The desktop Setup → Environment page shows a **Maestro** check with an **Install Maestro** button,
+  the active path and a Copy path action. A CLI-installed copy is detected automatically because both
+  use the same managed tools directory.
+- `tools install` requires `--yes` because it downloads about 350 MB. `--dry-run` prints the URL, hash
+  and target without downloading.
+
+Maestro remains **best-effort/optional** in the 0.13 line. The installer pins one tested version; a
+manually installed copy on `PATH` is still detected through `[maestro].binary`, `[sdk].maestro` or
+`ANDROIDFORGE_MAESTRO`.
 
 ## 2.1 Agent loop commands (v0.9.2)
 
@@ -290,9 +318,13 @@ androidforge tools schema --format openai --json
 ```
 
 `mcp serve` is a local stdio JSON-RPC server. It writes only protocol lines to stdout; logs go to
-stderr. It exposes the same 40 tools as `tools schema`, shells out to the same CLI and requires
-`confirm=true` for destructive tools. There is no HTTP listener, account or key. Use `tools schema`
-to feed the same catalog to another function-calling client.
+stderr. It exposes the same 192 tools as `tools schema`, shells out to the same CLI and requires
+`confirm=true` for destructive tools. Raw `adb`, `run exec` and generated long-running server entries
+are deliberately excluded; the curated mock-server tool remains bounded by `max_requests`/`duration`.
+Physical-device mutation cannot be self-approved from MCP arguments. There is no HTTP
+listener, account or key. `tools catalog --json` exposes the complete command catalog, and
+`androidforge://catalog` serves it as an MCP resource. Use `tools schema` to feed the same catalog to
+another function-calling client.
 
 ### Transparent agent pipeline
 
@@ -366,6 +398,10 @@ Overview error banner and in Settings.
   summary and **Agent Handoff**. Agent Handoff shows the full paths to the agent/user/capability/readme/
   exit-code/project-adapter documentation, the CLI executable and workspace, and a copyable prompt with
   the recommended agent loop and safety rules. Section changes fade/slide and the step highlight glides.
+- **Tool database** - searchable catalog of every CLI command generated from the same clap parser:
+  alphabetical sort, safety badges, usage, examples and an argument table. Selecting a row opens a full
+  detail page with a slide/fade transition and an MCP tool name. Search matches command paths, summaries,
+  argument names and help text.
 - **Compare** - compatible run comparison with per-step current/baseline status, duration delta and
   change classification.
 - **Logcat** - bounded local log view with filters, clean rows and a `Follow latest` button that eases

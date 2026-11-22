@@ -64,6 +64,14 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
                 nav(
                     app,
                     ui,
+                    Page::Tools,
+                    theme::NavIcon::Help,
+                    "Tool database",
+                    None,
+                );
+                nav(
+                    app,
+                    ui,
                     Page::Overview,
                     theme::NavIcon::Overview,
                     "Overview",

@@ -384,6 +384,13 @@ fn environment(app: &mut App, ui: &mut egui::Ui) {
                         if let Some(path) = &check.path {
                             copy_button(ui, path, "Copy path");
                         }
+                        if check.name == "maestro" && check.status != "ok" {
+                            if app.setup.maestro_installing {
+                                ui.spinner();
+                            } else if secondary_button(ui, "Install Maestro").clicked() {
+                                app.confirm(ConfirmAction::InstallMaestro);
+                            }
+                        }
                     });
                 });
                 ui.label(RichText::new(&check.detail).size(10.0).color(theme::MUTED));
@@ -401,6 +408,22 @@ fn environment(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(4.0);
     }
     ui.add_space(6.0);
+    if app.setup.maestro_installing {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            muted(
+                ui,
+                "Downloading and verifying Maestro 2.12.1 (about 350 MB)...",
+            );
+        });
+    }
+    if let Some(message) = &app.setup.maestro_message {
+        if message.contains("failed") {
+            error_banner(ui, message);
+        } else {
+            success_banner(ui, message);
+        }
+    }
     repair_plan_panel(app, ui);
 }
 

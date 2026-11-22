@@ -56,6 +56,15 @@ impl App {
                 })
                 .unwrap_or_default();
             let run_dir = PathBuf::from(&path.path);
+            if !run_dir.is_dir() || !run_dir.join("report.json").is_file() {
+                return AppEvent::RunDetail {
+                    run_id: run_for_job,
+                    result: Err(format!(
+                        "CLI returned a run path without report.json: {}",
+                        run_dir.display()
+                    )),
+                };
+            }
             let raw_report = evidence::read_text_preview(&run_dir.join("report.json")).ok();
             let raw_metadata = evidence::read_text_preview(&run_dir.join("metadata.json")).ok();
             let raw_manifest = evidence::read_text_preview(&run_dir.join("manifest.json")).ok();
@@ -545,6 +554,9 @@ impl App {
                     self.project_invocation(args),
                 );
             }
+            ConfirmAction::InstallMaestro => {
+                self.install_maestro(ctx);
+            }
             ConfirmAction::InstallCli {
                 staged,
                 target,
@@ -866,6 +878,54 @@ impl App {
             .timeout(Duration::from_secs(120));
         self.spawn_event(ctx, move || {
             AppEvent::RepairPlan(run_result::<RepairPlan>(&runner, invocation))
+        });
+    }
+
+    pub fn refresh_catalog(&mut self, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.tools.error = Some("CLI is not connected.".to_string());
+            return;
+        };
+        if self.tools.loading {
+            return;
+        }
+        self.tools.loading = true;
+        self.tools.error = None;
+        let invocation = self
+            .project_invocation(["tools", "catalog"])
+            .timeout(Duration::from_secs(30));
+        self.spawn_event(ctx, move || {
+            AppEvent::Catalog(run_result::<crate::models::CommandCatalog>(
+                &runner, invocation,
+            ))
+        });
+    }
+
+    pub fn install_maestro(&mut self, ctx: &egui::Context) {
+        let Some(runner) = self.runner.clone() else {
+            self.toast("CLI is not connected", ToastLevel::Error);
+            return;
+        };
+        if self.setup.maestro_installing {
+            return;
+        }
+        self.setup.maestro_installing = true;
+        self.setup.maestro_message = None;
+        let invocation = self
+            .project_invocation(["tools", "install", "maestro", "--yes"])
+            .timeout(Duration::from_secs(900));
+        self.spawn_event(ctx, move || {
+            AppEvent::MaestroInstall(
+                runner
+                    .run_success(&invocation)
+                    .map_err(|error| error.to_string())
+                    .and_then(|output| {
+                        output
+                            .envelope
+                            .result
+                            .ok_or_else(|| "CLI returned no Maestro install result".to_string())
+                    }),
+            )
         });
     }
 

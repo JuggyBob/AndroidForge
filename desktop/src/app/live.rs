@@ -235,9 +235,19 @@ impl App {
             self.inspector.frame_error = Some("Select a session to preview a device.".to_string());
             return;
         };
+        let safe_session = session
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
         let path = std::env::temp_dir().join(format!(
             "androidforge-preview-{}-{}.png",
-            session,
+            safe_session,
             chrono::Utc::now().format("%Y%m%d%H%M%S%3f")
         ));
         let invocation = self

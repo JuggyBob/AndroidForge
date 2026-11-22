@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use androidforge_adb::AdbClient;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
-use androidforge_core::util::{ensure_dir, sha256_hex, write_atomic};
+use androidforge_core::util::{ensure_dir, is_valid_package_name, sha256_hex, write_atomic};
 use serde::{Deserialize, Serialize};
 
 const MAX_STREAM_BYTES: usize = 256 * 1024 * 1024;
@@ -80,6 +80,7 @@ impl AppFiles {
         remote: &str,
         external: bool,
     ) -> Result<AppFileTransfer> {
+        require_package_name(package, serial)?;
         if !local.is_file() {
             return Err(ForgeError::new(
                 ErrorCode::FileNotFound,
@@ -248,6 +249,7 @@ impl AppFiles {
         local: &Path,
         external: bool,
     ) -> Result<AppFileTransfer> {
+        require_package_name(package, serial)?;
         let relative = validate_relative(remote)?;
         if let Some(parent) = local.parent() {
             ensure_dir(parent)?;
@@ -315,6 +317,7 @@ impl AppFiles {
         package: &str,
         local: &Path,
     ) -> Result<AppFileTransfer> {
+        require_package_name(package, serial)?;
         self.require_debuggable(serial, package).await?;
         let data_dir = format!("/data/data/{package}");
         let output = self
@@ -372,6 +375,7 @@ impl AppFiles {
         package: &str,
         local: &Path,
     ) -> Result<AppFileTransfer> {
+        require_package_name(package, serial)?;
         self.require_debuggable(serial, package).await?;
         let bytes = std::fs::read(local).map_err(|error| {
             ForgeError::new(
@@ -385,6 +389,7 @@ impl AppFiles {
                 "backup exceeds the stream limit".to_string(),
             ));
         }
+        validate_backup_tar(&bytes, package, serial)?;
         let data_dir = format!("/data/data/{package}");
         self.adb
             .shell_args_with_stdin(
@@ -468,6 +473,106 @@ impl AppFiles {
             .ok()
             .and_then(|output| output.stdout_text().trim().parse::<u64>().ok())
     }
+}
+
+fn require_package_name(package: &str, serial: &str) -> Result<()> {
+    if is_valid_package_name(package) {
+        return Ok(());
+    }
+    Err(ForgeError::new(
+        ErrorCode::InvalidArgument,
+        format!("'{package}' is not a valid Android package name"),
+    )
+    .with_suggestion("Use a name like com.example.app; separators and '..' are not allowed.")
+    .device(serial.to_string()))
+}
+
+fn validate_backup_tar(bytes: &[u8], package: &str, serial: &str) -> Result<()> {
+    let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
+    let entries = archive.entries().map_err(|error| {
+        ForgeError::new(
+            ErrorCode::InvalidArgument,
+            format!("backup is not a valid tar archive: {error}"),
+        )
+        .with_suggestion("Create the archive with `androidforge app data export`.")
+        .device(serial.to_string())
+    })?;
+    let mut count = 0u32;
+    for entry in entries {
+        count += 1;
+        if count > 100_000 {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "backup tar has an unexpected number of entries",
+            )
+            .device(serial.to_string()));
+        }
+        let entry = entry.map_err(|error| {
+            ForgeError::new(
+                ErrorCode::InvalidArgument,
+                format!("could not read backup tar entry: {error}"),
+            )
+            .device(serial.to_string())
+        })?;
+        let kind = entry.header().entry_type();
+        let link = kind.is_symlink() || kind.is_hard_link();
+        if !(kind.is_file() || kind.is_dir() || link) {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                format!("backup tar for {package} contains a non-regular entry"),
+            )
+            .with_suggestion(
+                "Only files, directories and safe links are allowed; devices are rejected.",
+            )
+            .device(serial.to_string()));
+        }
+        if link {
+            let target = entry.link_name().ok().flatten();
+            let unsafe_target = target
+                .as_deref()
+                .map(|target| {
+                    target.as_os_str().is_empty()
+                        || target.components().any(|component| {
+                            matches!(
+                                component,
+                                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                            )
+                        })
+                })
+                .unwrap_or(true);
+            if unsafe_target {
+                return Err(ForgeError::new(
+                    ErrorCode::InvalidArgument,
+                    "backup tar contains an unsafe link target",
+                )
+                .with_suggestion("Use an archive produced by `androidforge app data export`.")
+                .device(serial.to_string()));
+            }
+        }
+        let path = entry.path().map_err(|error| {
+            ForgeError::new(
+                ErrorCode::InvalidArgument,
+                format!("could not read backup tar path: {error}"),
+            )
+            .device(serial.to_string())
+        })?;
+        if path.as_os_str().is_empty()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "backup tar contains an absolute or parent path",
+            )
+            .with_suggestion("Use an archive produced by `androidforge app data export`.")
+            .device(serial.to_string()));
+        }
+    }
+    Ok(())
 }
 
 fn validate_relative(remote: &str) -> Result<String> {

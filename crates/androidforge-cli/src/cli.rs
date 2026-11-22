@@ -426,6 +426,26 @@ pub enum McpCommand {
 pub enum ToolsCommand {
     /// Export the tool catalog as MCP, OpenAI function-calling or plain JSON.
     Schema(ToolsSchemaArgs),
+    /// Print the complete CLI command catalog used by the desktop tool database.
+    Catalog,
+    /// Install an optional AndroidForge-managed tool. Currently only Maestro.
+    Install {
+        /// Tool name: maestro.
+        tool: String,
+        /// Replace an existing installation of the same version.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Report optional tool availability and managed install paths.
+    Status {
+        /// Tool name: maestro. Omit to report every optional tool.
+        tool: Option<String>,
+    },
+    /// Remove an AndroidForge-managed optional tool.
+    Uninstall {
+        /// Tool name: maestro.
+        tool: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -1834,6 +1854,9 @@ pub struct NetworkMockServeArgs {
     /// Bind address. Defaults to loopback so the mock is not exposed to the LAN.
     #[arg(long, default_value = "127.0.0.1")]
     pub bind: String,
+    /// Explicitly allow a non-loopback bind address. The mock has no authentication.
+    #[arg(long = "allow-external-bind")]
+    pub allow_external_bind: bool,
     /// JSON routes file: {"routes":[{"method":"GET","path":"/health","status":200,"body":"ok"}]}.
     #[arg(long)]
     pub routes: Option<PathBuf>,

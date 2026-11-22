@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod config;
 pub mod diagnosis;
 pub mod error;
+pub mod maestro;
 pub mod model;
 pub mod output;
 pub mod paths;

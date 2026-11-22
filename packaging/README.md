@@ -26,7 +26,7 @@ searches `PATH`, `%LOCALAPPDATA%\Programs\Inno Setup 6|7`, and the usual Program
 - Start Menu shortcuts, optional desktop shortcut and uninstaller.
 - User configuration (`%APPDATA%\AndroidForge`, `%LOCALAPPDATA%\AndroidForge`) and project artifacts are
   outside `{app}` and are preserved by upgrade and uninstall.
-- Version metadata is `0.12.1` for this release.
+- Version metadata is `0.13.0` for this release.
 
 ## Signing
 

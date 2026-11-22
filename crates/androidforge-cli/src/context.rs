@@ -329,7 +329,7 @@ impl CliContext {
     }
 
     pub fn package_or_config(&self, package: Option<&str>) -> Result<String> {
-        package
+        let package = package
             .map(str::to_string)
             .or_else(|| self.config.debug_package().map(str::to_string))
             .ok_or_else(|| {
@@ -337,12 +337,22 @@ impl CliContext {
                     .with_suggestion(
                         "Pass --package or set [project].package in .androidforge/project.toml.",
                     )
-            })
+            })?;
+        if !androidforge_core::util::is_valid_package_name(&package) {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                format!("'{package}' is not a valid Android package name"),
+            )
+            .with_suggestion(
+                "Use a name like com.example.app; separators and '..' are not allowed.",
+            ));
+        }
+        Ok(package)
     }
 }
 
 fn check_physical_mutation(device: &Device, allowed: bool, operation: &str) -> Result<()> {
-    if device.kind != DeviceKind::Physical || allowed {
+    if device.kind == DeviceKind::Emulator || allowed {
         return Ok(());
     }
     Err(ForgeError::new(

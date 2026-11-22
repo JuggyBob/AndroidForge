@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/tools-catalog.schema.json",
+  "title": "AndroidForge CLI command catalog",
+  "type": "object",
+  "required": ["schema_version", "commands"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_by": { "type": "string" },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "tool_name", "summary", "usage", "safety", "arguments", "examples"],
+        "properties": {
+          "path": { "type": "string" },
+          "tool_name": { "type": "string", "pattern": "^androidforge_[a-z0-9_]+$" },
+          "summary": { "type": "string" },
+          "description": { "type": "string" },
+          "usage": { "type": "string" },
+          "safety": { "enum": ["read-only", "device-mutation", "destructive", "long-running", "unsafe"] },
+          "arguments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "positional", "required", "kind"],
+              "properties": {
+                "id": { "type": "string" },
+                "long": { "type": "string" },
+                "short": { "type": "string", "minLength": 1, "maxLength": 1 },
+                "positional": { "type": "boolean" },
+                "required": { "type": "boolean" },
+                "kind": { "enum": ["string", "boolean", "enum", "array"] },
+                "value_name": { "type": "string" },
+                "help": { "type": "string" },
+                "possible_values": { "type": "array", "items": { "type": "string" } },
+                "default": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "examples": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

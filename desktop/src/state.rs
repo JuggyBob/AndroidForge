@@ -22,6 +22,7 @@ use crate::models::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
     Setup,
+    Tools,
     Overview,
     Context,
     Matrix,
@@ -38,8 +39,9 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 14] = [
+    pub const ALL: [Page; 15] = [
         Page::Setup,
+        Page::Tools,
         Page::Overview,
         Page::Context,
         Page::Matrix,
@@ -58,6 +60,7 @@ impl Page {
     pub fn label(self) -> &'static str {
         match self {
             Page::Setup => "Setup",
+            Page::Tools => "Tool database",
             Page::Overview => "Overview",
             Page::Context => "Context",
             Page::Matrix => "Matrix",
@@ -355,6 +358,7 @@ pub enum ConfirmAction {
         target: PathBuf,
         version: String,
     },
+    InstallMaestro,
     CancelOperation,
 }
 
@@ -370,6 +374,7 @@ impl ConfirmAction {
             Self::Hook { .. } => "Run hook",
             Self::Cleanup(_) => "Clean maintenance data",
             Self::InstallCli { .. } => "Replace CLI executable",
+            Self::InstallMaestro => "Install optional Maestro",
             Self::CancelOperation => "Cancel operation",
         }
     }
@@ -383,6 +388,7 @@ impl ConfirmAction {
             Self::Fixture { .. } | Self::Conformance { .. } | Self::Hook { .. } => "Run",
             Self::Cleanup(_) => "Clean now",
             Self::InstallCli { .. } => "Replace CLI",
+            Self::InstallMaestro => "Download and install",
             Self::CancelOperation => "Cancel operation",
         }
     }
@@ -398,6 +404,7 @@ impl ConfirmAction {
                 | Self::Hook { .. }
                 | Self::Cleanup(_)
                 | Self::InstallCli { .. }
+                | Self::InstallMaestro
                 | Self::CancelOperation
         )
     }
@@ -467,6 +474,19 @@ pub struct SetupState {
     pub repair_plan: Option<RepairPlan>,
     pub repair_loading: bool,
     pub repair_error: Option<String>,
+    pub maestro_installing: bool,
+    pub maestro_message: Option<String>,
+}
+
+#[derive(Default)]
+pub struct ToolsState {
+    pub catalog: Option<crate::models::CommandCatalog>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub query: String,
+    pub ascending: bool,
+    pub selected: Option<String>,
+    pub detail_started: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -927,4 +947,6 @@ pub enum AppEvent {
     },
     Explanation(std::result::Result<DiagnosisExplanation, String>),
     RepairPlan(std::result::Result<RepairPlan, String>),
+    Catalog(std::result::Result<crate::models::CommandCatalog, String>),
+    MaestroInstall(std::result::Result<serde_json::Value, String>),
 }

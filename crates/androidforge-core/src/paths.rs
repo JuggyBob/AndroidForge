@@ -77,6 +77,11 @@ impl ForgePaths {
         self.state_dir.join("active-runs")
     }
 
+    /// AndroidForge-managed optional tools, kept outside the install directory.
+    pub fn tools_dir(&self) -> PathBuf {
+        self.state_dir.join("tools")
+    }
+
     pub fn session_pointer_path(&self) -> PathBuf {
         self.project_root
             .join(".androidforge")
@@ -176,6 +181,12 @@ fn state_dir() -> PathBuf {
         }
     }
     PathBuf::from(".androidforge-state")
+}
+
+/// Public equivalent of the state directory's tool area for components that do
+/// not have a `ForgePaths` value (notably toolchain discovery).
+pub fn managed_tools_dir() -> PathBuf {
+    state_dir().join("tools")
 }
 
 #[cfg(test)]

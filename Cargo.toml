@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.12.1"
+version = "0.13.0"
 edition = "2024"
 rust-version = "1.95"
 authors = ["AndroidForge contributors"]
@@ -48,6 +48,8 @@ fs2 = "0.4"
 base64 = "0.22"
 zip = "9.6.0"
 png = "0.18"
+tar = "0.4"
+ureq = "3.5.2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 

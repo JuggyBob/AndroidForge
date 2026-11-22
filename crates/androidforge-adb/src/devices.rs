@@ -75,22 +75,13 @@ fn apply_attribute(device: &mut Device, token: &str) {
 }
 
 fn kind_for(device: &Device) -> DeviceKind {
-    let emulator_serial = device.serial.starts_with("emulator-");
-    let emulator_model = device
-        .model
-        .as_deref()
-        .map(|model| {
-            model.starts_with("sdk_")
-                || model.starts_with("emulator")
-                || model.contains("Android SDK built for")
-        })
-        .unwrap_or(false);
-    if emulator_serial || emulator_model {
+    // Only the adb emulator transport is accepted as positive proof. Model
+    // strings are vendor-controlled and must not be able to downgrade a
+    // physical device into the unprotected emulator class.
+    if device.serial.starts_with("emulator-") {
         DeviceKind::Emulator
-    } else if device.model.is_some() || device.product.is_some() {
-        DeviceKind::Physical
     } else {
-        DeviceKind::Unknown
+        DeviceKind::Physical
     }
 }
 

@@ -199,11 +199,12 @@ impl CliRunner {
 }
 
 fn read_pipe<R: Read>(pipe: Option<R>) -> String {
-    let Some(mut pipe) = pipe else {
+    const MAX_CAPTURE: u64 = 16 * 1024 * 1024;
+    let Some(pipe) = pipe else {
         return String::new();
     };
     let mut bytes = Vec::new();
-    let _ = pipe.read_to_end(&mut bytes);
+    let _ = pipe.take(MAX_CAPTURE).read_to_end(&mut bytes);
     String::from_utf8_lossy(&bytes).into_owned()
 }
 

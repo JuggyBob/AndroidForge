@@ -24,7 +24,7 @@ page. A non-zero exit means a page failed to launch or render.
 ## What it checks
 
 - CLI and desktop report the same version.
-- All 14 pages launch: setup, overview, context, devices, sessions, matrix,
+- All 15 pages launch: setup, tools, overview, context, devices, sessions, matrix,
   ownership, runs, triage, compare, logcat, inspector, maintenance, settings.
 - Each page has a non-blank screenshot and a real window title.
 - The UI Automation tree is available and contains controls.

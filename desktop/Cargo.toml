@@ -34,6 +34,7 @@ open = "5"
 thiserror = "2.0"
 ureq = "3.5.2"
 zip = "9.6.0"
+tempfile = "3.27"
 chrono.workspace = true
 raw-window-handle = "0.6"
 
