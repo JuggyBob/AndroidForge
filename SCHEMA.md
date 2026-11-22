@@ -35,6 +35,12 @@ The schema files:
 | `recurrence.schema.json` | Recurrence fingerprints, statuses, occurrences and resolution metadata. |
 | `apk-resolution.schema.json` | `apk resolve` selection rules, candidates and rejection reasons. |
 | `apk-diff.schema.json` | Installed/candidate field comparison, overall equivalence and skip safety. |
+| `app-verify.schema.json` | `app verify-installed` live/local verification and diff. |
+| `app-data.schema.json` | `app data export/import/reset/seed` transfer and pre-import backup metadata. |
+| `ui-wait.schema.json` | `ui wait`/`ui assert` selector, text-absence and stability results. |
+| `network-mock.schema.json` | `network mock serve` bound server summary and request log path. |
+| `visual-diff.schema.json` | Screenshot baseline/region comparison metrics and pass/fail. |
+| `session-list.schema.json` | Session classification, age, reason and active/mine filters. |
 | `bundle.schema.json` | Diagnostic bundle manifest, checksummed payloads and exclusions. |
 | `health.schema.json` | Read-only device health report and unknown reasons. |
 | `matrix.schema.json` | Matrix plan/results, `parallel`, per-target health, child reports and cleanup. |

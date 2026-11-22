@@ -552,6 +552,59 @@ impl AdbClient {
         .await
     }
 
+    /// List `adb reverse` mappings for a device.
+    pub async fn reverse_list(&self, serial: &str) -> Result<CommandOutput> {
+        self.run_checked(
+            Some(serial),
+            &["reverse".to_string(), "--list".to_string()],
+            Some(Duration::from_secs(15)),
+            None,
+        )
+        .await
+    }
+
+    /// Add an `adb reverse` mapping, for example tcp:8080 -> tcp:8080.
+    pub async fn reverse_add(
+        &self,
+        serial: &str,
+        remote: &str,
+        local: &str,
+    ) -> Result<CommandOutput> {
+        self.run_checked(
+            Some(serial),
+            &["reverse".to_string(), remote.to_string(), local.to_string()],
+            Some(Duration::from_secs(15)),
+            None,
+        )
+        .await
+    }
+
+    /// Remove one `adb reverse` mapping.
+    pub async fn reverse_remove(&self, serial: &str, remote: &str) -> Result<CommandOutput> {
+        self.run_checked(
+            Some(serial),
+            &[
+                "reverse".to_string(),
+                "--remove".to_string(),
+                remote.to_string(),
+            ],
+            Some(Duration::from_secs(15)),
+            None,
+        )
+        .await
+    }
+
+    /// Remove all `adb reverse` mappings for a device.
+    pub async fn reverse_remove_all(&self, serial: &str) -> Result<CommandOutput> {
+        self.run_checked(
+            Some(serial),
+            &["reverse".to_string(), "--remove-all".to_string()],
+            Some(Duration::from_secs(15)),
+            None,
+        )
+        .await
+    }
+
     pub async fn input_tap(&self, serial: &str, x: u32, y: u32) -> Result<CommandOutput> {
         self.shell_args(
             serial,

@@ -1130,6 +1130,12 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         "Idempotent reuse/attach/launch with advisory leases, ownership refusal and bounded --wait for busy devices.",
     );
     add(
+        "session.hygiene",
+        "supported",
+        &["filesystem locks"],
+        "session list --mine/--active with classification/reason/age; gc --reclaim --dry-run lists would-reclaim ids and the exact apply command.",
+    );
+    add(
         "context",
         "supported",
         &["local state", "optional adb"],
@@ -1169,7 +1175,23 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         "app.install",
         if has_adb { "supported" } else { "unsupported" },
         &["adb"],
-        "Signature-aware install diagnostics; split sets use install-multiple; never uninstalls automatically.",
+        "Signature-aware install diagnostics; split sets use install-multiple; never uninstalls automatically; only-if-changed requires package/version/base-hash/split-hash proof.",
+    );
+    add(
+        "app.verify_installed",
+        if has_adb && has_aapt2 {
+            "supported"
+        } else {
+            "unsupported"
+        },
+        &["adb", "aapt2"],
+        "Pulls the live installed base APK, hashes it and compares package/version/certificate/splits without installing.",
+    );
+    add(
+        "app.data_fixtures",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb", "debuggable app"],
+        "Export/import/reset/seed app-private data through run-as; imports always capture a pre-import archive; physical devices require --allow-physical-mutation.",
     );
     add(
         "ui.uiautomator",
@@ -1188,6 +1210,28 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         if has_adb { "supported" } else { "unsupported" },
         &["adb", "uiautomator"],
         "One action plus observation polling; no hidden action retries.",
+    );
+    add(
+        "ui.gestures",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb"],
+        "Configurable long-press holds, press-move-release drags with holds and optional mid-gesture screenshots.",
+    );
+    add(
+        "ui.wait_modes",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb", "uiautomator"],
+        "--for-text-gone, --for-idle, --for-stable and ui assert-no-text with bounded attempts and lingering matches.",
+    );
+    add(
+        "ui.compose_test_tags",
+        "best-effort",
+        &[
+            "adb",
+            "uiautomator",
+            "debug app exposing testTagsAsResourceId",
+        ],
+        "--test-tag aliases the accessibility resource id; tags are invisible unless the app enables testTagsAsResourceId.",
     );
     add(
         "ui.element_refs",
@@ -1284,10 +1328,28 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
         "default/offline/wifi-only/data-only/no-proxy profiles, global proxy control and session-scoped restore.",
     );
     add(
+        "network.reverse",
+        if has_adb { "supported" } else { "unsupported" },
+        &["adb"],
+        "Per-session add/list/remove/clear of adb reverse mappings; recorded for cleanup.",
+    );
+    add(
+        "network.mock_http",
+        "supported",
+        &["local TCP listener"],
+        "Bounded local HTTP/1.1 mock server with inline/JSON routes, request logs, redacted headers and body limits.",
+    );
+    add(
+        "network.mock_tls",
+        "supported",
+        &["local TLS certificate/key"],
+        "Optional local TLS with a user-provided PEM cert/key; trust must be configured on Android; no public CA claim.",
+    );
+    add(
         "capture.screenshot",
         if has_adb { "supported" } else { "unsupported" },
         &["adb"],
-        "Binary PNG via adb exec-out; no console redirection.",
+        "Binary PNG via adb exec-out with optional baseline/region pixel comparison and diff artifact.",
     );
     add(
         "capture.recording",
@@ -1411,9 +1473,9 @@ pub async fn capabilities(cli: &Cli) -> Result<CommandSuccess> {
     );
     add(
         "visual.diff",
-        "unsupported",
-        &["none"],
-        "Screenshot evidence is supported; automated visual comparison is deferred.",
+        "supported",
+        &["local PNG decoder"],
+        "Baseline/full or region screenshot comparison with changed-pixel ratio, bounding box and diff PNG artifact.",
     );
     add(
         "cloud",
@@ -1559,6 +1621,30 @@ pub(crate) fn schema_files() -> Vec<(&'static str, &'static str)> {
         (
             "apk-diff.schema.json",
             include_str!("../../../../schema/apk-diff.schema.json"),
+        ),
+        (
+            "app-verify.schema.json",
+            include_str!("../../../../schema/app-verify.schema.json"),
+        ),
+        (
+            "app-data.schema.json",
+            include_str!("../../../../schema/app-data.schema.json"),
+        ),
+        (
+            "ui-wait.schema.json",
+            include_str!("../../../../schema/ui-wait.schema.json"),
+        ),
+        (
+            "network-mock.schema.json",
+            include_str!("../../../../schema/network-mock.schema.json"),
+        ),
+        (
+            "visual-diff.schema.json",
+            include_str!("../../../../schema/visual-diff.schema.json"),
+        ),
+        (
+            "session-list.schema.json",
+            include_str!("../../../../schema/session-list.schema.json"),
         ),
         (
             "bundle.schema.json",

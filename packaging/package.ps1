@@ -58,9 +58,13 @@ $desktopZip = 'dist\androidforge-desktop-windows-x86_64.zip'
 if (Test-Path $desktopZip) { Remove-Item $desktopZip -Force }
 Compress-Archive -Path (Join-Path $portable '*') -DestinationPath $desktopZip -Force
 
-# Versioned UI screenshot gallery, when present.
+# Versioned UI screenshot gallery, when present. Remove stale galleries for
+# other versions so a release cannot accidentally upload an old screenshot set.
 $screenshotsDir = "docs\screenshots\v$version"
 $screenshotsZip = "dist\androidforge-screenshots-v$version.zip"
+Get-ChildItem 'dist\androidforge-screenshots-*.zip' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne (Split-Path $screenshotsZip -Leaf) } |
+    Remove-Item -Force
 if (Test-Path $screenshotsDir) {
     if (Test-Path $screenshotsZip) { Remove-Item $screenshotsZip -Force }
     Compress-Archive -Path (Join-Path $screenshotsDir '*') -DestinationPath $screenshotsZip -Force

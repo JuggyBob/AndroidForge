@@ -3,13 +3,15 @@ use androidforge_core::output::CommandSuccess;
 use androidforge_core::run::RunContext;
 use androidforge_core::session::Session;
 use androidforge_core::util::write_atomic;
+use androidforge_diagnostics::{FrameResult, capture_frame};
 use androidforge_ui::{Selector, UiHierarchy};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
 
 use crate::cli::{
-    PostconditionArgs, SelectorArgs, UiCommand, UiDismissOverlaysArgs, UiDumpArgs, UiInspectArgs,
-    UiKeyEventArgs, UiScrollArgs, UiScrollToArgs, UiSelectorArgs, UiSettleArgs, UiSwipeArgs,
-    UiTextArgs, UiWaitArgs,
+    PostconditionArgs, SelectorArgs, UiAssertNoTextArgs, UiCommand, UiDismissOverlaysArgs,
+    UiDragArgs, UiDumpArgs, UiInspectArgs, UiKeyEventArgs, UiScrollArgs, UiScrollToArgs,
+    UiSelectorArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
 };
 use crate::commands::common::{require_selector, success};
 use crate::commands::observation;
@@ -221,6 +223,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 }
                             };
                             builder.set_before(before);
+                            let before_frame =
+                                capture_named(ctx, &serial, args.capture_before.as_ref()).await?;
                             let result = match ui.tap_expected(&serial, &resolved.expectation).await
                             {
                                 Ok(result) => result,
@@ -235,8 +239,13 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                     ));
                                 }
                             };
-                            let action = serde_json::to_value(&result)?;
-                            let (value, suffix) = complete_receipt(
+                            let mut action = serde_json::to_value(&result)?;
+                            insert_named_capture(
+                                &mut action,
+                                "before_screenshot",
+                                before_frame.as_ref(),
+                            );
+                            let (mut value, suffix) = complete_receipt(
                                 ctx,
                                 session,
                                 &device,
@@ -250,6 +259,13 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 full,
                             )
                             .await?;
+                            let after_frame =
+                                capture_named(ctx, &serial, args.capture_after.as_ref()).await?;
+                            insert_named_capture(
+                                &mut value,
+                                "after_screenshot",
+                                after_frame.as_ref(),
+                            );
                             return Ok(success(
                                 "ui.tap",
                                 value,
@@ -261,8 +277,15 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             .with_session(session.id.clone())
                             .with_device(serial.clone()));
                         }
+                        let before_frame =
+                            capture_named(ctx, &serial, args.capture_before.as_ref()).await?;
                         let result = ui.tap_expected(&serial, &resolved.expectation).await?;
                         let mut action = serde_json::to_value(&result)?;
+                        insert_named_capture(
+                            &mut action,
+                            "before_screenshot",
+                            before_frame.as_ref(),
+                        );
                         if let Some(object) = action.as_object_mut() {
                             object.insert(
                                 "element_ref".to_string(),
@@ -273,7 +296,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 serde_json::Value::String(token.clone()),
                             );
                         }
-                        let (value, suffix) = apply_postconditions(
+                        let (mut value, suffix) = apply_postconditions(
                             ctx,
                             Some(session),
                             &device,
@@ -282,6 +305,13 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             action,
                         )
                         .await?;
+                        let after_frame =
+                            capture_named(ctx, &serial, args.capture_after.as_ref()).await?;
+                        insert_named_capture(
+                            &mut value,
+                            "after_screenshot",
+                            after_frame.as_ref(),
+                        );
                         Ok(success(
                             "ui.tap",
                             value,
@@ -366,6 +396,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 }
                             };
                             builder.set_before(before);
+                            let before_frame =
+                                capture_named(ctx, &serial, args.capture_before.as_ref()).await?;
                             let display = match ui.tap_xy(&serial, x, y).await {
                                 Ok(display) => display,
                                 Err(error) => {
@@ -378,9 +410,14 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                     ));
                                 }
                             };
-                            let action =
+                            let mut action =
                                 serde_json::json!({"x": x, "y": y, "display_size": display});
-                            let (value, suffix) = complete_receipt(
+                            insert_named_capture(
+                                &mut action,
+                                "before_screenshot",
+                                before_frame.as_ref(),
+                            );
+                            let (mut value, suffix) = complete_receipt(
                                 ctx,
                                 session,
                                 &device,
@@ -394,6 +431,13 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 full,
                             )
                             .await?;
+                            let after_frame =
+                                capture_named(ctx, &serial, args.capture_after.as_ref()).await?;
+                            insert_named_capture(
+                                &mut value,
+                                "after_screenshot",
+                                after_frame.as_ref(),
+                            );
                             return Ok(success(
                                 "ui.tap",
                                 value,
@@ -402,9 +446,17 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             .with_session(session.id.clone())
                             .with_device(serial.clone()));
                         }
+                        let before_frame =
+                            capture_named(ctx, &serial, args.capture_before.as_ref()).await?;
                         let display = ui.tap_xy(&serial, x, y).await?;
-                        let action = serde_json::json!({"x": x, "y": y, "display_size": display});
-                        let (value, suffix) = apply_postconditions(
+                        let mut action =
+                            serde_json::json!({"x": x, "y": y, "display_size": display});
+                        insert_named_capture(
+                            &mut action,
+                            "before_screenshot",
+                            before_frame.as_ref(),
+                        );
+                        let (mut value, suffix) = apply_postconditions(
                             ctx,
                             session.as_ref(),
                             &device,
@@ -413,6 +465,9 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             action,
                         )
                         .await?;
+                        let after_frame =
+                            capture_named(ctx, &serial, args.capture_after.as_ref()).await?;
+                        insert_named_capture(&mut value, "after_screenshot", after_frame.as_ref());
                         Ok(success(
                             "ui.tap",
                             value,
@@ -478,6 +533,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 }
                             };
                             builder.set_before(before);
+                            let before_frame =
+                                capture_named(ctx, &serial, args.capture_before.as_ref()).await?;
                             let result = match tap_or_ocr(
                                 ctx,
                                 &ui,
@@ -505,8 +562,13 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 }
                             };
                             let target = serde_json::to_value(&result.matched)?;
-                            let action = serde_json::to_value(&result)?;
-                            let (value, suffix) = complete_receipt(
+                            let mut action = serde_json::to_value(&result)?;
+                            insert_named_capture(
+                                &mut action,
+                                "before_screenshot",
+                                before_frame.as_ref(),
+                            );
+                            let (mut value, suffix) = complete_receipt(
                                 ctx,
                                 session,
                                 &device,
@@ -520,6 +582,13 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 full,
                             )
                             .await?;
+                            let after_frame =
+                                capture_named(ctx, &serial, args.capture_after.as_ref()).await?;
+                            insert_named_capture(
+                                &mut value,
+                                "after_screenshot",
+                                after_frame.as_ref(),
+                            );
                             return Ok(success(
                                 "ui.tap",
                                 value,
@@ -545,11 +614,18 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             .with_session(session.id.clone())
                             .with_device(serial.clone()));
                         }
+                        let before_frame =
+                            capture_named(ctx, &serial, args.capture_before.as_ref()).await?;
                         let result =
                             tap_or_ocr(ctx, &ui, &serial, &selector, args.selector.ocr_fallback)
                                 .await?;
-                        let action = serde_json::to_value(&result)?;
-                        let (value, suffix) = apply_postconditions(
+                        let mut action = serde_json::to_value(&result)?;
+                        insert_named_capture(
+                            &mut action,
+                            "before_screenshot",
+                            before_frame.as_ref(),
+                        );
+                        let (mut value, suffix) = apply_postconditions(
                             ctx,
                             session.as_ref(),
                             &device,
@@ -558,6 +634,9 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             action,
                         )
                         .await?;
+                        let after_frame =
+                            capture_named(ctx, &serial, args.capture_after.as_ref()).await?;
+                        insert_named_capture(&mut value, "after_screenshot", after_frame.as_ref());
                         Ok(success(
                             "ui.tap",
                             value,
@@ -626,7 +705,6 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                         )
                         .await?;
                         let node_value = serde_json::to_value(&resolved.node)?;
-                        let ui = ctx.ui_manager()?;
                         if receipt_requested {
                             let mut builder = receipt::ReceiptBuilder::new(
                                 "long_press",
@@ -666,11 +744,17 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                 }
                             };
                             builder.set_before(before);
-                            let result = match ui
-                                .long_press_expected(&serial, &resolved.expectation)
-                                .await
+                            let (result, mid_capture) = match long_press_action(
+                                ctx,
+                                &serial,
+                                None,
+                                Some(&resolved.expectation),
+                                args.duration.unwrap_or(900),
+                                args.capture_mid.as_ref(),
+                            )
+                            .await
                             {
-                                Ok(result) => result,
+                                Ok(action) => action,
                                 Err(error) => {
                                     let receipt = dispatch_error_receipt(
                                         builder, &error, true, None, full,
@@ -682,7 +766,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                                     ));
                                 }
                             };
-                            let action = serde_json::to_value(&result)?;
+                            let mut action = serde_json::to_value(&result)?;
+                            insert_mid_capture(&mut action, mid_capture.as_ref());
                             let (value, suffix) = complete_receipt(
                                 ctx,
                                 session,
@@ -708,10 +793,17 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             .with_session(session.id.clone())
                             .with_device(serial.clone()));
                         }
-                        let result = ui
-                            .long_press_expected(&serial, &resolved.expectation)
-                            .await?;
+                        let (result, mid_capture) = long_press_action(
+                            ctx,
+                            &serial,
+                            None,
+                            Some(&resolved.expectation),
+                            args.duration.unwrap_or(900),
+                            args.capture_mid.as_ref(),
+                        )
+                        .await?;
                         let mut action = serde_json::to_value(&result)?;
+                        insert_mid_capture(&mut action, mid_capture.as_ref());
                         if let Some(object) = action.as_object_mut() {
                             object.insert(
                                 "element_ref".to_string(),
@@ -756,7 +848,6 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                 Some(&device),
                 true,
                 |_run| async {
-                    let ui = ctx.ui_manager()?;
                     if receipt_requested {
                         let Some(session) = session.as_ref() else {
                             return Err(ForgeError::new(
@@ -799,8 +890,17 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             }
                         };
                         builder.set_before(before);
-                        let result = match ui.long_press(&serial, &selector).await {
-                            Ok(result) => result,
+                        let (result, mid_capture) = match long_press_action(
+                            ctx,
+                            &serial,
+                            Some(&selector),
+                            None,
+                            args.duration.unwrap_or(900),
+                            args.capture_mid.as_ref(),
+                        )
+                        .await
+                        {
+                            Ok(action) => action,
                             Err(error) => {
                                 let resolved = !matches!(
                                     error.code(),
@@ -817,7 +917,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                             }
                         };
                         let target = serde_json::to_value(&result.matched)?;
-                        let action = serde_json::to_value(&result)?;
+                        let mut action = serde_json::to_value(&result)?;
+                        insert_mid_capture(&mut action, mid_capture.as_ref());
                         let (value, suffix) = complete_receipt(
                             ctx,
                             session,
@@ -843,8 +944,17 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
                         .with_session(session.id.clone())
                         .with_device(serial.clone()));
                     }
-                    let result = ui.long_press(&serial, &selector).await?;
-                    let action = serde_json::to_value(&result)?;
+                    let (result, mid_capture) = long_press_action(
+                        ctx,
+                        &serial,
+                        Some(&selector),
+                        None,
+                        args.duration.unwrap_or(900),
+                        args.capture_mid.as_ref(),
+                    )
+                    .await?;
+                    let mut action = serde_json::to_value(&result)?;
+                    insert_mid_capture(&mut action, mid_capture.as_ref());
                     let (value, suffix) = apply_postconditions(
                         ctx,
                         session.as_ref(),
@@ -868,6 +978,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             )
             .await
         }
+        UiCommand::Drag(args) => drag(ctx, session.as_ref(), &device, args).await,
         UiCommand::Text(args) => text(ctx, session.as_ref(), &device, args).await,
         UiCommand::Clear(args) => clear(ctx, session.as_ref(), &device, args).await,
         UiCommand::DismissOverlays(args) => {
@@ -883,6 +994,7 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             )
             .await
         }
+        UiCommand::AssertNoText(args) => assert_no_text(ctx, session.as_ref(), &device, args).await,
         UiCommand::Settle(args) => settle(ctx, session.as_ref(), &device, args).await,
         UiCommand::Scroll(args) => scroll(ctx, session.as_ref(), &device, args).await,
         UiCommand::ScrollTo(args) => scroll_to(ctx, session.as_ref(), &device, args).await,
@@ -1574,6 +1686,342 @@ async fn text(
     .await
 }
 
+async fn drag(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiDragArgs,
+) -> Result<CommandSuccess> {
+    let serial = device.serial.clone();
+    execute_in_run!(
+        ctx,
+        "ui.drag",
+        Some("ui drag"),
+        session,
+        Some(device),
+        true,
+        |_run| async {
+            let ui = ctx.ui_manager()?;
+            let from = drag_point(
+                &ui,
+                &serial,
+                args.from_x,
+                args.from_y,
+                &args.from_text,
+                &args.from_id,
+                &args.from,
+                "from",
+            )
+            .await?;
+            let to = drag_point(
+                &ui,
+                &serial,
+                args.to_x,
+                args.to_y,
+                &args.to_text,
+                &args.to_id,
+                &args.to,
+                "to",
+            )
+            .await?;
+            let steps = 12u64;
+            let step_delay = Duration::from_millis((args.duration_ms / steps).max(1));
+            ui.input_motion(&serial, "DOWN", from.0, from.1).await?;
+            if args.hold_before_ms > 0 {
+                sleep(Duration::from_millis(args.hold_before_ms)).await;
+            }
+            for step in 1..=steps {
+                let x = from.0 as i64 + (to.0 as i64 - from.0 as i64) * step as i64 / steps as i64;
+                let y = from.1 as i64 + (to.1 as i64 - from.1 as i64) * step as i64 / steps as i64;
+                ui.input_motion(&serial, "MOVE", x as i32, y as i32).await?;
+                sleep(step_delay).await;
+            }
+            let mut frame = None;
+            if let Some(path) = &args.capture_mid {
+                let output = output_path(ctx, path);
+                match capture_frame(&ctx.adb()?, &serial, &output, Duration::from_secs(15)).await {
+                    Ok(captured) => frame = Some(captured),
+                    Err(error) => {
+                        let _ = ui.input_motion(&serial, "UP", to.0, to.1).await;
+                        return Err(error);
+                    }
+                }
+            }
+            if args.hold_after_ms > 0 {
+                sleep(Duration::from_millis(args.hold_after_ms)).await;
+            }
+            ui.input_motion(&serial, "UP", to.0, to.1).await?;
+            let mut value = serde_json::json!({
+                "from_x": from.0,
+                "from_y": from.1,
+                "to_x": to.0,
+                "to_y": to.1,
+                "duration_ms": args.duration_ms,
+                "hold_before_ms": args.hold_before_ms,
+                "hold_after_ms": args.hold_after_ms,
+                "steps": steps,
+            });
+            if let Some(frame) = frame {
+                value["mid_capture"] = serde_json::to_value(frame)?;
+            }
+            let (value, suffix) =
+                apply_postconditions(ctx, session, device, None, &args.postcondition, value)
+                    .await?;
+            Ok(success(
+                "ui.drag",
+                value,
+                format!(
+                    "Dragged ({}, {}) -> ({}, {}) over {}ms.{suffix}\n",
+                    from.0, from.1, to.0, to.1, args.duration_ms
+                ),
+            )
+            .with_optional_session(session_id(session))
+            .with_device(serial.clone()))
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drag_point(
+    ui: &androidforge_ui::UiManager,
+    serial: &str,
+    x: Option<i32>,
+    y: Option<i32>,
+    text: &Option<String>,
+    id: &Option<String>,
+    expression: &Option<String>,
+    role: &str,
+) -> Result<(i32, i32)> {
+    if let (Some(x), Some(y)) = (x, y) {
+        return Ok((x, y));
+    }
+    if x.is_some() || y.is_some() {
+        return Err(ForgeError::invalid_argument(format!(
+            "ui drag requires both --{role}-x and --{role}-y"
+        )));
+    }
+    let mut selector = if let Some(expression) = expression {
+        parse_drag_selector(expression)?
+    } else {
+        Selector::default()
+    };
+    if selector.text.is_none() {
+        selector.text = text.clone();
+    }
+    if selector.resource_id.is_none() {
+        selector.resource_id = id.clone();
+    }
+    if selector.text.is_none() && selector.resource_id.is_none() {
+        return Err(ForgeError::invalid_argument(format!(
+            "ui drag requires --{role}-x/--{role}-y, --{role} <selector>, or --{role}-text/--{role}-id"
+        )));
+    }
+    let selection = ui.select(serial, &selector).await?;
+    let bounds = selection.selected_node().bounds;
+    Ok(bounds.center())
+}
+
+fn parse_drag_selector(value: &str) -> Result<Selector> {
+    let mut selector = Selector::default();
+    let (key, value) = value.split_once('=').unwrap_or(("text", value));
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(ForgeError::invalid_argument(
+            "ui drag selector value cannot be empty",
+        ));
+    }
+    match key.trim().to_ascii_lowercase().as_str() {
+        "text" => selector.text = Some(value.to_string()),
+        "contains" => selector.text_contains = Some(value.to_string()),
+        "desc" | "content-desc" => selector.content_desc = Some(value.to_string()),
+        "id" | "resource-id" => selector.resource_id = Some(value.to_string()),
+        "tag" | "test-tag" => selector.resource_id = Some(value.to_string()),
+        "class" => selector.class = Some(value.to_string()),
+        other => {
+            return Err(ForgeError::invalid_argument(format!(
+                "unsupported drag selector key '{other}'"
+            ))
+            .with_suggestion("Use text=, contains=, desc=, id=, tag= or class=."));
+        }
+    }
+    Ok(selector)
+}
+
+async fn long_press_action(
+    ctx: &CliContext,
+    serial: &str,
+    selector: Option<&Selector>,
+    expected: Option<&androidforge_ui::NodeExpectation>,
+    duration_ms: u64,
+    capture_mid: Option<&std::path::PathBuf>,
+) -> Result<(androidforge_ui::TapResult, Option<FrameResult>)> {
+    let ui = ctx.ui_manager()?;
+    let capture = if let Some(path) = capture_mid {
+        let output = output_path(ctx, path);
+        if let Some(parent) = output.parent() {
+            androidforge_core::util::ensure_dir(parent)?;
+        }
+        let adb = ctx.adb()?;
+        let serial = serial.to_string();
+        let delay = Duration::from_millis((duration_ms / 2).max(1));
+        Some(tokio::spawn(async move {
+            sleep(delay).await;
+            capture_frame(&adb, &serial, &output, Duration::from_secs(15)).await
+        }))
+    } else {
+        None
+    };
+    let gesture = if let Some(expected) = expected {
+        ui.long_press_expected(serial, expected, duration_ms).await
+    } else {
+        let selector = selector.ok_or_else(|| {
+            ForgeError::invalid_argument("ui long-press requires a selector or element reference")
+        })?;
+        ui.long_press_with_duration(serial, selector, duration_ms)
+            .await
+    };
+    let frame = match capture {
+        Some(task) => match task.await {
+            Ok(result) => Some(result?),
+            Err(error) => {
+                return Err(ForgeError::new(
+                    androidforge_core::error::ErrorCode::CommandFailed,
+                    format!("mid-gesture capture task failed: {error}"),
+                )
+                .device(serial.to_string()));
+            }
+        },
+        None => None,
+    };
+    Ok((gesture?, frame))
+}
+
+fn insert_mid_capture(action: &mut serde_json::Value, frame: Option<&FrameResult>) {
+    if let Some(frame) = frame
+        && let Some(object) = action.as_object_mut()
+    {
+        object.insert(
+            "mid_capture".to_string(),
+            serde_json::to_value(frame).unwrap_or(serde_json::Value::Null),
+        );
+    }
+}
+
+async fn capture_named(
+    ctx: &CliContext,
+    serial: &str,
+    path: Option<&std::path::PathBuf>,
+) -> Result<Option<FrameResult>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let output = output_path(ctx, path);
+    if let Some(parent) = output.parent() {
+        androidforge_core::util::ensure_dir(parent)?;
+    }
+    let frame = capture_frame(&ctx.adb()?, serial, &output, Duration::from_secs(15)).await?;
+    Ok(Some(frame))
+}
+
+fn insert_named_capture(action: &mut serde_json::Value, key: &str, frame: Option<&FrameResult>) {
+    if let Some(frame) = frame
+        && let Some(object) = action.as_object_mut()
+    {
+        object.insert(
+            key.to_string(),
+            serde_json::to_value(frame).unwrap_or(serde_json::Value::Null),
+        );
+    }
+}
+
+fn text_absence_payload(
+    result: &androidforge_ui::TextAbsenceResult,
+    texts: &[String],
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "absent": result.absent,
+        "attempts": result.attempts,
+        "duration_ms": result.duration_ms,
+        "texts": texts,
+    });
+    if let Some(package) = &result.hierarchy_package {
+        value["hierarchy_package"] = serde_json::Value::String(package.clone());
+    }
+    value
+}
+
+fn output_path(ctx: &CliContext, path: &std::path::Path) -> std::path::PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ctx.paths.cwd.join(path)
+    }
+}
+
+async fn assert_no_text(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiAssertNoTextArgs,
+) -> Result<CommandSuccess> {
+    let mut texts = Vec::new();
+    if let Some(text) = &args.text {
+        texts.push(text.clone());
+    }
+    if let Some(contains) = &args.contains {
+        texts.push(contains.clone());
+    }
+    if texts.is_empty() {
+        return Err(ForgeError::invalid_argument(
+            "ui assert-no-text requires --text or --contains",
+        ));
+    }
+    let serial = device.serial.clone();
+    let timeout = ctx.parse_timeout(args.timeout.as_deref(), 1)?;
+    execute_in_run!(
+        ctx,
+        "ui.assert-no-text",
+        Some("ui assert no text"),
+        session,
+        Some(device),
+        true,
+        |_run| async {
+            let ui = ctx.ui_manager()?;
+            let result = ui.wait_texts_absent(&serial, &texts, timeout).await?;
+            if !result.absent {
+                return Err(ForgeError::new(
+                    androidforge_core::error::ErrorCode::UiAssertionFailed,
+                    format!(
+                        "text still present after {} attempt(s): {}",
+                        result.attempts,
+                        texts.join(", ")
+                    ),
+                )
+                .with_context(
+                    "lingering",
+                    serde_json::to_value(&result.lingering).unwrap_or(serde_json::Value::Null),
+                )
+                .with_suggestion("Inspect the current screen or wait for the state to change.")
+                .device(serial.to_string()));
+            }
+            Ok(success(
+                "ui.assert-no-text",
+                text_absence_payload(&result, &texts),
+                format!(
+                    "Confirmed absent after {} attempt(s) in {}ms: {}\n",
+                    result.attempts,
+                    result.duration_ms,
+                    texts.join(", ")
+                ),
+            )
+            .with_optional_session(session_id(session))
+            .with_device(serial.clone()))
+        },
+    )
+    .await
+}
+
 async fn wait_or_assert(
     ctx: &CliContext,
     session: Option<&Session>,
@@ -1581,6 +2029,99 @@ async fn wait_or_assert(
     args: &UiWaitArgs,
     assertion: bool,
 ) -> Result<CommandSuccess> {
+    let special = !args.for_text_gone.is_empty() || args.for_idle || args.for_stable;
+    if special {
+        if args.selector.has_selector() || args.selector.has_ref() || args.not_exists {
+            return Err(ForgeError::invalid_argument(
+                "--for-text-gone/--for-idle/--for-stable cannot be combined with a selector or --not-exists",
+            ));
+        }
+        if args.for_idle && args.for_stable {
+            return Err(ForgeError::invalid_argument(
+                "--for-idle and --for-stable are mutually exclusive",
+            ));
+        }
+        let serial = device.serial.clone();
+        let timeout = ctx.parse_timeout(
+            args.timeout.as_deref(),
+            if assertion {
+                1
+            } else {
+                ctx.config.file.ui.default_timeout_secs
+            },
+        )?;
+        let stable_for = ctx.parse_timeout(args.stable_for.as_deref(), 2)?;
+        let texts = args.for_text_gone.clone();
+        let command = if assertion { "ui.assert" } else { "ui.wait" };
+        return execute_in_run!(
+            ctx,
+            command,
+            Some("ui wait state"),
+            session,
+            Some(device),
+            true,
+            |_run| async {
+                let ui = ctx.ui_manager()?;
+                if args.for_idle {
+                    let result = ui.settle(&serial, timeout).await?;
+                    return Ok(success(
+                        command,
+                        serde_json::to_value(&result)?,
+                        format!(
+                            "UI idle after {} dump(s) in {}ms.\n",
+                            result.attempts, result.duration_ms
+                        ),
+                    )
+                    .with_optional_session(session_id(session))
+                    .with_device(serial.clone()));
+                }
+                if args.for_stable {
+                    let result = ui.settle_for(&serial, stable_for, timeout).await?;
+                    return Ok(success(
+                        command,
+                        serde_json::to_value(&result)?,
+                        format!(
+                            "UI stable for {}ms after {} dump(s).\n",
+                            stable_for.as_millis(),
+                            result.attempts
+                        ),
+                    )
+                    .with_optional_session(session_id(session))
+                    .with_device(serial.clone()));
+                }
+                let result = ui.wait_texts_absent(&serial, &texts, timeout).await?;
+                if !result.absent {
+                    return Err(ForgeError::new(
+                        androidforge_core::error::ErrorCode::UiAssertionFailed,
+                        format!(
+                            "text still present after {} attempt(s): {}",
+                            result.attempts,
+                            texts.join(", ")
+                        ),
+                    )
+                    .with_context(
+                        "lingering",
+                        serde_json::to_value(&result.lingering).unwrap_or(serde_json::Value::Null),
+                    )
+                    .with_suggestion("Inspect the current screen or increase --timeout.")
+                    .device(serial.to_string()));
+                }
+                Ok(success(
+                    command,
+                    text_absence_payload(&result, &texts),
+                    format!(
+                        "Confirmed absent after {} attempt(s) in {}ms: {}\n",
+                        result.attempts,
+                        result.duration_ms,
+                        texts.join(", ")
+                    ),
+                )
+                .with_optional_session(session_id(session))
+                .with_device(serial.clone()))
+            },
+        )
+        .await;
+    }
     validate_reference_args(&args.selector)?;
     let reference = args.selector.reference.clone();
     let token = args.selector.expect_token.clone();
@@ -2670,5 +3211,20 @@ mod tests {
         assert_eq!(action["element_ref"], "el-abcdef");
         assert_eq!(action["observation_token"], "obs-1");
         assert_eq!(action["resolved_node"]["path"], "0/1");
+    }
+
+    #[test]
+    fn drag_selector_expressions_are_explicit() {
+        let text = parse_drag_selector("Save").unwrap();
+        assert_eq!(text.text.as_deref(), Some("Save"));
+
+        let tagged = parse_drag_selector("tag=trash").unwrap();
+        assert_eq!(tagged.resource_id.as_deref(), Some("trash"));
+
+        let desc = parse_drag_selector("desc=Drag handle").unwrap();
+        assert_eq!(desc.content_desc.as_deref(), Some("Drag handle"));
+
+        assert!(parse_drag_selector("bogus=value").is_err());
+        assert!(parse_drag_selector("text=").is_err());
     }
 }

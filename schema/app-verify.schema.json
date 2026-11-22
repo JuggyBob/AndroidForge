@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/app-verify.schema.json",
+  "title": "AndroidForge app verify-installed result",
+  "type": "object",
+  "required": ["package", "verified", "local", "installed", "diff"],
+  "properties": {
+    "package": { "type": "string" },
+    "verified": { "type": "boolean" },
+    "local": { "type": "object", "additionalProperties": true },
+    "installed": { "type": "object", "additionalProperties": true },
+    "diff": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true
+}

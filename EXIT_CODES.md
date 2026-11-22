@@ -127,7 +127,7 @@ Pipeline-style commands may return a successful HTTP-style envelope with `status
 }
 ```
 
-`E_UNSUPPORTED_OPERATION` is a normal contract, not a crash. For example, AVD cloning reports why it is absent and which supported workflow to use instead. Parallel matrix execution (`--parallel` > 1) also returns this code until independent-device isolation is validated.
+`E_UNSUPPORTED_OPERATION` is a normal contract, not a crash. For example, AVD cloning reports why it is absent and which supported workflow to use instead. Parallel matrix execution is supported with `agent matrix --parallel 1-32` when each target maps to an independent device.
 
 Element-reference errors are fail-closed. `E_ELEMENT_REF_STALE`, `E_ELEMENT_IDENTITY_CHANGED` and `E_ELEMENT_NOT_ACTIONABLE` mean no action was sent to ADB; re-observe and choose a new `ref`. `--expect-token` is mandatory.
 

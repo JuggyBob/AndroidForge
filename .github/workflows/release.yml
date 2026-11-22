@@ -73,6 +73,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:GITHUB_REF_NAME
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
           $notes = "docs/release-notes/$tag.md"
           $notesArg = if (Test-Path $notes) { @("--notes-file", $notes) } else { @("--generate-notes") }
           $assets = @(
@@ -81,17 +82,17 @@ jobs:
             "dist/androidforge-windows-x86_64-setup.exe"
             "dist/SHA256SUMS.txt"
           )
-          $screenshots = Get-ChildItem "dist/androidforge-screenshots-*.zip" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-          $assets += $screenshots
+          $screenshot = "dist/androidforge-screenshots-v$version.zip"
+          if (Test-Path $screenshot) { $assets += $screenshot }
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
             # A release may already exist when a tag is published manually or a
             # workflow is rerun. Replace its assets instead of failing the job.
             gh release upload $tag @assets --clobber
             if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
-            gh release edit $tag --title "AndroidForge $tag Beta" --prerelease @notesArg
+            gh release edit $tag --title "AndroidForge $tag" --prerelease=false --latest @notesArg
             if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
           } else {
-            gh release create $tag @assets --title "AndroidForge $tag Beta" --prerelease @notesArg
+            gh release create $tag @assets --title "AndroidForge $tag" --latest @notesArg
             if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
           }

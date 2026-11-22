@@ -18,9 +18,13 @@
 | `emulator.lifecycle` | supported | adb, emulator | Legacy emulator executable; headless start, boot wait, stop, snapshots. |
 | `session.ownership` | supported | filesystem locks | Coordinates AndroidForge sessions only; external ADB users are not prevented. |
 | `session.ensure` | supported | filesystem locks | Idempotent reuse/attach/launch with advisory lease metadata and bounded `--wait`; never steals another owner's device. |
+| `session.hygiene` | supported | filesystem locks | `session list --mine/--active` with classification/reason/age; `gc --reclaim --dry-run` lists would-reclaim ids and the exact apply command. |
 | `context` | supported | local state, optional adb | Compact project/session/device/app/screen/run snapshot with partial results and argv next actions. |
 | `ui.observation` | supported | adb, uiautomator | Compact semantic observations, session/boot-scoped tokens, semantic diffs and `--full` hierarchy. |
 | `ui.postconditions` | supported | adb, uiautomator | One action plus observation polling; no hidden action retries. |
+| `ui.gestures` | supported | adb | Configurable long-press holds, press-move-release drags with holds and optional mid-gesture screenshots. |
+| `ui.wait_modes` | supported | adb, uiautomator | `--for-text-gone`, `--for-idle`, `--for-stable` and `ui assert-no-text` with bounded attempts and lingering matches. |
+| `ui.compose_test_tags` | best-effort | adb, uiautomator, debug app exposing testTagsAsResourceId | `--test-tag` aliases the accessibility resource id; tags are invisible unless the app enables `testTagsAsResourceId`. |
 | `ui.receipts` | supported | adb, uiautomator | Before/after tokens, semantic diff, deterministic effect classification and explicit completeness. |
 | `ui.element_refs` | supported | adb, uiautomator | Opaque refs scoped to one observation token, with strict identity validation and no fallback for tap, long-press, text, clear, scroll, wait and assert. |
 | `ui.overlay_dismissal` | best-effort | adb, uiautomator | `ui dismiss-overlays` handles only clickable SystemUI nodes labelled Got it, OK, Dismiss or Close; it never taps app content or permission decisions. |
@@ -43,14 +47,19 @@
 | `diagnostics.logcat.query` | supported | adb | Bounded structured threadtime records with level/grep/time filters. `logcat watch` emits log/crash/ANR NDJSON. |
 | `intents` | supported | adb | Action/deep-link starts, typed extras, categories, flags, broadcasts and service start/stop. |
 | `network.profiles` | supported | adb | `default`, `offline`, `wifi-only`, `data-only` and `no-proxy`, global proxy get/set/clear and session-scoped restore. |
+| `network.reverse` | supported | adb | Per-session add/list/remove/clear of `adb reverse` mappings; recorded for cleanup. |
+| `network.mock_http` | supported | local TCP listener | Bounded local HTTP/1.1 mock server with inline/JSON routes, request logs, redacted headers and body limits. |
+| `network.mock_tls` | supported | local TLS certificate/key | Optional local TLS with a user-provided PEM cert/key; Android trust must be configured separately; no public CA claim. |
 | `apk.inspect` | supported | aapt2 | Package, version, SDKs, label, launchable activity, architectures, hash. |
 | `apk.verify` | supported | aapt2, apksigner, Java | Local signature verification. No signing automation. |
 | `apk.resolve` | supported | aapt2, project config | Deterministic newest valid variant output; never runs Gradle; ambiguity is explicit. |
 | `apk.diff` | supported | adb, aapt2 | Pulls the installed base APK and reports same/different/unknown including split limitations. |
-| `app.install` | supported | adb | Signature-aware diagnostics; `--only-if-changed` requires proven equivalence; never auto-uninstalls. Physical devices require `--allow-physical-mutation`. |
+| `app.install` | supported | adb | Signature-aware diagnostics; `--only-if-changed` requires proven package/version/base-hash/split-hash equivalence; never auto-uninstalls. Physical devices require `--allow-physical-mutation`. |
+| `app.verify_installed` | supported | adb, aapt2 | Pulls the live installed base APK, hashes it and compares package/version/certificate/splits without installing. |
+| `app.data_fixtures` | supported | adb, debuggable app | Export/import/reset/seed app-private data through `run-as`; imports always capture a pre-import archive; physical devices require `--allow-physical-mutation`. |
 | `app.uninstall` | supported | adb | Requires `--yes`; `--keep-data` keeps app data. Physical devices require `--allow-physical-mutation` too. |
 | `ui.uiautomator` | supported | adb, uiautomator | Compose semantics only when exposed through accessibility. |
-| `capture.screenshot` | supported | adb | Binary PNG via `exec-out`; no console redirection. |
+| `capture.screenshot` | supported | adb | Binary PNG via `exec-out`; optional baseline/region pixel comparison and diff artifact. |
 | `capture.recording` | best-effort | adb, screenrecord | Android's 180-second limit; no audio. |
 | `diagnostics.logcat` | supported | adb | Never clears the global buffer by default; bounded. |
 | `diagnostics.performance` | best-effort | adb, dumpsys, /proc | Explicit startup/jank/memory/CPU evidence; cold start requires `--cold`; unknown values carry reasons. |
@@ -64,7 +73,7 @@
 | `physical.safety` | supported | adb | Data-changing commands refuse physical devices unless `--allow-physical-mutation`; dry-runs report the requirement. |
 | `avd.cloning` | unsupported | none | Not implemented; a renamed profile would not provide isolation. |
 | `html.reports` | unsupported | none | JSON and raw artifacts are the primary evidence. |
-| `visual.diff` | unsupported | none | Screenshot evidence is supported; automated comparison is deferred. |
+| `visual.diff` | supported | local PNG decoder | Baseline/full or region screenshot comparison with changed-pixel ratio, bounding box and diff PNG artifact. |
 | `cloud` | unsupported | none | No telemetry or upload. |
 
 ## Desktop cockpit
@@ -102,9 +111,11 @@
 - `snapshot list|save|load|delete`.
 - `devices pair|connect|disconnect|health`.
 - `session start|ensure|attach|claim|list|inspect|status|release|stop|use|current|gc|restart`.
-  `session list --active` hides released/failed tombstones; a released tombstone can still stop its
-  owned emulator if nobody else owns it. `session stop|release|restart` require the matching `--owner`
-  (or `ANDROIDFORGE_OWNER`) unless `--force` is used for a deliberate takeover.
+  `session list --active --mine [--owner NAME]` hides tombstones and filters by owner; each entry has a
+  `classification` (active/busy/stale/released/failed/abandoned), age and reason. A released tombstone
+  can still stop its owned emulator if nobody else owns it. `session stop|release|restart` require the
+  matching `--owner` (or `ANDROIDFORGE_OWNER`) unless `--force` is used for a deliberate takeover.
+  `session gc --reclaim --dry-run` lists `would_reclaim` and the exact apply command without mutating.
 - `session ensure` reuses a compatible owned session, attaches to a warm unowned emulator or launches the
   requested AVD. `--ttl` records an advisory lease; expiry marks `needs_reconciliation` rather than
   stopping a device.
@@ -114,18 +125,22 @@
 ### Apps and APKs
 
 - `apk inspect|verify|resolve|diff`; split sets via repeated `--split` and `.apks`/split directories.
-- `app install|uninstall|clear-data|launch|force-stop|kill|status|info|list|file-push|file-pull|data-backup|data-restore`.
+- `app install|uninstall|clear-data|launch|force-stop|kill|status|info|list|file-push|file-pull|verify-installed|data-backup|data-restore|data export|data import|data reset|data seed`.
 - `permissions check|grant|revoke`.
 - `appops get|set|reset`.
 
 ### UI
 
-- `ui dump|inspect|observe|diff|find|tap|long-press|text|clear|wait|assert|dismiss-overlays|settle|scroll|scroll-to|swipe|back|home|keyevent|hide-keyboard|focused`.
+- `ui dump|inspect|observe|diff|find|tap|long-press|drag|text|clear|wait|assert|assert-no-text|dismiss-overlays|settle|scroll|scroll-to|swipe|back|home|keyevent|hide-keyboard|focused`.
 - `ui observe` returns compact semantics, a session/boot-scoped token and stable `ref` values; `ui diff` compares tokens.
-- `tap`, `long-press`, `text` and `scroll` accept `--wait-for-text`, `--wait-for-absent-text`,
+- `tap`, `long-press`, `drag`, `text` and `scroll` accept `--wait-for-text`, `--wait-for-absent-text`,
   `--wait-for-value`, `--wait-for-package`, `--wait-for-activity` and `--timeout` postconditions.
 - The same actions accept `--receipt` / `--receipt-full` for before/after tokens, semantic diff,
-  deterministic effect classification and explicit completeness.
+  deterministic effect classification and explicit completeness. Tap also accepts
+  `--capture-before`/`--capture-after`; long-press and drag accept `--capture-mid`.
+- `ui wait` adds `--for-text-gone`, `--for-idle` and `--for-stable --stable-for`; `ui assert-no-text`
+  fails with lingering matches. `--test-tag` aliases the accessibility resource id (app must expose
+  Compose `testTagsAsResourceId`).
 
 ### Agent loop and repair
 
@@ -138,18 +153,18 @@
   `--profile`, `--ttl`, `--install`, `--flow` and `--fixture`.
 - `agent brief` for the start-of-turn snapshot.
 - `agent matrix` with repeated `--avd`/`--serial`, `--flow`, `--fixture`, `--apk`, `--variant`,
-  `--install`, `--fail-fast`, `--dry-run` and cleanup reporting. `--parallel` >1 is explicitly rejected.
+  `--install`, `--fail-fast`, `--dry-run`, `--parallel 1-32` and cleanup reporting.
 - `ui observe|diff` and logcat peek/tail accept `--retries`; `ui tap|long-press|text|clear|scroll|wait|assert`
   accept `--ref` and `--expect-token`.
 
 ### Evidence and diagnostics
 
-- `capture screenshot`; `capture record start|stop|status`.
+- `capture screenshot [--compare BASELINE --region x1,y1,x2,y2 --max-diff-ratio N]`; `capture record start|stop|status`.
 - `diagnostics collect|app|logcat tail|start|stop|status|crashes|inspect|performance`.
 - `notifications list|wait|assert|channels|tap|clear`.
 - `jobs list|run|cancel|wait|assert`.
 - `alarms next|list|wait`.
-- `doze status|force|unforce`; `standby get|set`; `battery status|unplug|reset`; `network status|airplane|wifi|data`; `time get|set|restore`.
+- `doze status|force|unforce`; `standby get|set`; `battery status|unplug|reset`; `network status|airplane|wifi|data|reverse add|list|remove|clear|mock serve`; `time get|set|restore`.
 
 ### Automation and reports
 
@@ -173,10 +188,12 @@
 - Cloud device farms, telemetry, crash upload, accounts or LLM calls.
 - Release publishing, APK signing, keystore/password handling.
 - AVD cloning, named-profile isolation or parallel AVD provisioning.
-- HTML reports and automated visual diff.
+- HTML reports. Screenshot baselines/regions are supported through `capture screenshot --compare`.
 - A replacement for Gradle, JUnit, Robolectric, Compose UI tests or Espresso.
 - iOS or non-Android devices.
 
 ## Verified versus unverified
+
+The `0.12.0` stable pre-1.0 release exercised live install truth after an out-of-band `adb install -r`, byte-truthful `--only-if-changed` with a same-version/different-byte signed rebuild, `app verify-installed` and live version/hash expectations, configurable long-press and drag with mid-gesture capture, text-absence/idle/stability waits, `assert-no-text`, app-data export/seed/import/reset with pre-import backup and remote hash verification, `adb reverse`, bounded mock HTTP and self-signed TLS serving with redacted request logs, screenshot baseline comparison, tap before/after captures and session-hygiene classification/reclaim on a disposable API 36 emulator. The workspace test suite passed 347/347 and strict clippy/fmt were clean. No physical device was mutated; Maestro, real instrumentation, snapshot restore, root-only time changes, macOS/Linux hosts and code signing remain unverified.
 
 The `0.1.0` delivery run exercised the CalcSuite, DiscountHunter and IronPulse smoke flows on a real Android 16 emulator, including install/hash/certificate identity, semantic UI work, fixtures, hooks, screenshots, recording, logcat, diagnostics, one report and clean shutdown. The `0.2.0` delivery added the native desktop and exercised it against CalcSuite. The `0.3.0` delivery exercised the redesigned desktop against a real emulator: onboarding screens, environment diagnostics, session restart, APK inspect/install, conformance run, cancellation and reconciliation, live logcat, device preview and semantic hierarchy actions, run comparison and maintenance preview/cleanup. The `0.4.0` delivery introduced and exercised the agent loop: compact context, semantic observations and diffs, postconditions, session ensure, read-only repair planning, deterministic explanations and the agent pipeline. The `0.5.0` delivery fixed the issues reported by three independent app agents: shared-host port selection, UIAutomator recovery, pipeline status, project-scoped run discovery, observation shape, compact diffs, selector guidance, desktop help/version and session project binding. The `0.6.0` delivery added and exercised action receipts on a real emulator, real installed-APK diff/only-if-changed, recurrence classification, redacted bundle creation/verification and the Context/Ownership desktop pages. The `0.7.0` delivery added and exercised a two-AVD matrix (API 36 and 34), stable refs with stale rejection, device health, disconnect/recovery and read-only retry reporting, plus the Matrix and device health desktop workflows. The `0.8.0` delivery added and exercised split/`.apks` install and hash equivalence, refs for text/clear/scroll/wait/assert with stale refusal, explicit startup/jank/memory/CPU evidence and the desktop performance panel. The `0.9.0` delivery added and exercised full/compact/brief output profiles, `agent brief`, shorter refs/tokens, command aliases and measured byte reductions without changing the full JSON contract. The `0.9.1` delivery fixed the defects found by three independent app validations: deterministic observation retention, identity-stable refs, context refs through clickable ancestors, `--clickable` ancestor matching, selector label truncation, reference/observation diagnosis, project-scoped `latest`/`latest-failure`, verified bundle manifests, performance run identity and hook UI postconditions. The `0.9.2` delivery closed the independent certification findings: full-observation context refs, cross-project session refusal, honest hook verification state, bounded logcat byte-cap completion and clearer receipt evidence. Physical-device, Maestro, instrumentation-package, snapshot-restore, root-only time paths and non-125% DPI layouts were not exercised. See [VERIFICATION.md](VERIFICATION.md) for the exact record.

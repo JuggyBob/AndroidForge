@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-adb"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-core",
  "androidforge-process",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-app"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-automation"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-cli"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -258,15 +258,19 @@ dependencies = [
  "clap",
  "hex",
  "jsonschema",
+ "png",
  "predicates",
  "regex",
  "roxmltree",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
  "uuid",
  "zip",
@@ -274,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-process",
  "chrono",
@@ -293,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-desktop"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "chrono",
  "eframe",
@@ -317,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-diagnostics"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -334,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-emulator"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
@@ -347,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-process"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "tempfile",
  "thiserror 2.0.21",
@@ -356,11 +360,11 @@ dependencies = [
 
 [[package]]
 name = "androidforge-test-support"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "androidforge-ui"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
@@ -3506,6 +3510,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3817,6 +3830,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4018,6 +4041,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "signal-hook-registry",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
@@ -4031,6 +4055,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "tokio-rustls"
+version = "0.26.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
+dependencies = [
+ "rustls",
+ "tokio",
 ]
 
 [[package]]

@@ -19,6 +19,10 @@ pub struct AppFileTransfer {
     pub sha256: String,
     #[serde(default)]
     pub remote_size_verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_sha256: Option<String>,
+    #[serde(default)]
+    pub remote_hash_verified: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
@@ -136,6 +140,8 @@ impl AppFiles {
                 size_bytes: bytes.len() as u64,
                 sha256,
                 remote_size_verified,
+                remote_sha256: None,
+                remote_hash_verified: false,
                 notes,
             });
         }
@@ -187,6 +193,38 @@ impl AppFiles {
                 ));
             }
         }
+        let readback = self
+            .adb
+            .exec_out_args(
+                serial,
+                &[
+                    "run-as".to_string(),
+                    package.to_string(),
+                    "cat".to_string(),
+                    relative.clone(),
+                ],
+                Some(Duration::from_secs(120)),
+                Some(MAX_STREAM_BYTES),
+            )
+            .await;
+        let mut remote_sha256 = None;
+        let mut remote_hash_verified = false;
+        match readback {
+            Ok(output) if !output.stdout_truncated => {
+                let digest = sha256_hex(&output.stdout);
+                remote_hash_verified = digest == sha256;
+                remote_sha256 = Some(digest);
+                if !remote_hash_verified {
+                    notes.push("remote SHA-256 differs from the local file".to_string());
+                }
+            }
+            Ok(_) => notes
+                .push("remote SHA-256 read-back was truncated; checksum not verified".to_string()),
+            Err(error) => notes.push(format!(
+                "remote SHA-256 read-back failed: {}",
+                error.message()
+            )),
+        }
         Ok(AppFileTransfer {
             package: package.to_string(),
             direction: "push".to_string(),
@@ -196,6 +234,8 @@ impl AppFiles {
             size_bytes: bytes.len() as u64,
             sha256,
             remote_size_verified,
+            remote_sha256,
+            remote_hash_verified,
             notes,
         })
     }
@@ -263,6 +303,8 @@ impl AppFiles {
             size_bytes: bytes.len() as u64,
             sha256,
             remote_size_verified: false,
+            remote_sha256: None,
+            remote_hash_verified: false,
             notes,
         })
     }
@@ -316,6 +358,8 @@ impl AppFiles {
             size_bytes: output.stdout.len() as u64,
             sha256,
             remote_size_verified: false,
+            remote_sha256: None,
+            remote_hash_verified: false,
             notes: vec![
                 "backup uses `run-as` and `tar` and requires a debuggable application".to_string(),
             ],
@@ -370,6 +414,8 @@ impl AppFiles {
             size_bytes: bytes.len() as u64,
             sha256,
             remote_size_verified: false,
+            remote_sha256: None,
+            remote_hash_verified: false,
             notes: vec![
                 "restore overlays files from the backup; it does not clear existing data first"
                     .to_string(),

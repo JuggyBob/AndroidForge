@@ -3,7 +3,7 @@
 ; The binaries are intentionally unsigned. Code signing is a documented future step.
 
 #define MyAppName "AndroidForge"
-#define MyAppVersion "0.11.0"
+#define MyAppVersion "0.12.0"
 #define MyAppPublisher "AndroidForge"
 #define MyAppURL "https://github.com/JuggyBob/AndroidForge"
 #define MyAppExeName "androidforge-desktop.exe"
@@ -34,9 +34,9 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=0.11.0.0
-VersionInfoProductVersion=0.11.0
-VersionInfoTextVersion=0.11.0
+VersionInfoVersion=0.12.0.0
+VersionInfoProductVersion=0.12.0
+VersionInfoTextVersion=0.12.0
 VersionInfoCompany=AndroidForge
 VersionInfoDescription=AndroidForge developer cockpit
 VersionInfoCopyright=AndroidForge contributors
@@ -68,4 +68,3 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch AndroidForge"; Flags: no
 ; Only installer-owned files are removed. User configuration, AndroidForge state and
 ; run artifacts live outside {app} and are deliberately preserved on uninstall/upgrade.
 Type: files; Name: "{app}\*.bak-*"
-

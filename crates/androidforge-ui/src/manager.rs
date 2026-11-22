@@ -60,6 +60,18 @@ pub struct WaitResult {
     pub hierarchy_package: Option<String>,
 }
 
+/// Result of waiting for a set of user-visible strings to disappear.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextAbsenceResult {
+    pub absent: bool,
+    pub attempts: u32,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lingering: Vec<UiMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hierarchy_package: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettleResult {
     pub stable: bool,
@@ -329,8 +341,18 @@ impl UiManager {
     }
 
     pub async fn long_press(&self, serial: &str, selector: &Selector) -> Result<TapResult> {
+        self.long_press_with_duration(serial, selector, 900).await
+    }
+
+    pub async fn long_press_with_duration(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        duration_ms: u64,
+    ) -> Result<TapResult> {
         let selection = self.select(serial, selector).await?;
-        self.long_press_selection(serial, selection).await
+        self.long_press_selection(serial, selection, duration_ms)
+            .await
     }
 
     /// Long-press a node from a previous observation after identity validation.
@@ -338,6 +360,7 @@ impl UiManager {
         &self,
         serial: &str,
         expected: &crate::reference::NodeExpectation,
+        duration_ms: u64,
     ) -> Result<TapResult> {
         let hierarchy = self.dump(serial).await?;
         let node_id = expected.find(&hierarchy)?.id;
@@ -348,11 +371,17 @@ impl UiManager {
                 indices: vec![node_id],
                 selected: node_id,
             },
+            duration_ms,
         )
         .await
     }
 
-    async fn long_press_selection(&self, serial: &str, selection: Selection) -> Result<TapResult> {
+    async fn long_press_selection(
+        &self,
+        serial: &str,
+        selection: Selection,
+        duration_ms: u64,
+    ) -> Result<TapResult> {
         let hierarchy = &selection.hierarchy;
         let node = selection.selected_node();
         let (target, ancestor) = self.tap_target(hierarchy, node)?;
@@ -373,7 +402,14 @@ impl UiManager {
             .device(serial.to_string()));
         }
         self.adb
-            .input_swipe(serial, x as u32, y as u32, x as u32, y as u32, 900)
+            .input_swipe(
+                serial,
+                x as u32,
+                y as u32,
+                x as u32,
+                y as u32,
+                duration_ms.max(1) as u32,
+            )
             .await?;
         Ok(TapResult {
             matched: UiMatch::from_node(hierarchy, 0, node),
@@ -384,6 +420,26 @@ impl UiManager {
             display_size: display,
             rotation: hierarchy.rotation,
         })
+    }
+
+    /// Inject a raw motion event. Used by drag/long-press orchestration that
+    /// needs holds and mid-gesture screenshots.
+    pub async fn input_motion(&self, serial: &str, action: &str, x: i32, y: i32) -> Result<()> {
+        self.adb
+            .shell_args(
+                serial,
+                &[
+                    "input".to_string(),
+                    "motionevent".to_string(),
+                    action.to_string(),
+                    x.to_string(),
+                    y.to_string(),
+                ],
+                Some(Duration::from_secs(15)),
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn swipe(
@@ -756,6 +812,47 @@ impl UiManager {
         self.wait(serial, selector, timeout, absent).await
     }
 
+    /// Wait until none of the supplied strings appear as text or content
+    /// description. Returns the lingering matches instead of failing, so the
+    /// caller can choose wait-vs-assert semantics.
+    pub async fn wait_texts_absent(
+        &self,
+        serial: &str,
+        texts: &[String],
+        timeout: Duration,
+    ) -> Result<TextAbsenceResult> {
+        let started = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_package = None;
+        let mut lingering = Vec::new();
+        while started.elapsed() <= timeout || attempts == 0 {
+            attempts += 1;
+            let hierarchy = self.dump(serial).await?;
+            last_package = hierarchy.package_name.clone();
+            lingering = texts_visible_in(&hierarchy, texts);
+            if lingering.is_empty() {
+                return Ok(TextAbsenceResult {
+                    absent: true,
+                    attempts,
+                    duration_ms: elapsed_ms(started),
+                    lingering,
+                    hierarchy_package: last_package,
+                });
+            }
+            if started.elapsed() >= timeout {
+                break;
+            }
+            tokio::time::sleep(self.poll_interval).await;
+        }
+        Ok(TextAbsenceResult {
+            absent: false,
+            attempts,
+            duration_ms: elapsed_ms(started),
+            lingering,
+            hierarchy_package: last_package,
+        })
+    }
+
     /// Wait for the node identified by a previous observation. Identity is
     /// re-checked on every poll; a changed node never proves absence.
     pub async fn wait_expected(
@@ -886,6 +983,48 @@ impl UiManager {
                 .with_suggestion(
                     "Increase the timeout or inspect the current screen for ongoing animation.",
                 )
+                .device(serial.to_string()));
+            }
+            tokio::time::sleep(self.settle_interval).await;
+        }
+    }
+
+    /// Wait until the hierarchy has stayed byte-identical for `stable_for`.
+    pub async fn settle_for(
+        &self,
+        serial: &str,
+        stable_for: Duration,
+        timeout: Duration,
+    ) -> Result<SettleResult> {
+        let started = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_hash: Option<String> = None;
+        let mut stable_since = Instant::now();
+        loop {
+            attempts += 1;
+            let hierarchy = self.dump(serial).await?;
+            let hash = androidforge_core::util::sha256_hex(hierarchy.xml.as_bytes());
+            if last_hash.as_deref() != Some(hash.as_str()) {
+                last_hash = Some(hash);
+                stable_since = Instant::now();
+            } else if stable_since.elapsed() >= stable_for {
+                return Ok(SettleResult {
+                    stable: true,
+                    attempts,
+                    duration_ms: elapsed_ms(started),
+                    xml_sha256: last_hash.unwrap_or_default(),
+                });
+            }
+            if started.elapsed() >= timeout {
+                return Err(ForgeError::new(
+                    ErrorCode::UiAssertionFailed,
+                    "UI hierarchy did not remain stable before the timeout",
+                )
+                .with_context(
+                    "stable_for_ms",
+                    serde_json::json!(stable_for.as_millis() as u64),
+                )
+                .with_suggestion("Increase --stable-for or --timeout for slow animations.")
                 .device(serial.to_string()));
             }
             tokio::time::sleep(self.settle_interval).await;
@@ -1344,6 +1483,23 @@ impl UiManager {
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+/// Find visible nodes whose text or content description contains one of the
+/// requested strings.
+fn texts_visible_in(hierarchy: &UiHierarchy, texts: &[String]) -> Vec<UiMatch> {
+    let mut matches = Vec::new();
+    for node in hierarchy.nodes.iter().filter(|node| node.visible()) {
+        let text = node.text.as_deref().unwrap_or_default();
+        let desc = node.content_desc.as_deref().unwrap_or_default();
+        let hit = texts.iter().any(|wanted| {
+            !wanted.is_empty() && (text.contains(wanted.as_str()) || desc.contains(wanted.as_str()))
+        });
+        if hit {
+            matches.push(UiMatch::from_node(hierarchy, matches.len(), node));
+        }
+    }
+    matches
 }
 
 fn scroll_points(bounds: Rect, direction: &str) -> Result<(i32, i32, i32, i32)> {

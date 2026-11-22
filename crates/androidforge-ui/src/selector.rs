@@ -681,6 +681,11 @@ pub fn selector_not_found(hierarchy: &UiHierarchy, selector: &Selector) -> Forge
     } else {
         "If the target is below the fold, use `androidforge ui scroll-to` with the same selector.".to_string()
     })
+    .with_suggestion(if selector.resource_id.is_some() {
+        "Compose testTag values are visible only when the debug app sets testTagsAsResourceId = true in its semantics.".to_string()
+    } else {
+        "For Compose screens, prefer visible text/content descriptions or explicit bounds when semantic tags are not exposed.".to_string()
+    })
 }
 
 #[cfg(test)]

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/app-data.schema.json",
+  "title": "AndroidForge app data export/import/reset/seed result",
+  "type": "object",
+  "required": ["package"],
+  "properties": {
+    "package": { "type": "string" },
+    "kind": { "type": "string" },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "sha256": { "type": "string" },
+    "path": { "type": "string" },
+    "remote_path": { "type": "string" },
+    "transfer": { "type": "object", "additionalProperties": true },
+    "backup": { "type": "object", "additionalProperties": true },
+    "restored": { "type": "object", "additionalProperties": true },
+    "clear_output": { "type": "string" }
+  },
+  "additionalProperties": true
+}

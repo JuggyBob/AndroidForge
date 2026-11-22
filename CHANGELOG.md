@@ -2,13 +2,166 @@
 
 All notable changes to AndroidForge are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses semantic versioning
-within its beta release line.
+within its pre-1.0 release line.
 
 ## [Unreleased]
 
 ### Changed
 
 - Nothing yet.
+
+## [0.12.0] - 2026-11-22
+
+**Truthful Verification & Automation Gap Closure — the first stable (pre-1.0) release.** This release
+closes the gaps found during the IronPulse 5.1.2 device campaign. The central rule is that AndroidForge
+must prove what is actually on the device instead of trusting cached install records, version strings or
+a process exit code.
+
+### Added
+
+- **Live install verification:** `app verify-installed --apk <path>` pulls the live base APK, hashes it,
+  reads live package metadata and compares package, version, certificate and split identity without
+  installing anything. Mismatches exit with `E_INSTALL_VERIFICATION_FAILED` and a full diff.
+- **Install expectations:** `app status <package> --expect-version-name`,
+  `--expect-version-code` and `--expect-apk-sha256` evaluate live device state and return structured
+  pass/fail records. `--assert-task-exists`, `--assert-task-absent` and `--assert-process-stable`
+  remain available alongside them.
+- **Live session build refresh:** `session status` and `session inspect` re-read `pm path`, version and
+  base APK SHA-256 on every call. The refreshed identity is persisted so later reports do not inherit a
+  stale install record after an out-of-band `adb install -r`.
+- **Compose test-tag selector:** selectors accept `--test-tag` as an alias for the accessibility
+  resource id. A missing tag produces an actionable suggestion naming the app-side
+  `testTagsAsResourceId` debug setting; `ui find` remains a non-failing search.
+- **Configurable long-press:** `ui long-press --duration <ms>` replaces the fixed 900 ms hold (default
+  remains 900 ms). Referenced long-presses accept the same duration.
+- **Drag gestures:** `ui drag` performs a real press-move-release drag with `--from`/`--to` selector
+  expressions (`text=`, `contains=`, `desc=`, `id=`, `tag=`, `class=`), explicit coordinates, text/id
+  flags, `--duration`, `--hold-before` and `--hold-after`.
+- **Mid-gesture screenshots:** `--capture-mid <png>` captures while the finger is still down during a
+  long-press or drag. The frame and SHA-256 are returned in the action result.
+- **Wait modes:** `ui wait --for-text-gone <TEXT>` (repeatable) waits until every supplied string is
+  absent and reports lingering matches with bounds. `--for-idle` waits for a byte-identical hierarchy
+  dump; `--for-stable --stable-for <duration>` requires a stable hierarchy hash over a window.
+- **Text absence assertion:** `ui assert-no-text --text/--contains` fails with
+  `E_UI_ASSERTION_FAILED` and the matching nodes when the text exists; success includes attempts,
+  duration and package evidence.
+- **App data fixtures:** `app data export`, `app data import`, `app data reset` and `app data seed`.
+  Export/import/seed use `run-as` and require a debuggable build. Import always writes and registers a
+  `data/pre-import-backup.tar` before restoring. Reset clears data, optionally saves
+  `--backup-current`, then restores `--baseline`. Seed writes one file to an app-private relative path,
+  reads it back and reports `remote_sha256`/`remote_hash_verified`.
+- **ADB reverse management:** `network reverse add/list/remove/clear` manages per-device mappings and
+  records them in the session for cleanup.
+- **Local mock HTTP/TLS server:** `network mock serve` binds loopback by default with configurable port,
+  inline `METHOD /path=STATUS[:BODY]` routes or a JSON routes file, default status/body, delay, request
+  budget, duration and optional TLS certificate/key. `--reverse` adds and later removes an
+  `adb reverse` mapping automatically.
+- **Mock request logs:** NDJSON records method, path, query, redacted headers, bounded body preview and
+  SHA-256, status, matched route, duration and peer. Sensitive headers (`authorization`, cookies,
+  API keys) are redacted. The log is registered as a run artifact.
+- **Visual regression:** `capture screenshot --compare <baseline> [--region x1,y1,x2,y2]
+  [--max-diff-ratio N] [--diff-threshold N]` reports compared/changed pixels, ratio, mean and maximum
+  channel delta and the changed bounding box. A diff PNG is stored as an artifact; failure exits with
+  `E_UI_ASSERTION_FAILED`.
+- **Tap evidence:** `ui tap --capture-before <png> --capture-after <png>` links before/after frames in
+  the action result or receipt.
+- **Session hygiene filters:** `session list --mine --active [--owner NAME]` filters by the
+  `ANDROIDFORGE_OWNER`/OS owner and active states. Each entry carries `classification`
+  (active/busy/stale/released/failed/abandoned), age and a human-readable `reason`.
+- **GC guidance:** `session gc --reclaim --dry-run` adds `would_reclaim` and `next_commands`, leaves every
+  session file untouched and never reports a live or tombstoned session as reclaimed.
+- **Schemas:** `app-verify.schema.json`, `app-data.schema.json`, `ui-wait.schema.json`,
+  `network-mock.schema.json`, `visual-diff.schema.json` and `session-list.schema.json`.
+- **MCP/tool catalog:** nine new tools cover verify-installed, app status/data, drag, wait,
+  assert-no-text, reverse, bounded mock serve and session list. `--test-tag` and screenshot comparison
+  flags are exposed through the selector/screenshot schemas.
+
+### Changed
+
+- **`--only-if-changed` is byte-truthful:** a rebuild with the same package/version but different base
+  APK bytes is installed (`reason:content_different`). Installation is skipped only when package,
+  version code, base APK SHA-256 and the sorted split hashes all match. Missing hashes are `unknown` and
+  never safe to skip.
+- `ui tap` captures are explicit and bounded; they are not silently added to every action.
+- `ui long-press`, `ui drag`, `ui wait` and `ui assert-no-text` emit structured action evidence,
+  including capture hashes and lingering-match bounds.
+- `app data seed` verifies the remote file through a `run-as` read-back instead of trusting only the
+  push exit code.
+- Session list JSON omits `owner` when unfiltered and includes it only for `--mine`/`--owner`.
+- Session GC distinguishes dry-run `would_reclaim` from applied reclamation.
+- Release workflow now publishes stable releases without the `--prerelease` flag by default. Existing
+  v0.11.0 remains a prerelease; v0.12.0 is a normal release.
+- Workspace, CLI, desktop, installer and compatibility version are `0.12.0`.
+
+### Fixed
+
+- `session status` could report a stale install path/SHA-256 after an out-of-band `adb install -r`.
+- `app install --only-if-changed` could skip a same-version rebuilt APK whose bytes had changed.
+- Empty candidate/installed hashes were treated as comparable values; they are now `unknown` and block
+  skip decisions.
+- `network reverse list` labels the ADB transport token as `transport` instead of pretending it is a
+  device serial.
+- Mock-serve rejects port 0, validates status codes and route paths, and cleans up an automatically
+  added reverse mapping after the server stops.
+- `ui assert-no-text` and text-gone waits omit absent `hierarchy_package` instead of emitting `null`.
+- Session-list schema accepts `owner: null` from older reports while the current CLI omits the field.
+- Visual-diff payloads validate against their schema, including region-only comparisons.
+
+### Validation
+
+- `cargo test --workspace`: **347 passed / 0 failed / 0 ignored** across 27 test executables.
+- `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- Live install truth: after `adb install -r`, `session status` returned `live_build_refreshed:true`
+  with the live base APK SHA-256.
+- `--only-if-changed`: a same-package/same-version signed rebuild with an added asset installed with
+  `skipped:false`, `reason:content_different`; re-installing the identical baseline skipped.
+- `app verify-installed` reported `overall:same` and `safe_to_skip_install:true`; `app status
+  --expect-apk-sha256` passed against the live hash.
+- Disposable-emulator campaign passed for long-press duration, drag/mid-capture, text-absence tests,
+  idle/stable waits, app-data export/seed/import/reset, adb reverse, screenshot comparison and tap
+  before/after captures.
+- Mock HTTP returned 200/401 and 404 fallback, honored `--max-requests`, redacted `authorization` and
+  wrote the request log. Self-signed TLS served successfully with `curl -k`.
+- Session hygiene was tested with fabricated fresh/stale/released/failed sessions: classification,
+  owner filters, dry-run immutability and reclaim-only-stale behavior passed.
+- No physical device was mutated; the disposable emulator was released and stopped.
+
+### Compatibility
+
+- Report schema remains `1`; v0.11.0 reports remain readable.
+- Existing command names, JSON envelopes, exit codes and session ownership behavior are preserved.
+- The `--only-if-changed` skip condition is stricter. A build that previously skipped on matching
+  version metadata now installs when hashes differ; this is the intended fix.
+- New JSON result fields are additive; new schema files are additive.
+- The desktop and CLI must be on the same `0.12.0` version line.
+- The desktop UI is unchanged from v0.11.0; the v0.11.0 screenshot gallery remains representative.
+
+### Known limitations
+
+- Physical-device installs and vendor ROM mutation paths remain incompletely validated. The physical
+  Xiaomi device was present but not mutated.
+- Maestro and instrumentation execution remain optional/best-effort; a real Maestro flow and test APK
+  were not exercised in this release.
+- Snapshot restore and root-only time changes remain incompletely validated.
+- Real Tesseract accuracy is engine- and language-data-dependent.
+- MCP is local stdio only; no HTTP/SSE transport is shipped.
+- macOS and Linux hosts are not validated.
+- Compose tags require the app-side `testTagsAsResourceId` setting; AndroidForge does not inject it.
+- TLS mock serving requires the app/device to trust the supplied certificate through its own
+  network-security or user-CA configuration.
+- The desktop is Windows-focused; release binaries are unsigned.
+
+### Release assets
+
+- `androidforge-cli-windows-x86_64.zip` — standalone `androidforge.exe`.
+- `androidforge-desktop-windows-x86_64.zip` — portable CLI + desktop, license and documentation.
+- `androidforge-windows-x86_64-setup.exe` — per-user Windows installer.
+- `SHA256SUMS.txt` — checksums for the published assets.
+
+Published asset checksums are recorded in [VERIFICATION.md](VERIFICATION.md) and in the GitHub release
+after the release workflow completes.
+
+
 
 ## [0.11.0] - 2026-11-19
 
@@ -840,7 +993,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.0
 [0.11.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.11.0
 [0.10.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.10.0
 [0.9.4]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.9.4

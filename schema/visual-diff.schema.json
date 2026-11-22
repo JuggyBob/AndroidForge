@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/visual-diff.schema.json",
+  "title": "AndroidForge screenshot visual comparison",
+  "type": "object",
+  "required": [
+    "baseline",
+    "current",
+    "width",
+    "height",
+    "region",
+    "compared_pixels",
+    "changed_pixels",
+    "changed_ratio",
+    "max_channel_delta",
+    "mean_channel_delta",
+    "diff_threshold",
+    "max_diff_ratio",
+    "passed"
+  ],
+  "properties": {
+    "baseline": { "type": "string" },
+    "current": { "type": "string" },
+    "width": { "type": "integer", "minimum": 1 },
+    "height": { "type": "integer", "minimum": 1 },
+    "region": {
+      "type": "object",
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "compared_pixels": { "type": "integer", "minimum": 0 },
+    "changed_pixels": { "type": "integer", "minimum": 0 },
+    "changed_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "max_channel_delta": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "mean_channel_delta": { "type": "number", "minimum": 0, "maximum": 255 },
+    "diff_threshold": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "max_diff_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "passed": { "type": "boolean" },
+    "changed_bounds": {
+      "type": "object",
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "diff_image": { "type": "string" }
+  },
+  "additionalProperties": true
+}

@@ -10,7 +10,7 @@ Examples of expected behavior:
 - Critique the change, not the person.
 - Give reproducible examples and assume good faith.
 - Respect privacy: redact device data, paths, package names and credentials.
-- Accept that beta software has limits, and report them honestly.
+- Accept that pre-1.0 software has limits, and report them honestly.
 
 ## Scope
 

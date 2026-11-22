@@ -82,7 +82,7 @@ See [case-studies/IronPulse-smoke](case-studies/IronPulse-smoke/).
 
 **Fixtures are explicit.** There is no hidden test runner and no automatic project behavior. `--dry-run` and `--yes` make destructive intent visible.
 
-**Honest unsupported.** AVD cloning, visual diff, HTML reports and cloud are absent and report `E_UNSUPPORTED_OPERATION` with reasons and alternatives. No fake success.
+**Honest unsupported.** AVD cloning, HTML reports and cloud are absent and report `E_UNSUPPORTED_OPERATION` with reasons and alternatives. Screenshot baseline/region comparison is supported through `capture screenshot --compare`.
 
 **The core stays generic.** Project names, package ids, AVD names and fixture paths live in `examples/` and `.androidforge/`, never in the runtime crates. CI can enforce it with the genericity test.
 

@@ -61,6 +61,35 @@ async fn screenshot(ctx: &CliContext, args: &CaptureScreenshotArgs) -> Result<Co
                 write_atomic(&path, &bytes)?;
                 output_path = Some(path.to_string_lossy().into_owned());
             }
+            let mut comparison = None;
+            let mut comparison_artifact = None;
+            if let Some(baseline) = &args.compare {
+                let baseline_path = resolve_input_path(ctx, baseline);
+                let region = args
+                    .region
+                    .as_deref()
+                    .map(crate::commands::visual::parse_region)
+                    .transpose()?;
+                let diff_output = args
+                    .diff_output
+                    .as_ref()
+                    .map(|path| local_output(ctx, path))
+                    .unwrap_or_else(|| run.dir.join("visual").join("diff.png"));
+                let diff = crate::commands::visual::compare_png(
+                    &baseline_path,
+                    Path::new(&result.local_path),
+                    region,
+                    args.diff_threshold,
+                    args.max_diff_ratio,
+                    Some(&diff_output),
+                )?;
+                comparison_artifact = Some(run.register_artifact(
+                    &diff_output,
+                    "visual_diff",
+                    Some("Visual regression diff visualization"),
+                )?);
+                comparison = Some(diff);
+            }
             let mut result_json = serde_json::to_value(&result)?;
             if let Some(object) = result_json.as_object_mut() {
                 object.insert(
@@ -69,20 +98,56 @@ async fn screenshot(ctx: &CliContext, args: &CaptureScreenshotArgs) -> Result<Co
                 );
                 object.insert(
                     "output_path".to_string(),
-                    serde_json::to_value(output_path).unwrap_or(serde_json::Value::Null),
+                    serde_json::to_value(&output_path).unwrap_or(serde_json::Value::Null),
+                );
+                object.insert(
+                    "comparison".to_string(),
+                    serde_json::to_value(&comparison).unwrap_or(serde_json::Value::Null),
                 );
             }
-            Ok(success(
-                "capture.screenshot",
-                result_json,
-                format!(
+            let mut artifacts = vec![result.artifact.clone()];
+            if let Some(artifact) = comparison_artifact.clone() {
+                artifacts.push(artifact);
+            }
+            if let Some(diff) = &comparison
+                && !diff.passed
+            {
+                return Err(ForgeError::new(
+                    ErrorCode::UiAssertionFailed,
+                    format!(
+                        "screenshot differs from baseline: {:.4}% changed pixels (limit {:.4}%)",
+                        diff.changed_ratio * 100.0,
+                        diff.max_diff_ratio * 100.0
+                    ),
+                )
+                .with_context(
+                    "comparison",
+                    serde_json::to_value(diff).unwrap_or(serde_json::Value::Null),
+                )
+                .with_suggestion("Inspect the diff image, then update the baseline only if the change is intended.")
+                .with_artifacts(artifacts)
+                .device(serial.to_string()));
+            }
+            let human = match &comparison {
+                Some(diff) => format!(
+                    "Captured {}x{} screenshot to {}\nvisual diff: {} changed pixel(s) of {} ({:.4}%), passed={}\n",
+                    result.width,
+                    result.height,
+                    result.artifact.path,
+                    diff.changed_pixels,
+                    diff.compared_pixels,
+                    diff.changed_ratio * 100.0,
+                    diff.passed
+                ),
+                None => format!(
                     "Captured {}x{} screenshot to {}\n",
                     result.width, result.height, result.artifact.path
                 ),
-            )
-            .with_artifacts(vec![result.artifact])
-            .with_optional_session(session.as_ref().map(|session| session.id.clone()))
-            .with_device(serial))
+            };
+            Ok(success("capture.screenshot", result_json, human)
+                .with_artifacts(artifacts)
+                .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+                .with_device(serial))
         },
     )
     .await
@@ -1177,4 +1242,22 @@ fn local_output(ctx: &CliContext, output: &Path) -> std::path::PathBuf {
     } else {
         ctx.paths.cwd.join(output)
     }
+}
+
+/// Resolve a user-supplied baseline path. Relative paths are tried against the
+/// working directory first, then the artifact directory so reports can refer to
+/// `runs/<id>/screens/...` without repeating the project root.
+fn resolve_input_path(ctx: &CliContext, path: &Path) -> std::path::PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let cwd = ctx.paths.cwd.join(path);
+    if cwd.is_file() {
+        return cwd;
+    }
+    let artifact = ctx.paths.artifacts_dir.join(path);
+    if artifact.is_file() {
+        return artifact;
+    }
+    cwd
 }

@@ -384,6 +384,8 @@ fn compare_field(
     candidate: Option<String>,
     installed: Option<String>,
 ) -> FieldComparison {
+    let candidate = candidate.filter(|value| !value.trim().is_empty());
+    let installed = installed.filter(|value| !value.trim().is_empty());
     let status = match (&candidate, &installed) {
         (Some(candidate), Some(installed)) if candidate == installed => FieldStatus::Same,
         (Some(_), Some(_)) => FieldStatus::Different,
@@ -486,6 +488,14 @@ mod tests {
         installed_apk.sha256 = "def".to_string();
         let diff = compare(&candidate, &[], &installed(&installed_apk, &[]));
         assert_eq!(diff.overall, Equivalence::Different);
+        assert!(!diff.safe_to_skip_install);
+    }
+
+    #[test]
+    fn missing_hash_is_unknown_and_never_safe_to_skip() {
+        let candidate = apk(42, "", Some("AA:BB"));
+        let diff = compare(&candidate, &[], &installed(&candidate, &[]));
+        assert_eq!(diff.overall, Equivalence::Unknown);
         assert!(!diff.safe_to_skip_install);
     }
 

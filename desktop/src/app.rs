@@ -338,12 +338,24 @@ impl App {
             // of flashing a window and immediately closing it. raw_arg avoids
             // Rust's automatic argument escaping around the quoted path.
             let command = format!("\"{}\"", path.display());
-            let _ = std::process::Command::new("cmd.exe")
+            let mut console = std::process::Command::new("cmd.exe");
+            console
                 .arg("/K")
                 .raw_arg(command)
                 .current_dir(self.workspace())
-                .creation_flags(CREATE_NEW_CONSOLE)
-                .spawn();
+                .creation_flags(CREATE_NEW_CONSOLE);
+            // Make the CLI resolvable as `androidforge` after the initial
+            // full-path invocation, so the console is actually usable.
+            if let Some(directory) = path.parent() {
+                let mut search_path = vec![directory.to_path_buf()];
+                if let Some(existing) = std::env::var_os("PATH") {
+                    search_path.extend(std::env::split_paths(&existing));
+                }
+                if let Ok(joined) = std::env::join_paths(search_path) {
+                    console.env("PATH", joined);
+                }
+            }
+            let _ = console.spawn();
         }
         #[cfg(not(windows))]
         {

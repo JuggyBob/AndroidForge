@@ -12,6 +12,7 @@ pub mod doctor;
 pub mod maintenance;
 pub mod matrix;
 pub mod mcp;
+mod mock;
 pub mod observation;
 pub mod ocr;
 pub mod receipt;
@@ -19,14 +20,15 @@ pub mod report;
 pub mod session;
 pub mod system;
 pub mod ui;
+pub mod visual;
 
 use androidforge_core::error::Result;
 use androidforge_core::output::CommandSuccess;
 
 use crate::cli::{
-    AppCommand, CaptureCommand, Cli, Command, DevicesCommand, DiagnosticsCommand, EmulatorCommand,
-    FixtureCommand, HookCommand, ReportCommand, RunCommand, SessionCommand, SnapshotCommand,
-    TestCommand, UiCommand,
+    AppCommand, AppDataCommand, CaptureCommand, Cli, Command, DevicesCommand, DiagnosticsCommand,
+    EmulatorCommand, FixtureCommand, HookCommand, ReportCommand, RunCommand, SessionCommand,
+    SnapshotCommand, TestCommand, UiCommand,
 };
 use crate::context::CliContext;
 
@@ -311,6 +313,13 @@ fn app_name(command: &AppCommand) -> &'static str {
         AppCommand::FilePull(_) => "file-pull",
         AppCommand::DataBackup(_) => "data-backup",
         AppCommand::DataRestore(_) => "data-restore",
+        AppCommand::VerifyInstalled(_) => "verify-installed",
+        AppCommand::Data { command } => match command {
+            AppDataCommand::Export(_) => "data export",
+            AppDataCommand::Import(_) => "data import",
+            AppDataCommand::Reset(_) => "data reset",
+            AppDataCommand::Seed(_) => "data seed",
+        },
     }
 }
 
@@ -323,10 +332,12 @@ fn ui_name(command: &UiCommand) -> &'static str {
         UiCommand::Find(_) => "find",
         UiCommand::Tap(_) => "tap",
         UiCommand::LongPress(_) => "long-press",
+        UiCommand::Drag(_) => "drag",
         UiCommand::Text(_) => "text",
         UiCommand::Clear(_) => "clear",
         UiCommand::Wait(_) => "wait",
         UiCommand::Assert(_) => "assert",
+        UiCommand::AssertNoText(_) => "assert-no-text",
         UiCommand::DismissOverlays(_) => "dismiss-overlays",
         UiCommand::Settle(_) => "settle",
         UiCommand::Scroll(_) => "scroll",
@@ -513,6 +524,27 @@ impl NestedName for crate::cli::NetworkCommand {
             Self::Proxy { .. } => "proxy",
             Self::Profile { .. } => "profile",
             Self::Restore => "restore",
+            Self::Reverse { .. } => "reverse",
+            Self::Mock { .. } => "mock",
+        }
+    }
+}
+
+impl NestedName for crate::cli::NetworkReverseCommand {
+    fn nested_name(&self) -> &'static str {
+        match self {
+            Self::Add(_) => "add",
+            Self::List => "list",
+            Self::Remove { .. } => "remove",
+            Self::Clear => "clear",
+        }
+    }
+}
+
+impl NestedName for crate::cli::NetworkMockCommand {
+    fn nested_name(&self) -> &'static str {
+        match self {
+            Self::Serve(_) => "serve",
         }
     }
 }

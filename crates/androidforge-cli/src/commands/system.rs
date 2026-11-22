@@ -9,10 +9,12 @@ use chrono::DateTime;
 
 use crate::cli::{
     AlarmsCommand, AppOpsCommand, BatteryCommand, DozeCommand, JobWaitArgs, JobsCommand,
-    NetworkCommand, NetworkProfileCommand, NetworkProxyCommand, NotificationWaitArgs,
-    NotificationsCommand, PermissionsCommand, StandbyCommand, TimeCommand, TimeSetArgs,
+    NetworkCommand, NetworkProfileCommand, NetworkProxyCommand, NetworkReverseCommand,
+    NotificationWaitArgs, NotificationsCommand, PermissionsCommand, StandbyCommand, TimeCommand,
+    TimeSetArgs,
 };
 use crate::commands::common::success;
+use crate::commands::mock;
 use crate::context::CliContext;
 
 async fn target(ctx: &CliContext) -> Result<(Option<Session>, androidforge_core::model::Device)> {
@@ -504,6 +506,9 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
     {
         return network_profile_list();
     }
+    if let NetworkCommand::Mock { command } = command {
+        return mock::network_mock(ctx, command).await;
+    }
     let (mut session, device) = target(ctx).await?;
     let manager = DeviceStateManager::new(ctx.adb()?);
     match command {
@@ -515,6 +520,9 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
         }
         NetworkCommand::Restore => {
             return network_restore(ctx, &mut session, &device, &manager).await;
+        }
+        NetworkCommand::Reverse { command } => {
+            return network_reverse(ctx, &mut session, &device, command).await;
         }
         _ => {}
     }
@@ -552,6 +560,166 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
     )
     .with_optional_session(session.map(|session| session.id.clone()))
     .with_device(device.serial.clone()))
+}
+
+async fn network_reverse(
+    ctx: &CliContext,
+    session: &mut Option<Session>,
+    device: &androidforge_core::model::Device,
+    command: &NetworkReverseCommand,
+) -> Result<CommandSuccess> {
+    let adb = ctx.adb()?;
+    match command {
+        NetworkReverseCommand::List => {
+            let output = adb.reverse_list(&device.serial).await?;
+            let mut mappings = Vec::new();
+            for line in output.stdout_text().lines() {
+                let parts = line.split_whitespace().collect::<Vec<_>>();
+                if parts.len() >= 3 {
+                    mappings.push(serde_json::json!({
+                        "transport": parts[0],
+                        "remote": parts[1],
+                        "local": parts[2],
+                    }));
+                }
+            }
+            let human = if mappings.is_empty() {
+                "No reverse mappings.\n".to_string()
+            } else {
+                mappings
+                    .iter()
+                    .map(|mapping| {
+                        format!(
+                            "transport={} {} -> {}\n",
+                            mapping["transport"].as_str().unwrap_or("-"),
+                            mapping["remote"].as_str().unwrap_or("-"),
+                            mapping["local"].as_str().unwrap_or("-")
+                        )
+                    })
+                    .collect()
+            };
+            Ok(success(
+                "network.reverse.list",
+                serde_json::json!({"mappings": mappings}),
+                human,
+            )
+            .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+            .with_device(device.serial.clone()))
+        }
+        NetworkReverseCommand::Add(args) => {
+            let remote = normalize_reverse_spec(&args.remote)?;
+            let local = match &args.local {
+                Some(local) => normalize_reverse_spec(local)?,
+                None => remote.clone(),
+            };
+            if ctx.dry_run {
+                return Ok(success(
+                    "network.reverse.add",
+                    serde_json::json!({
+                        "dry_run": true,
+                        "serial": device.serial,
+                        "remote": remote,
+                        "local": local,
+                    }),
+                    format!(
+                        "Would map device {remote} to host {local} on {}.\n",
+                        device.serial
+                    ),
+                )
+                .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+                .with_device(device.serial.clone()));
+            }
+            adb.reverse_add(&device.serial, &remote, &local).await?;
+            if let Some(session) = session.as_mut() {
+                session
+                    .device_settings
+                    .insert(format!("network:reverse:{remote}"), Some(local.clone()));
+                session.touch(&ctx.paths)?;
+            }
+            Ok(success(
+                "network.reverse.add",
+                serde_json::json!({"remote": remote, "local": local}),
+                format!(
+                    "Mapped device {remote} to host {local} on {}.\n",
+                    device.serial
+                ),
+            )
+            .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+            .with_device(device.serial.clone()))
+        }
+        NetworkReverseCommand::Remove { remote } => {
+            let remote = normalize_reverse_spec(remote)?;
+            if ctx.dry_run {
+                return Ok(success(
+                    "network.reverse.remove",
+                    serde_json::json!({"dry_run": true, "remote": remote}),
+                    format!("Would remove reverse mapping {remote}.\n"),
+                )
+                .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+                .with_device(device.serial.clone()));
+            }
+            adb.reverse_remove(&device.serial, &remote).await?;
+            if let Some(session) = session.as_mut() {
+                session
+                    .device_settings
+                    .remove(&format!("network:reverse:{remote}"));
+                session.touch(&ctx.paths)?;
+            }
+            Ok(success(
+                "network.reverse.remove",
+                serde_json::json!({"remote": remote}),
+                format!("Removed reverse mapping {remote}.\n"),
+            )
+            .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+            .with_device(device.serial.clone()))
+        }
+        NetworkReverseCommand::Clear => {
+            if ctx.dry_run {
+                return Ok(success(
+                    "network.reverse.clear",
+                    serde_json::json!({"dry_run": true}),
+                    "Would remove all reverse mappings.\n".to_string(),
+                )
+                .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+                .with_device(device.serial.clone()));
+            }
+            adb.reverse_remove_all(&device.serial).await?;
+            if let Some(session) = session.as_mut() {
+                let keys = session
+                    .device_settings
+                    .keys()
+                    .filter(|key| key.starts_with("network:reverse:"))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for key in keys {
+                    session.device_settings.remove(&key);
+                }
+                session.touch(&ctx.paths)?;
+            }
+            Ok(success(
+                "network.reverse.clear",
+                serde_json::json!({"cleared": true}),
+                "Removed all reverse mappings.\n".to_string(),
+            )
+            .with_optional_session(session.as_ref().map(|session| session.id.clone()))
+            .with_device(device.serial.clone()))
+        }
+    }
+}
+
+fn normalize_reverse_spec(value: &str) -> Result<String> {
+    let port = value.strip_prefix("tcp:").ok_or_else(|| {
+        ForgeError::invalid_argument(format!("reverse mapping '{value}' must use tcp:PORT"))
+    })?;
+    let port = port.parse::<u16>().map_err(|_| {
+        ForgeError::invalid_argument(format!("reverse mapping '{value}' has an invalid port"))
+    })?;
+    if port == 0 {
+        return Err(ForgeError::invalid_argument(
+            "reverse mapping port 0 is not valid",
+        ));
+    }
+    Ok(format!("tcp:{port}"))
 }
 
 async fn network_proxy(
@@ -1014,5 +1182,14 @@ mod tests {
         for expected in ["default", "offline", "wifi-only", "data-only", "no-proxy"] {
             assert!(names.contains(expected), "missing profile {expected}");
         }
+    }
+
+    #[test]
+    fn reverse_specs_require_tcp_and_valid_ports() {
+        assert_eq!(normalize_reverse_spec("tcp:8080").unwrap(), "tcp:8080");
+        assert!(normalize_reverse_spec("8080").is_err());
+        assert!(normalize_reverse_spec("tcp:0").is_err());
+        assert!(normalize_reverse_spec("tcp:99999").is_err());
+        assert!(normalize_reverse_spec("udp:8080").is_err());
     }
 }

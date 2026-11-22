@@ -77,6 +77,7 @@ fn selector_properties() -> Value {
         "contains": {"type": "string", "description": "Substring of visible text."},
         "content_desc": {"type": "string"},
         "resource_id": {"type": "string"},
+        "test_tag": {"type": "string", "description": "Compose testTag exposed as an accessibility resource id in debug builds."},
         "class": {"type": "string"},
         "role": {"type": "string", "description": "Semantic role such as button, edit_text, tab, checkbox."},
         "text_regex": {"type": "string", "description": "Regular expression matched against text/content description."},
@@ -234,6 +235,162 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
     ));
     tools.push(tool(
+        "androidforge_app_verify_installed",
+        "Compare the live installed base APK bytes/hash with a local APK without installing it.",
+        schema(
+            json!({
+                "apk": {"type": "string"},
+                "split": {"type": "array", "items": {"type": "string"}},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+            }),
+            &["apk", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_app_status",
+        "Read live package state and assert expected installed version or base APK SHA-256.",
+        schema(
+            json!({
+                "package": {"type": "string"},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "expect_version_name": {"type": "string"},
+                "expect_version_code": {"type": "integer"},
+                "expect_apk_sha256": {"type": "string"},
+                "assert_task_exists": {"type": "boolean"},
+                "assert_task_absent": {"type": "boolean"},
+                "assert_process_stable": {"type": "boolean"},
+                "stable_for": {"type": "string"},
+                "timeout": {"type": "string"},
+            }),
+            &["package", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_app_data",
+        "Export, import, reset or seed app-private data. Import/reset/seed require confirm=true.",
+        schema(
+            json!({
+                "action": {"type": "string", "enum": ["export", "import", "reset", "seed"]},
+                "package": {"type": "string"},
+                "path": {"type": "string"},
+                "baseline": {"type": "string"},
+                "backup_current": {"type": "string"},
+                "file": {"type": "string"},
+                "remote": {"type": "string"},
+                "confirm": {"type": "boolean"},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+            }),
+            &["action", "package", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_ui_drag",
+        "Perform a press-move-release drag using coordinates or semantic endpoints.",
+        schema(
+            json!({
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "from_x": {"type": "integer"},
+                "from_y": {"type": "integer"},
+                "to_x": {"type": "integer"},
+                "to_y": {"type": "integer"},
+                "from_text": {"type": "string"},
+                "from_id": {"type": "string"},
+                "to_text": {"type": "string"},
+                "to_id": {"type": "string"},
+                "from": {"type": "string"},
+                "to": {"type": "string"},
+                "duration_ms": {"type": "integer", "minimum": 1},
+                "hold_before_ms": {"type": "integer", "minimum": 0},
+                "hold_after_ms": {"type": "integer", "minimum": 0},
+                "capture_mid": {"type": "string"},
+            }),
+            &["session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_ui_wait",
+        "Wait for a selector, for text to disappear, for an idle hierarchy, or for a stable hierarchy.",
+        merge_common_selector(
+            common_selector(&["session"]),
+            json!({
+                "not_exists": {"type": "boolean"},
+                "for_text_gone": {"type": "array", "items": {"type": "string"}},
+                "for_idle": {"type": "boolean"},
+                "for_stable": {"type": "boolean"},
+                "stable_for": {"type": "string"},
+                "timeout": {"type": "string"},
+            }),
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_ui_assert_no_text",
+        "Assert that matching visible text or content descriptions are absent.",
+        schema(
+            json!({
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "text": {"type": "string"},
+                "contains": {"type": "string"},
+                "timeout": {"type": "string"},
+            }),
+            &["session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_network_reverse",
+        "List, add, remove or clear adb reverse mappings for this session.",
+        schema(
+            json!({
+                "action": {"type": "string", "enum": ["add", "list", "remove", "clear"]},
+                "remote": {"type": "string"},
+                "local": {"type": "string"},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+            }),
+            &["action", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_network_mock_serve",
+        "Run a bounded local mock HTTP(S) server. Set max_requests or duration so the call returns.",
+        schema(
+            json!({
+                "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "bind": {"type": "string"},
+                "routes_file": {"type": "string"},
+                "route": {"type": "array", "items": {"type": "string"}},
+                "default_status": {"type": "integer"},
+                "default_body": {"type": "string"},
+                "delay_ms": {"type": "integer", "minimum": 0},
+                "tls_cert": {"type": "string"},
+                "tls_key": {"type": "string"},
+                "max_requests": {"type": "integer", "minimum": 0},
+                "duration": {"type": "string"},
+                "reverse": {"type": "boolean"},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+            }),
+            &["route", "max_requests", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_session_list",
+        "List sessions with classification, age and optional active/mine filters.",
+        schema(
+            json!({
+                "active": {"type": "boolean"},
+                "mine": {"type": "boolean"},
+                "owner": {"type": "string"},
+                "project": {"type": "string"},
+            }),
+            &[],
+        ),
+    ));
+    tools.push(tool(
         "androidforge_capture_screenshot",
         "Capture a PNG screenshot and return its artifact path, size and hash.",
         schema(
@@ -242,6 +399,11 @@ pub fn tool_definitions() -> Vec<Value> {
                 "project": {"type": "string"},
                 "label": {"type": "string"},
                 "output": {"type": "string"},
+                "compare": {"type": "string"},
+                "region": {"type": "string"},
+                "max_diff_ratio": {"type": "number"},
+                "diff_threshold": {"type": "integer", "minimum": 0, "maximum": 255},
+                "diff_output": {"type": "string"},
             }),
             &["session"],
         ),
@@ -767,6 +929,20 @@ fn arg_bool(arguments: &Value, key: &str) -> bool {
     arguments.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+fn arg_strings(arguments: &Value, key: &str) -> Vec<String> {
+    arguments
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn push_global(argv: &mut Vec<String>, arguments: &Value) {
     if let Some(project) = arg_str(arguments, "project") {
         argv.push("--project".to_string());
@@ -788,6 +964,7 @@ fn push_selector(argv: &mut Vec<String>, arguments: &Value) {
         ("contains", "--contains"),
         ("content_desc", "--content-desc"),
         ("resource_id", "--resource-id"),
+        ("test_tag", "--test-tag"),
         ("class", "--class"),
         ("role", "--role"),
         ("text_regex", "--text-regex"),
@@ -961,11 +1138,25 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                 "--json".to_string(),
             ]);
             push_global(&mut argv, arguments);
-            for (key, flag) in [("label", "--label"), ("output", "--output")] {
+            for (key, flag) in [
+                ("label", "--label"),
+                ("output", "--output"),
+                ("compare", "--compare"),
+                ("region", "--region"),
+                ("diff_output", "--diff-output"),
+            ] {
                 if let Some(value) = arg_str(arguments, key) {
                     argv.push(flag.to_string());
                     argv.push(value);
                 }
+            }
+            if let Some(value) = arguments.get("max_diff_ratio").and_then(Value::as_f64) {
+                argv.push("--max-diff-ratio".to_string());
+                argv.push(value.to_string());
+            }
+            if let Some(value) = arguments.get("diff_threshold").and_then(Value::as_u64) {
+                argv.push("--diff-threshold".to_string());
+                argv.push(value.to_string());
             }
         }
         "androidforge_app_install" => {
@@ -990,6 +1181,259 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             }
             if arg_bool(arguments, "allow_downgrade") {
                 argv.push("--downgrade".to_string());
+            }
+        }
+        "androidforge_app_verify_installed" => {
+            let apk = arg_str(arguments, "apk")
+                .ok_or_else(|| "androidforge_app_verify_installed requires apk".to_string())?;
+            argv.extend([
+                "app".to_string(),
+                "verify-installed".to_string(),
+                "--apk".to_string(),
+                apk,
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            for split in arg_strings(arguments, "split") {
+                argv.push("--split".to_string());
+                argv.push(split);
+            }
+        }
+        "androidforge_app_status" => {
+            let package = arg_str(arguments, "package")
+                .ok_or_else(|| "androidforge_app_status requires package".to_string())?;
+            argv.extend([
+                "app".to_string(),
+                "status".to_string(),
+                package,
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            for (key, flag) in [
+                ("expect_version_name", "--expect-version-name"),
+                ("expect_version_code", "--expect-version-code"),
+                ("expect_apk_sha256", "--expect-apk-sha256"),
+                ("stable_for", "--stable-for"),
+                ("timeout", "--timeout"),
+            ] {
+                if let Some(value) = arguments.get(key) {
+                    let value = value
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| value.as_i64().map(|number| number.to_string()));
+                    if let Some(value) = value {
+                        argv.push(flag.to_string());
+                        argv.push(value);
+                    }
+                }
+            }
+            for (key, flag) in [
+                ("assert_task_exists", "--assert-task-exists"),
+                ("assert_task_absent", "--assert-task-absent"),
+                ("assert_process_stable", "--assert-process-stable"),
+            ] {
+                if arg_bool(arguments, key) {
+                    argv.push(flag.to_string());
+                }
+            }
+        }
+        "androidforge_app_data" => {
+            let action = arg_str(arguments, "action")
+                .ok_or_else(|| "androidforge_app_data requires action".to_string())?;
+            let package = arg_str(arguments, "package")
+                .ok_or_else(|| "androidforge_app_data requires package".to_string())?;
+            argv.extend([
+                "app".to_string(),
+                "data".to_string(),
+                action.clone(),
+                package,
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            match action.as_str() {
+                "export" | "import" => {
+                    if let Some(path) = arg_str(arguments, "path") {
+                        argv.push(path);
+                    }
+                }
+                "reset" => {
+                    if let Some(baseline) = arg_str(arguments, "baseline") {
+                        argv.push("--baseline".to_string());
+                        argv.push(baseline);
+                    }
+                    if let Some(backup) = arg_str(arguments, "backup_current") {
+                        argv.push("--backup-current".to_string());
+                        argv.push(backup);
+                    }
+                }
+                "seed" => {
+                    let file = arg_str(arguments, "file")
+                        .ok_or_else(|| "seed requires file".to_string())?;
+                    let remote = arg_str(arguments, "remote")
+                        .ok_or_else(|| "seed requires remote".to_string())?;
+                    argv.extend(["--file".to_string(), file, "--remote".to_string(), remote]);
+                }
+                other => return Err(format!("unsupported app data action '{other}'")),
+            }
+            if action != "export" {
+                if !arg_bool(arguments, "confirm") {
+                    return Err(format!("app data {action} requires confirm=true"));
+                }
+                argv.push("--yes".to_string());
+            }
+        }
+        "androidforge_ui_drag" => {
+            argv.extend(["ui".to_string(), "drag".to_string(), "--json".to_string()]);
+            push_global(&mut argv, arguments);
+            for (key, flag) in [
+                ("from_x", "--from-x"),
+                ("from_y", "--from-y"),
+                ("to_x", "--to-x"),
+                ("to_y", "--to-y"),
+                ("from_text", "--from-text"),
+                ("to_text", "--to-text"),
+                ("from_id", "--from-id"),
+                ("to_id", "--to-id"),
+                ("from", "--from"),
+                ("to", "--to"),
+                ("duration_ms", "--duration"),
+                ("hold_before_ms", "--hold-before"),
+                ("hold_after_ms", "--hold-after"),
+                ("capture_mid", "--capture-mid"),
+            ] {
+                if let Some(value) = arguments.get(key) {
+                    let value = value
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| value.as_i64().map(|number| number.to_string()));
+                    if let Some(value) = value {
+                        argv.push(flag.to_string());
+                        argv.push(value);
+                    }
+                }
+            }
+        }
+        "androidforge_ui_wait" => {
+            argv.extend(["ui".to_string(), "wait".to_string(), "--json".to_string()]);
+            push_global(&mut argv, arguments);
+            push_selector(&mut argv, arguments);
+            if arg_bool(arguments, "not_exists") {
+                argv.push("--not-exists".to_string());
+            }
+            for text in arg_strings(arguments, "for_text_gone") {
+                argv.push("--for-text-gone".to_string());
+                argv.push(text);
+            }
+            if arg_bool(arguments, "for_idle") {
+                argv.push("--for-idle".to_string());
+            }
+            if arg_bool(arguments, "for_stable") {
+                argv.push("--for-stable".to_string());
+            }
+            for (key, flag) in [("stable_for", "--stable-for"), ("timeout", "--timeout")] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+        }
+        "androidforge_ui_assert_no_text" => {
+            argv.extend([
+                "ui".to_string(),
+                "assert-no-text".to_string(),
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            for (key, flag) in [
+                ("text", "--text"),
+                ("contains", "--contains"),
+                ("timeout", "--timeout"),
+            ] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+        }
+        "androidforge_network_reverse" => {
+            let action = arg_str(arguments, "action")
+                .ok_or_else(|| "androidforge_network_reverse requires action".to_string())?;
+            argv.extend([
+                "network".to_string(),
+                "reverse".to_string(),
+                action.clone(),
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            if action == "add" {
+                let remote = arg_str(arguments, "remote")
+                    .ok_or_else(|| "network reverse add requires remote".to_string())?;
+                argv.push(remote);
+                if let Some(local) = arg_str(arguments, "local") {
+                    argv.push("--local".to_string());
+                    argv.push(local);
+                }
+            } else if action == "remove" {
+                let remote = arg_str(arguments, "remote")
+                    .ok_or_else(|| "network reverse remove requires remote".to_string())?;
+                argv.push(remote);
+            }
+        }
+        "androidforge_network_mock_serve" => {
+            argv.extend([
+                "network".to_string(),
+                "mock".to_string(),
+                "serve".to_string(),
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            for (key, flag) in [
+                ("bind", "--bind"),
+                ("routes_file", "--routes"),
+                ("default_body", "--default-body"),
+                ("tls_cert", "--tls-cert"),
+                ("tls_key", "--tls-key"),
+                ("duration", "--duration"),
+            ] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+            for (key, flag) in [
+                ("port", "--port"),
+                ("default_status", "--default-status"),
+                ("delay_ms", "--delay-ms"),
+                ("max_requests", "--max-requests"),
+            ] {
+                if let Some(value) = arguments.get(key).and_then(Value::as_u64) {
+                    argv.push(flag.to_string());
+                    argv.push(value.to_string());
+                }
+            }
+            for route in arg_strings(arguments, "route") {
+                argv.push("--route".to_string());
+                argv.push(route);
+            }
+            if arg_bool(arguments, "reverse") {
+                argv.push("--reverse".to_string());
+            }
+        }
+        "androidforge_session_list" => {
+            argv.extend([
+                "session".to_string(),
+                "list".to_string(),
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            for (key, flag) in [("active", "--active"), ("mine", "--mine")] {
+                if arg_bool(arguments, key) {
+                    argv.push(flag.to_string());
+                }
+            }
+            if let Some(owner) = arg_str(arguments, "owner") {
+                argv.push("--owner".to_string());
+                argv.push(owner);
             }
         }
         "androidforge_app_uninstall" => {

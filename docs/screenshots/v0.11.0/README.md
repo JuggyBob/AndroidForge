@@ -4,6 +4,9 @@ These are real captures of the compiled v0.11.0 native desktop cockpit. They wer
 Windows release build against an isolated AndroidForge home with the IronPulse project selected and
 16 real screenshot files in total. No mockups or browser-rendered UI are included.
 
+> The v0.12.0 release does not change the desktop UI, so this gallery remains representative. The
+> v0.12.0 work is CLI/verification-focused; see `docs/release-notes/v0.12.0.md`.
+
 The gallery covers the full page set, the new Setup final page, recursive Inspector cards and light
 mode.
 

@@ -467,6 +467,12 @@ pub enum SessionCommand {
         /// Hide released/failed/abandoned tombstones.
         #[arg(long)]
         active: bool,
+        /// Only sessions owned by the current ANDROIDFORGE_OWNER/OS user.
+        #[arg(long)]
+        mine: bool,
+        /// Only sessions with this owner label (implies --mine semantics).
+        #[arg(long)]
+        owner: Option<String>,
     },
     Inspect,
     Status,
@@ -754,6 +760,57 @@ pub enum AppCommand {
     FilePull(AppFilePullArgs),
     DataBackup(AppDataArgs),
     DataRestore(AppDataArgs),
+    /// Verify the live installed APK against a local APK without installing.
+    VerifyInstalled(AppVerifyInstalledArgs),
+    /// Export, import, reset or seed application-private data.
+    Data {
+        #[command(subcommand)]
+        command: AppDataCommand,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct AppVerifyInstalledArgs {
+    /// Local APK to compare with the live installed base APK.
+    #[arg(long)]
+    pub apk: PathBuf,
+    /// Additional split APKs belonging to the same candidate set.
+    #[arg(long = "split")]
+    pub split: Vec<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct AppDataResetArgs {
+    pub package: String,
+    /// Data archive to restore after clearing (created by `app data export`).
+    #[arg(long)]
+    pub baseline: Option<PathBuf>,
+    /// Save the current data to this archive before clearing.
+    #[arg(long = "backup-current")]
+    pub backup_current: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct AppDataSeedArgs {
+    pub package: String,
+    /// Local file to write into app-private storage.
+    #[arg(long)]
+    pub file: PathBuf,
+    /// Path relative to the app-private data directory.
+    #[arg(long)]
+    pub remote: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AppDataCommand {
+    /// Export app-private data through run-as (debuggable apps).
+    Export(AppDataArgs),
+    /// Import app-private data through run-as (debuggable apps).
+    Import(AppDataArgs),
+    /// Clear app data and optionally restore a baseline archive.
+    Reset(AppDataResetArgs),
+    /// Write a local file into app-private storage.
+    Seed(AppDataSeedArgs),
 }
 
 #[derive(Debug, Args)]
@@ -875,6 +932,15 @@ pub struct AppStatusArgs {
     pub package: String,
     #[arg(long)]
     pub expect: Option<String>,
+    /// Live installed versionName must equal this value.
+    #[arg(long = "expect-version-name")]
+    pub expect_version_name: Option<String>,
+    /// Live installed versionCode must equal this value.
+    #[arg(long = "expect-version-code")]
+    pub expect_version_code: Option<i64>,
+    /// Live installed base APK SHA-256 must equal this value.
+    #[arg(long = "expect-apk-sha256")]
+    pub expect_apk_sha256: Option<String>,
     #[arg(long)]
     pub assert_task_exists: bool,
     #[arg(long)]
@@ -915,7 +981,7 @@ pub struct AppFilePullArgs {
     pub external: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct AppDataArgs {
     pub package: String,
     pub path: PathBuf,
@@ -981,6 +1047,9 @@ pub struct SelectorArgs {
     pub content_desc_contains: Option<String>,
     #[arg(long = "resource-id", alias = "id")]
     pub resource_id: Option<String>,
+    /// Compose testTag for debug builds that expose testTagsAsResourceId.
+    #[arg(long = "test-tag", alias = "tag")]
+    pub test_tag: Option<String>,
     #[arg(long = "class")]
     pub class: Option<String>,
     #[arg(long)]
@@ -1034,11 +1103,15 @@ pub enum UiCommand {
     #[command(alias = "t")]
     Tap(UiTapArgs),
     LongPress(UiTapArgs),
+    /// Perform a press-move-release drag with optional holds and mid-gesture capture.
+    Drag(UiDragArgs),
     Text(UiTextArgs),
     Clear(UiSelectorArgs),
     #[command(alias = "w")]
     Wait(UiWaitArgs),
     Assert(UiWaitArgs),
+    /// Assert that text is not present.
+    AssertNoText(UiAssertNoTextArgs),
     /// Dismiss known SystemUI immersive/permission overlays with a safe allowlist.
     DismissOverlays(UiDismissOverlaysArgs),
     Settle(UiSettleArgs),
@@ -1111,6 +1184,18 @@ pub struct UiTapArgs {
     pub x: Option<i32>,
     #[arg(long)]
     pub y: Option<i32>,
+    /// Hold duration for `ui long-press` (default 900ms).
+    #[arg(long)]
+    pub duration: Option<u64>,
+    /// Capture a screenshot during a long-press.
+    #[arg(long = "capture-mid")]
+    pub capture_mid: Option<PathBuf>,
+    /// Capture a screenshot immediately before dispatching the tap.
+    #[arg(long = "capture-before")]
+    pub capture_before: Option<PathBuf>,
+    /// Capture a screenshot after the tap and postconditions complete.
+    #[arg(long = "capture-after")]
+    pub capture_after: Option<PathBuf>,
     /// Return a compact action receipt with before/after observations and an effect classification.
     #[arg(long)]
     pub receipt: bool,
@@ -1119,6 +1204,53 @@ pub struct UiTapArgs {
     pub receipt_full: bool,
     #[command(flatten)]
     pub postcondition: PostconditionArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct UiDragArgs {
+    #[arg(long = "from-x")]
+    pub from_x: Option<i32>,
+    #[arg(long = "from-y")]
+    pub from_y: Option<i32>,
+    #[arg(long = "to-x")]
+    pub to_x: Option<i32>,
+    #[arg(long = "to-y")]
+    pub to_y: Option<i32>,
+    #[arg(long = "from-text")]
+    pub from_text: Option<String>,
+    #[arg(long = "to-text")]
+    pub to_text: Option<String>,
+    #[arg(long = "from-id")]
+    pub from_id: Option<String>,
+    #[arg(long = "to-id")]
+    pub to_id: Option<String>,
+    /// Start selector expression, for example "text=Save" or "id=fab".
+    #[arg(long)]
+    pub from: Option<String>,
+    /// End selector expression, for example "text=Trash" or "tag=card".
+    #[arg(long)]
+    pub to: Option<String>,
+    /// Total movement time in milliseconds.
+    #[arg(long = "duration", default_value_t = 800)]
+    pub duration_ms: u64,
+    #[arg(long = "hold-before", default_value_t = 0)]
+    pub hold_before_ms: u64,
+    #[arg(long = "hold-after", default_value_t = 0)]
+    pub hold_after_ms: u64,
+    #[arg(long = "capture-mid")]
+    pub capture_mid: Option<PathBuf>,
+    #[command(flatten)]
+    pub postcondition: PostconditionArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct UiAssertNoTextArgs {
+    #[arg(long = "text", value_name = "TEXT")]
+    pub text: Option<String>,
+    #[arg(long = "contains", value_name = "TEXT")]
+    pub contains: Option<String>,
+    #[arg(long)]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1177,6 +1309,18 @@ pub struct UiWaitArgs {
     pub selector: SelectorArgs,
     #[arg(long)]
     pub not_exists: bool,
+    /// Wait until each specified text is absent. Does not require a selector.
+    #[arg(long = "for-text-gone", value_name = "TEXT")]
+    pub for_text_gone: Vec<String>,
+    /// Wait until the hierarchy has stopped changing for one polling interval.
+    #[arg(long = "for-idle")]
+    pub for_idle: bool,
+    /// Wait until the hierarchy stays unchanged for --stable-for.
+    #[arg(long = "for-stable")]
+    pub for_stable: bool,
+    /// Stability window for --for-stable (default 2s).
+    #[arg(long = "stable-for")]
+    pub stable_for: Option<String>,
     #[arg(long)]
     pub timeout: Option<String>,
 }
@@ -1262,6 +1406,21 @@ pub struct CaptureScreenshotArgs {
     pub output: Option<PathBuf>,
     #[arg(long)]
     pub timeout: Option<String>,
+    /// Baseline PNG to compare the fresh screenshot against.
+    #[arg(long)]
+    pub compare: Option<PathBuf>,
+    /// Device-pixel region x1,y1,x2,y2 for comparison.
+    #[arg(long)]
+    pub region: Option<String>,
+    /// Maximum changed-pixel ratio that still passes (0.0 = exact match).
+    #[arg(long = "max-diff-ratio", default_value_t = 0.0)]
+    pub max_diff_ratio: f64,
+    /// Per-channel tolerance treated as unchanged (0-255).
+    #[arg(long = "diff-threshold", default_value_t = 0)]
+    pub diff_threshold: u8,
+    /// Optional path for a diff visualization PNG.
+    #[arg(long = "diff-output")]
+    pub diff_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -1600,6 +1759,7 @@ pub enum BatteryCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum NetworkCommand {
     Status,
     Airplane {
@@ -1632,6 +1792,82 @@ pub enum NetworkCommand {
     },
     /// Restore network/proxy state recorded in the current session.
     Restore,
+    /// Manage `adb reverse` port mappings for this session.
+    Reverse {
+        #[command(subcommand)]
+        command: NetworkReverseCommand,
+    },
+    /// Run a bounded local mock HTTP(S) server and optionally reverse it to the device.
+    Mock {
+        #[command(subcommand)]
+        command: NetworkMockCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NetworkReverseCommand {
+    Add(NetworkReverseAddArgs),
+    List,
+    Remove { remote: String },
+    Clear,
+}
+
+#[derive(Debug, Args)]
+pub struct NetworkReverseAddArgs {
+    /// Remote (device) port mapping, for example tcp:8080.
+    pub remote: String,
+    /// Local host port mapping; defaults to the same tcp:PORT.
+    #[arg(long)]
+    pub local: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NetworkMockCommand {
+    Serve(NetworkMockServeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct NetworkMockServeArgs {
+    /// Local port to listen on.
+    #[arg(long, default_value_t = 8080)]
+    pub port: u16,
+    /// Bind address. Defaults to loopback so the mock is not exposed to the LAN.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub bind: String,
+    /// JSON routes file: {"routes":[{"method":"GET","path":"/health","status":200,"body":"ok"}]}.
+    #[arg(long)]
+    pub routes: Option<PathBuf>,
+    /// Inline route: METHOD PATH=STATUS[:BODY]. May be repeated.
+    #[arg(long = "route")]
+    pub route: Vec<String>,
+    #[arg(long = "default-status", default_value_t = 404)]
+    pub default_status: u16,
+    #[arg(long = "default-body")]
+    pub default_body: Option<String>,
+    /// Artificial response delay in milliseconds.
+    #[arg(long = "delay-ms", default_value_t = 0)]
+    pub delay_ms: u64,
+    /// PEM certificate chain for local TLS. Requires --tls-key.
+    #[arg(long = "tls-cert")]
+    pub tls_cert: Option<PathBuf>,
+    /// PEM private key for local TLS.
+    #[arg(long = "tls-key")]
+    pub tls_key: Option<PathBuf>,
+    /// NDJSON request log path. Defaults to a run artifact.
+    #[arg(long)]
+    pub log: Option<PathBuf>,
+    /// Stop after N requests; 0 runs until interrupted.
+    #[arg(long = "max-requests", default_value_t = 0)]
+    pub max_requests: u64,
+    /// Stop after a duration such as 30s or 5m.
+    #[arg(long)]
+    pub duration: Option<String>,
+    /// Add `adb reverse tcp:PORT tcp:PORT` before serving and remove it on exit.
+    #[arg(long)]
+    pub reverse: bool,
+    /// Maximum request body bytes retained in the log.
+    #[arg(long = "max-body-bytes", default_value_t = 65536)]
+    pub max_body_bytes: usize,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1994,7 +2230,7 @@ impl SelectorArgs {
             text_contains: self.contains,
             content_desc: self.content_desc,
             content_desc_contains: self.content_desc_contains,
-            resource_id: self.resource_id,
+            resource_id: self.resource_id.or(self.test_tag),
             class: self.class,
             index: self.index,
             clickable: self.clickable.then_some(true),
@@ -2020,6 +2256,7 @@ impl SelectorArgs {
             || self.content_desc.is_some()
             || self.content_desc_contains.is_some()
             || self.resource_id.is_some()
+            || self.test_tag.is_some()
             || self.class.is_some()
             || self.clickable
             || self.enabled

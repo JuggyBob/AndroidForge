@@ -2,15 +2,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use androidforge_app::{
-    AppFiles, AppStateExpectation, AppStates, InstallOptions, IntentExtra, IntentOutput, IntentSpec,
+    AppFiles, AppStateExpectation, AppStates, InstallOptions, IntentExtra, IntentOutput,
+    IntentSpec, inspect_installed,
 };
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::session::Session;
 
 use crate::cli::{
-    ApkVerifyArgs, AppBroadcastArgs, AppCommand, AppInstallArgs, AppLaunchArgs, AppListArgs,
-    AppPackageArgs, AppServiceArgs, AppStatusArgs, AppUninstallArgs,
+    ApkVerifyArgs, AppBroadcastArgs, AppCommand, AppDataArgs, AppDataCommand, AppDataResetArgs,
+    AppDataSeedArgs, AppInstallArgs, AppLaunchArgs, AppListArgs, AppPackageArgs, AppServiceArgs,
+    AppStatusArgs, AppUninstallArgs, AppVerifyInstalledArgs,
 };
 use crate::commands::common::success;
 use crate::context::CliContext;
@@ -165,130 +167,357 @@ pub async fn app(ctx: &CliContext, command: &AppCommand) -> Result<CommandSucces
             )
             .await
         }
-        AppCommand::DataBackup(args) => {
-            let session = ctx.load_session(true)?;
-            let device = ctx.resolve_device(session.as_ref()).await?;
-            if ctx.dry_run {
-                return Ok(plan(
-                    "app.data-backup",
-                    &device.serial,
-                    session.as_ref(),
-                    format!(
-                        "Would back up {} data to {}\n",
-                        args.package,
-                        args.path.display()
-                    ),
-                ));
-            }
-            let package = args.package.clone();
-            let path = local_path(ctx, &args.path);
-            execute_in_run!(
-                ctx,
-                "app.data-backup",
-                Some("app data backup"),
-                session.as_ref(),
-                Some(&device),
-                true,
-                |run| async {
-                    let files = AppFiles::new(ctx.adb()?);
-                    let transfer = files.backup_data(&device.serial, &package, &path).await?;
-                    let artifact = run.write_text_artifact(
-                        "logs/app-data-backup.json",
-                        "app_data_backup",
-                        Some("App data backup metadata"),
-                        &serde_json::to_string_pretty(&transfer).unwrap_or_default(),
-                    )?;
-                    Ok(success(
-                        "app.data-backup",
-                        serde_json::to_value(&transfer)?,
-                        format!(
-                            "Backed up {} data to {} ({})\n",
-                            package,
-                            path.display(),
-                            transfer.size_bytes
-                        ),
-                    )
-                    .with_artifacts(vec![artifact])
-                    .with_optional_session(session_id(session.as_ref()))
-                    .with_device(device.serial.clone()))
-                },
-            )
-            .await
-        }
-        AppCommand::DataRestore(args) => {
-            let session = ctx.load_session(true)?;
-            let device = ctx.resolve_device(session.as_ref()).await?;
-            if ctx.dry_run {
-                let mut result = serde_json::json!({
-                    "dry_run": true,
-                    "serial": device.serial,
-                    "package": args.package,
-                    "path": args.path,
-                    "requires_confirmation": true,
-                });
-                if device.kind == androidforge_core::model::DeviceKind::Physical {
-                    result["requires_physical_mutation"] = serde_json::json!(true);
-                }
-                return Ok(success(
-                    "app.data-restore",
-                    result,
-                    format!(
-                        "Would restore {} data from {}; requires --yes{}\n",
-                        args.package,
-                        args.path.display(),
-                        if device.kind == androidforge_core::model::DeviceKind::Physical
-                            && !ctx.allow_physical_mutation
-                        {
-                            " and --allow-physical-mutation"
-                        } else {
-                            ""
-                        }
-                    ),
-                )
-                .with_optional_session(session_id(session.as_ref()))
-                .with_device(device.serial.clone()));
-            }
-            if !ctx.yes {
-                return Err(ForgeError::new(
-                    ErrorCode::InvalidArgument,
-                    "restoring app data overwrites app-private files; pass --yes",
-                )
-                .with_suggestion("Back up the current data first where the app is debuggable."));
-            }
-            ctx.ensure_physical_mutation_allowed(&device, "restoring app data")?;
-            let package = args.package.clone();
-            let path = local_path(ctx, &args.path);
-            execute_in_run!(
-                ctx,
-                "app.data-restore",
-                Some("app data restore"),
-                session.as_ref(),
-                Some(&device),
-                true,
-                |run| async {
-                    let files = AppFiles::new(ctx.adb()?);
-                    let transfer = files.restore_data(&device.serial, &package, &path).await?;
-                    let artifact = run.write_text_artifact(
-                        "logs/app-data-restore.json",
-                        "app_data_restore",
-                        Some("App data restore metadata"),
-                        &serde_json::to_string_pretty(&transfer).unwrap_or_default(),
-                    )?;
-                    Ok(success(
-                        "app.data-restore",
-                        serde_json::to_value(&transfer)?,
-                        format!("Restored {} data from {}\n", package, path.display()),
-                    )
-                    .with_artifacts(vec![artifact])
-                    .with_optional_session(session_id(session.as_ref()))
-                    .with_device(device.serial.clone()))
-                },
-            )
-            .await
-        }
+        AppCommand::DataBackup(args) => app_data_export(ctx, args, "app.data-backup").await,
+        AppCommand::DataRestore(args) => app_data_import(ctx, args, "app.data-restore").await,
+        AppCommand::VerifyInstalled(args) => verify_installed(ctx, args).await,
+        AppCommand::Data { command } => match command {
+            AppDataCommand::Export(args) => app_data_export(ctx, args, "app.data-export").await,
+            AppDataCommand::Import(args) => app_data_import(ctx, args, "app.data-import").await,
+            AppDataCommand::Reset(args) => app_data_reset(ctx, args).await,
+            AppDataCommand::Seed(args) => app_data_seed(ctx, args).await,
+        },
     }
 }
 
+async fn app_data_export(
+    ctx: &CliContext,
+    args: &AppDataArgs,
+    command: &'static str,
+) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    if ctx.dry_run {
+        return Ok(plan(
+            command,
+            &device.serial,
+            session.as_ref(),
+            format!(
+                "Would export {} data to {}\n",
+                args.package,
+                args.path.display()
+            ),
+        ));
+    }
+    let package = args.package.clone();
+    let path = local_path(ctx, &args.path);
+    execute_in_run!(
+        ctx,
+        command,
+        Some("app data export"),
+        session.as_ref(),
+        Some(&device),
+        true,
+        |run| async {
+            let files = AppFiles::new(ctx.adb()?);
+            let transfer = files.backup_data(&device.serial, &package, &path).await?;
+            let artifact = run.write_text_artifact(
+                "logs/app-data-export.json",
+                "app_data_export",
+                Some("App data export metadata"),
+                &serde_json::to_string_pretty(&transfer).unwrap_or_default(),
+            )?;
+            Ok(success(
+                command,
+                serde_json::to_value(&transfer)?,
+                format!(
+                    "Exported {} data to {} ({})\n",
+                    package,
+                    path.display(),
+                    transfer.size_bytes
+                ),
+            )
+            .with_artifacts(vec![artifact])
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
+}
+
+async fn app_data_import(
+    ctx: &CliContext,
+    args: &AppDataArgs,
+    command: &'static str,
+) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    if ctx.dry_run {
+        let mut result = serde_json::json!({
+            "dry_run": true,
+            "serial": device.serial,
+            "package": args.package,
+            "path": args.path,
+            "requires_confirmation": true,
+        });
+        if device.kind == androidforge_core::model::DeviceKind::Physical {
+            result["requires_physical_mutation"] = serde_json::json!(true);
+        }
+        return Ok(success(
+            command,
+            result,
+            format!(
+                "Would import {} data from {}; requires --yes{}\n",
+                args.package,
+                args.path.display(),
+                if device.kind == androidforge_core::model::DeviceKind::Physical
+                    && !ctx.allow_physical_mutation
+                {
+                    " and --allow-physical-mutation"
+                } else {
+                    ""
+                }
+            ),
+        )
+        .with_optional_session(session_id(session.as_ref()))
+        .with_device(device.serial.clone()));
+    }
+    if !ctx.yes {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            "importing app data overwrites app-private files; pass --yes",
+        )
+        .with_suggestion("Back up the current data first where the app is debuggable."));
+    }
+    ctx.ensure_physical_mutation_allowed(&device, "importing app data")?;
+    let package = args.package.clone();
+    let path = local_path(ctx, &args.path);
+    execute_in_run!(
+        ctx,
+        command,
+        Some("app data import"),
+        session.as_ref(),
+        Some(&device),
+        true,
+        |run| async {
+            let files = AppFiles::new(ctx.adb()?);
+            let backup_path = run.dir.join("data").join("pre-import-backup.tar");
+            if let Some(parent) = backup_path.parent() {
+                androidforge_core::util::ensure_dir(parent)?;
+            }
+            let backup = files
+                .backup_data(&device.serial, &package, &backup_path)
+                .await?;
+            let backup_artifact = run.register_artifact(
+                &backup_path,
+                "app_data_pre_import",
+                Some("App-private data captured before the import"),
+            )?;
+            let transfer = files.restore_data(&device.serial, &package, &path).await?;
+            let artifact = run.write_text_artifact(
+                "logs/app-data-import.json",
+                "app_data_import",
+                Some("App data import metadata"),
+                &serde_json::to_string_pretty(&transfer).unwrap_or_default(),
+            )?;
+            Ok(success(
+                command,
+                serde_json::json!({"transfer": transfer, "backup": backup}),
+                format!("Imported {} data from {}\n", package, path.display()),
+            )
+            .with_artifacts(vec![backup_artifact, artifact])
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
+}
+
+async fn app_data_reset(ctx: &CliContext, args: &AppDataResetArgs) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let backup_path = args
+        .backup_current
+        .as_ref()
+        .map(|path| local_path(ctx, path));
+    let baseline_path = args.baseline.as_ref().map(|path| local_path(ctx, path));
+    if ctx.dry_run {
+        return Ok(plan(
+            "app.data-reset",
+            &device.serial,
+            session.as_ref(),
+            format!(
+                "Would clear {} data{}{}\n",
+                args.package,
+                backup_path
+                    .as_ref()
+                    .map(|path| format!(", save the current data to {}", path.display()))
+                    .unwrap_or_default(),
+                baseline_path
+                    .as_ref()
+                    .map(|path| format!(", then restore baseline {}", path.display()))
+                    .unwrap_or_default()
+            ),
+        ));
+    }
+    if !ctx.yes {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            "resetting app data is destructive; pass --yes",
+        )
+        .with_suggestion("Use --backup-current <path> to preserve the current data first."));
+    }
+    ctx.ensure_physical_mutation_allowed(&device, "resetting app data")?;
+    let package = args.package.clone();
+    execute_in_run!(
+        ctx,
+        "app.data-reset",
+        Some("app data reset"),
+        session.as_ref(),
+        Some(&device),
+        true,
+        |_run| async {
+            let files = AppFiles::new(ctx.adb()?);
+            let mut backup = None;
+            if let Some(path) = &backup_path {
+                backup = Some(files.backup_data(&device.serial, &package, path).await?);
+            }
+            let app = ctx.app_manager()?;
+            let clear_output = app.clear_data(&device.serial, &package).await?;
+            let restore = if let Some(path) = &baseline_path {
+                Some(files.restore_data(&device.serial, &package, path).await?)
+            } else {
+                None
+            };
+            let mut result = serde_json::json!({
+                "package": package,
+                "clear_output": clear_output,
+            });
+            if let Some(backup) = backup {
+                result["backup"] = serde_json::to_value(backup)?;
+            }
+            if let Some(restore) = restore {
+                result["restored"] = serde_json::to_value(restore)?;
+            }
+            Ok(success(
+                "app.data-reset",
+                result,
+                format!("Reset data for {package}\n"),
+            )
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
+}
+
+async fn app_data_seed(ctx: &CliContext, args: &AppDataSeedArgs) -> Result<CommandSuccess> {
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let local = local_path(ctx, &args.file);
+    if ctx.dry_run {
+        return Ok(plan(
+            "app.data-seed",
+            &device.serial,
+            session.as_ref(),
+            format!(
+                "Would seed {} with {} at {}\n",
+                args.package,
+                local.display(),
+                args.remote
+            ),
+        ));
+    }
+    if !ctx.yes {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            "seeding app-private files changes application state; pass --yes",
+        )
+        .with_suggestion("Use --dry-run to inspect the target path first."));
+    }
+    ctx.ensure_physical_mutation_allowed(&device, "seeding app data")?;
+    let package = args.package.clone();
+    let remote = args.remote.clone();
+    execute_in_run!(
+        ctx,
+        "app.data-seed",
+        Some("app data seed"),
+        session.as_ref(),
+        Some(&device),
+        true,
+        |run| async {
+            let files = AppFiles::new(ctx.adb()?);
+            let transfer = files
+                .push(&device.serial, &package, &local, &remote, false)
+                .await?;
+            let artifact = run.write_text_artifact(
+                "logs/app-data-seed.json",
+                "app_data_seed",
+                Some("App data seed metadata"),
+                &serde_json::to_string_pretty(&transfer).unwrap_or_default(),
+            )?;
+            Ok(success(
+                "app.data-seed",
+                serde_json::to_value(&transfer)?,
+                format!(
+                    "Seeded {} with {} ({})\n",
+                    package, remote, transfer.size_bytes
+                ),
+            )
+            .with_artifacts(vec![artifact])
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(device.serial.clone()))
+        },
+    )
+    .await
+}
+
+async fn verify_installed(
+    ctx: &CliContext,
+    args: &AppVerifyInstalledArgs,
+) -> Result<CommandSuccess> {
+    use androidforge_app::compare;
+    let session = ctx.load_session(true)?;
+    let device = ctx.resolve_device(session.as_ref()).await?;
+    let source = local_path(ctx, &args.apk);
+    let artifact =
+        crate::commands::apk::load_artifact_with_splits(ctx, &source, &args.split).await?;
+    let package = artifact.base.package_or_error()?.to_string();
+    let live = inspect_installed(&ctx.adb()?, &ctx.inspector(), &device.serial, &package).await?;
+    let Some(live) = live else {
+        return Err(ForgeError::new(
+            ErrorCode::PackageNotFound,
+            format!("package {package} is not installed on {}", device.serial),
+        )
+        .with_suggestion("Install the application or verify the package id.")
+        .device(device.serial));
+    };
+    let diff = compare(&artifact.base, &artifact.splits, &live);
+    let verified = diff.safe_to_skip_install;
+    let result = serde_json::json!({
+        "package": package,
+        "verified": verified,
+        "local": artifact.summary(),
+        "installed": live,
+        "diff": diff,
+    });
+    if !verified {
+        return Err(ForgeError::new(
+            ErrorCode::InstallVerificationFailed,
+            format!(
+                "installed {package} does not match the local APK: {}",
+                diff.summary
+            ),
+        )
+        .with_context("verification", result)
+        .with_suggestion(
+            "Install the local APK with `androidforge app install <apk>` if that is intended.",
+        )
+        .with_suggestion(
+            "Use `androidforge app status --expect-apk-sha256 <sha>` for a compact assertion.",
+        )
+        .device(device.serial));
+    }
+    Ok(success(
+        "app.verify-installed",
+        result,
+        format!(
+            "Installed {package} matches the local APK ({})\n",
+            artifact.base.sha256
+        ),
+    )
+    .with_optional_session(session_id(session.as_ref()))
+    .with_device(device.serial))
+}
 pub(crate) async fn install(ctx: &CliContext, args: &AppInstallArgs) -> Result<CommandSuccess> {
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
@@ -971,7 +1200,13 @@ async fn status(ctx: &CliContext, args: &AppStatusArgs) -> Result<CommandSuccess
     let assertions = args.assert_task_exists
         || args.assert_task_absent
         || args.assert_process_stable
-        || expectation.is_some();
+        || expectation.is_some()
+        || args.expect_version_name.is_some()
+        || args.expect_version_code.is_some()
+        || args.expect_apk_sha256.is_some();
+    let live_expectations = args.expect_version_name.is_some()
+        || args.expect_version_code.is_some()
+        || args.expect_apk_sha256.is_some();
     if !assertions {
         let app = ctx.app_manager()?;
         let states = app.status(&device.serial, &package).await?;
@@ -1018,9 +1253,93 @@ async fn status(ctx: &CliContext, args: &AppStatusArgs) -> Result<CommandSuccess
                     .assert_process_stable(&device.serial, &package, stable_for)
                     .await?;
             }
+            let mut install_expectations = Vec::new();
+            let mut live_install = None;
+            if live_expectations {
+                let live = inspect_installed(
+                    &ctx.adb()?,
+                    &ctx.inspector(),
+                    &device.serial,
+                    &package,
+                )
+                .await?;
+                let Some(live) = live else {
+                    return Err(ForgeError::new(
+                        ErrorCode::PackageNotFound,
+                        format!("package {package} is not installed on {}", device.serial),
+                    )
+                    .with_suggestion("Install the application before asserting installed build identity.")
+                    .device(device.serial.clone()));
+                };
+                let mut failures = Vec::new();
+                if let Some(expected) = &args.expect_version_name {
+                    let actual = live.version_name.clone();
+                    let passed = actual.as_deref() == Some(expected.as_str());
+                    install_expectations.push(serde_json::json!({
+                        "name": "version_name",
+                        "expected": expected,
+                        "actual": actual,
+                        "passed": passed,
+                    }));
+                    if !passed {
+                        failures.push("version_name");
+                    }
+                }
+                if let Some(expected) = args.expect_version_code {
+                    let actual = live.version_code;
+                    let passed = actual == Some(expected);
+                    install_expectations.push(serde_json::json!({
+                        "name": "version_code",
+                        "expected": expected,
+                        "actual": actual,
+                        "passed": passed,
+                    }));
+                    if !passed {
+                        failures.push("version_code");
+                    }
+                }
+                if let Some(expected) = &args.expect_apk_sha256 {
+                    let actual = live.base_apk.sha256.clone();
+                    let passed = actual.eq_ignore_ascii_case(expected.trim());
+                    install_expectations.push(serde_json::json!({
+                        "name": "apk_sha256",
+                        "expected": expected.trim(),
+                        "actual": actual,
+                        "passed": passed,
+                    }));
+                    if !passed {
+                        failures.push("apk_sha256");
+                    }
+                }
+                live_install = Some(serde_json::json!({
+                    "package": live.package,
+                    "version_name": live.version_name,
+                    "version_code": live.version_code,
+                    "base_apk_path": live.base_remote_path,
+                    "base_apk_sha256": live.base_apk.sha256,
+                }));
+                if !failures.is_empty() {
+                    return Err(ForgeError::new(
+                        ErrorCode::InstallVerificationFailed,
+                        format!(
+                            "installed build assertion failed for {package}: {}",
+                            failures.join(", ")
+                        ),
+                    )
+                    .with_context("expectations", install_expectations)
+                    .with_context("live_install", live_install)
+                    .with_suggestion("Run `androidforge app verify-installed --apk <apk>` for a full byte comparison.")
+                    .device(device.serial.clone()));
+                }
+            }
             Ok(success(
                 "app.status",
-                serde_json::json!({"expectation": expect_value, "states": states}),
+                serde_json::json!({
+                    "expectation": expect_value,
+                    "states": states,
+                    "install_expectations": install_expectations,
+                    "live_install": live_install,
+                }),
                 status_human(&states),
             )
             .with_optional_session(session_id(session.as_ref()))

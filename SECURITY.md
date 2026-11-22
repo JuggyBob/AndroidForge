@@ -73,7 +73,7 @@ Redact paths, serial numbers, package names and app data where possible.
 
 ## Supported versions
 
-AndroidForge is a beta project. Security fixes target the latest published release on `main`.
+AndroidForge is a pre-1.0 stable release line. Security fixes target the latest published release on `main`.
 Older pre-release builds may not receive fixes.
 
 ## Scope

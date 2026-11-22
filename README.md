@@ -4,9 +4,9 @@
 
 [![CI](https://github.com/JuggyBob/AndroidForge/actions/workflows/ci.yml/badge.svg)](https://github.com/JuggyBob/AndroidForge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status: Beta](https://img.shields.io/badge/status-beta-blue.svg)](#project-status)
+[![Status: Stable](https://img.shields.io/badge/status-stable-green.svg)](#project-status)
 
-> **Beta `v0.11.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Stable `v0.12.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows. Windows is the tested host; physical devices, Maestro, instrumentation, snapshot restore
 > and root-only operations are not yet fully validated. Read [Project status](#project-status) before
 > relying on it.
@@ -65,12 +65,12 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | --- | --- |
 | Devices | ADB discovery, `devices list/inspect/wait/health`, wireless pair/connect/disconnect, preparation and restore |
 | Emulators | AVD listing, safe port allocation, headless start, boot wait, status, stop, snapshots |
-| Sessions | Claim/attach/release/stop/restart, owner guards, heartbeats, stale-session GC |
+| Sessions | Claim/attach/release/stop/restart, owner guards, heartbeats, stale-session GC, `list --mine --active` classification and safe dry-run reclaim |
 | APKs | `aapt2`/`apksigner` inspection, signature and package checks, split APK/`.apks` identity and install verification |
-| Apps | Launch, status, force-stop, uninstall, clear data, file push/pull for debuggable builds |
-| UI | Hierarchy dump/find/assert/tap/text/clear/back/scroll/settle/wait, semantic selectors, stable refs on actions and waits |
-| Evidence | Screenshots, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
-| Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, time, startup/jank/memory/CPU evidence |
+| Apps | Launch, status with live version/hash expectations, force-stop, uninstall, clear data, file push/pull and verified app-data export/import/reset/seed for debuggable builds |
+| UI | Hierarchy dump/find/assert/tap/text/clear/back/scroll/settle/wait, configurable long-press and drag holds, mid-gesture captures, text-absence/idle/stability waits, semantic selectors and stable refs |
+| Evidence | Screenshots with baseline/region comparison, before/after tap captures, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
+| Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, reverse mappings and local HTTP/TLS mocks, time, startup/jank/memory/CPU evidence |
 | Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
 | Agent context | `context`, `agent brief`, compact observations/diffs, stable refs, action receipts, postconditions and exact next-action argv |
 | Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints, recurrence memory, `report explain/history/recurrences` and diagnostic bundles |
@@ -83,7 +83,7 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 
 ## Screenshots
 
-Real captures from the v0.11.0 native desktop cockpit. The full 16-image gallery is in
+Real captures from the v0.11.0 native desktop cockpit. The v0.12.0 release does not change the desktop UI, so this gallery still represents it. The full 16-image gallery is in
 [docs/screenshots/v0.11.0/](docs/screenshots/v0.11.0/README.md).
 
 | Setup / Agent Handoff | Overview |
@@ -93,6 +93,32 @@ Real captures from the v0.11.0 native desktop cockpit. The full 16-image gallery
 | [![Sessions](docs/screenshots/v0.11.0/06-sessions.png)](docs/screenshots/v0.11.0/06-sessions.png) | [![Inspector](docs/screenshots/v0.11.0/13-inspector.png)](docs/screenshots/v0.11.0/13-inspector.png) |
 | **Settings** | **Light theme** |
 | [![Settings](docs/screenshots/v0.11.0/15-settings.png)](docs/screenshots/v0.11.0/15-settings.png) | [![Light theme overview](docs/screenshots/v0.11.0/16-overview-light.png)](docs/screenshots/v0.11.0/16-overview-light.png) |
+
+## What is new in v0.12.0
+
+**Truthful Verification & Automation Gap Closure — the first stable (pre-1.0) release.** The main
+theme is refusing to report success unless the device actually proves it.
+
+- **Live install truth:** `session status` re-reads `pm path`/package metadata and persists the
+  refreshed build. An out-of-band `adb install -r` can no longer leave a stale installed hash.
+- **Byte-truthful `--only-if-changed`:** skips only when package, version code, base APK SHA-256 and
+  sorted split hashes all match. A same-version rebuilt APK with different bytes is installed.
+- **Verification commands:** `app verify-installed --apk`, and
+  `app status --expect-version-name/--expect-version-code/--expect-apk-sha256`.
+- **Compose tag support:** `--test-tag` aliases the accessibility resource id and gives an actionable
+  diagnostic when the app has not enabled `testTagsAsResourceId`.
+- **Gestures and waits:** configurable `ui long-press --duration`, `ui drag` with holds,
+  `--capture-mid`, `ui wait --for-text-gone/--for-idle/--for-stable`, and `ui assert-no-text`.
+- **App data fixtures:** `app data export/import/reset/seed`, with a pre-import backup and remote hash
+  verification after seeding.
+- **Network control:** `network reverse add/list/remove/clear`, plus a bounded local HTTP/TLS mock
+  server with inline/JSON routes, redacted request logs and optional automatic `adb reverse`.
+- **Visual regression:** `capture screenshot --compare` with full/region diffs, changed-pixel metrics,
+  diff bounding boxes and a diff PNG. `ui tap --capture-before/--capture-after` captures action evidence.
+- **Session hygiene:** `session list --mine --active` with active/busy/stale/released/failed/abandoned
+  classification, reasons and ages; `session gc --reclaim --dry-run` guidance without mutation.
+- **Truthful tests:** 347 workspace tests, strict clippy/fmt, no-device mock/TLS smoke and a full
+  disposable-emulator campaign covering install truth, gestures, data, reverse and visual comparison.
 
 ## What is new in v0.11.0
 
@@ -126,7 +152,7 @@ cockpit substantially more usable and gives a finished setup a ready-to-send age
 Seven agent-facing capabilities, delivered together:
 
 - **MCP server and tool export:** `androidforge mcp serve` runs a local stdio MCP server (JSON-RPC
-  2025-06-18). It exposes 31 tools and 29 resources, shells out to the same CLI, and refuses
+  2025-06-18). It exposes 40 tools and 29 resources, shells out to the same CLI, and refuses
   destructive calls without `confirm=true`. `tools schema --format mcp|openai|json` exports the same
   catalog for other function-calling clients.
 - **Selector v2 and OCR fallback:** selectors gain `--role`, `--text-regex`, `--region`, `--within`,
@@ -292,7 +318,7 @@ androidforge doctor --json
 
 The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.11.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `0.12.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -515,19 +541,23 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Beta `v0.11.0`.** The CLI has been exercised against real apps on Android 16 and Android 14
-emulators, including a two-AVD parallel matrix, and against a Xiaomi HyperOS device for read-only and
-safe UI paths. v0.11.0 is the desktop and agent-onboarding beta: the cockpit was rebuilt around
-consistent cards, rows and status tags; Setup ends with a copyable agent handoff prompt; Settings has
-theme/accent/font controls and a 33-font catalog; the Inspector hierarchy expands as recursive cards.
-v0.10.0 added the MCP server and tool export, selector v2 with optional local OCR, resumable runs with
-NDJSON events, structured logcat query/watch, generic intents and deep links, network profiles/proxy
-control, bounded device waiting and a parallel matrix. The v0.9.x safety fixes remain in place. See
-[VERIFICATION.md](VERIFICATION.md), [docs/REAL_DEVICE_COMPATIBILITY.md](docs/REAL_DEVICE_COMPATIBILITY.md),
+**Stable `v0.12.0` (pre-1.0).** The CLI has been exercised against real apps on Android 16 and Android
+14 emulators, including a two-AVD parallel matrix, and against a Xiaomi HyperOS device for read-only and
+safe UI paths. v0.12.0 closes the IronPulse 5.1.2 truth and automation gaps: live install metadata,
+byte-truthful `--only-if-changed`, verification commands, configurable gestures and waits, app-data
+fixtures, adb reverse and local mock networking, visual regression, tap evidence and session-hygiene
+filters. The v0.11.0 desktop cockpit and agent-onboarding work remains in place, as do the v0.10.0
+agent surfaces and v0.9.x safety fixes. See [VERIFICATION.md](VERIFICATION.md),
+[docs/REAL_DEVICE_COMPATIBILITY.md](docs/REAL_DEVICE_COMPATIBILITY.md),
 [docs/LONG_HORIZON_TESTING.md](docs/LONG_HORIZON_TESTING.md) and [case-studies/](case-studies/).
 
 Validated:
 
+- v0.12.0 verification: 347 workspace tests, strict clippy/fmt, live install refresh after an
+  out-of-band `adb install -r`, same-version/different-byte install under `--only-if-changed`,
+  `verify-installed`/status expectations, long-press/drag/mid-capture, text-absence/idle/stability
+  waits, app-data export/seed/import/reset, adb reverse, mock HTTP/TLS, visual comparison, tap
+  before/after captures and session-hygiene filters on a disposable emulator.
 - v0.11.0 desktop beta validation: 14/14 page smoke with seeded data, Settings brightness and
   font catalog, row-card consistency, topbar Refresh accessibility and hover, CLI-card path clipping
   and persistent console launch, light-mode sidebar readability, Setup Agent Handoff clipboard prompt
@@ -598,8 +628,7 @@ Not yet validated:
 - MCP transports other than local stdio (no HTTP/SSE server is shipped), and MCP client-specific
   tool-calling behavior beyond the recorded JSON-RPC handshake and calls.
 - Maestro and instrumentation execution remain `best-effort` and were not end-to-end validated in
-  this release.
-- Maestro execution and instrumentation test APKs.
+  this release; missing Maestro returns `E_MAESTRO_NOT_FOUND`. Instrumentation requires a test APK.
 - Snapshot load/restore and root-only time changes.
 - macOS and Linux hosts (the desktop is Windows-validated; the CLI is not validated there either).
 - Very large test suites or long-duration stress runs.
@@ -616,7 +645,8 @@ that was not exercised is not claimed as verified.
 - [USER_GUIDE.md](USER_GUIDE.md) — setup, devices, sessions, diagnostics, troubleshooting
 - [ARCHITECTURE.md](ARCHITECTURE.md) — crates, data flow, locking, process and report model
 - [desktop/README.md](desktop/README.md) - building and testing the native desktop cockpit
-- [docs/screenshots/v0.11.0/README.md](docs/screenshots/v0.11.0/README.md) - updated UI screenshot gallery
+- [docs/screenshots/v0.11.0/README.md](docs/screenshots/v0.11.0/README.md) - desktop UI screenshot gallery (desktop unchanged in v0.12.0)
+- [docs/release-notes/v0.12.0.md](docs/release-notes/v0.12.0.md) - v0.12.0 release notes
 - [PROJECT_ADAPTER.md](PROJECT_ADAPTER.md) — project config, fixtures, hooks and conformance
 - [SCHEMA.md](SCHEMA.md) — report, metadata, manifest and JSON shapes
 - [EXIT_CODES.md](EXIT_CODES.md) — stable exit codes and error codes

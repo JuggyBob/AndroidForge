@@ -28,7 +28,11 @@ pub async fn session(ctx: &CliContext, command: &SessionCommand) -> Result<Comma
         SessionCommand::Start(args) => start(ctx, args).await,
         SessionCommand::Ensure(args) => ensure(ctx, args).await,
         SessionCommand::Attach(args) | SessionCommand::Claim(args) => attach(ctx, args).await,
-        SessionCommand::List { active } => list(ctx, *active),
+        SessionCommand::List {
+            active,
+            mine,
+            owner,
+        } => list(ctx, *active, *mine, owner.as_deref()),
         SessionCommand::Inspect => inspect(ctx, false).await,
         SessionCommand::Status => inspect(ctx, true).await,
         SessionCommand::Release(args) => release(ctx, args, false).await,
@@ -958,8 +962,17 @@ async fn attach_with_serial(
     session_success("session.attach", &session, &device, warnings, None)
 }
 
-fn list(ctx: &CliContext, active_only: bool) -> Result<CommandSuccess> {
+fn list(
+    ctx: &CliContext,
+    active_only: bool,
+    mine: bool,
+    owner: Option<&str>,
+) -> Result<CommandSuccess> {
     let mut sessions = list_sessions(&ctx.paths)?;
+    let caller = caller_owner(owner);
+    if mine || owner.is_some() {
+        sessions.retain(|session| session.owner == caller);
+    }
     if active_only {
         sessions.retain(|session| {
             !matches!(
@@ -968,33 +981,103 @@ fn list(ctx: &CliContext, active_only: bool) -> Result<CommandSuccess> {
             )
         });
     }
-    let result = serde_json::json!({"active_only": active_only, "sessions": sessions});
+    let mut rendered = Vec::with_capacity(sessions.len());
+    for session in &sessions {
+        let classification = classify_session(session);
+        let reason = session_reason(session, classification);
+        let mut value = serde_json::to_value(session)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "classification".to_string(),
+                serde_json::Value::String(classification.to_string()),
+            );
+            object.insert("reason".to_string(), serde_json::Value::String(reason));
+        }
+        rendered.push(value);
+    }
+    let mut result = serde_json::json!({
+        "active_only": active_only,
+        "mine": mine || owner.is_some(),
+        "sessions": rendered,
+    });
+    if mine || owner.is_some() {
+        result["owner"] = serde_json::Value::String(caller.clone());
+    }
     let mut human = String::new();
     if sessions.is_empty() {
-        human.push_str("No sessions.\n");
+        if mine || owner.is_some() {
+            human.push_str(&format!("No sessions owned by {caller}.\n"));
+        } else {
+            human.push_str("No sessions.\n");
+        }
     } else {
-        for session in &sessions {
+        for (session, rendered) in sessions.iter().zip(rendered.iter()) {
             human.push_str(&format!(
-                "{} owner={} state={:?} serial={} avd={} stale={} operation={}\n",
+                "{} owner={} state={:?} class={} serial={} avd={} age={}s stale={} operation={} reason={}\n",
                 session.id,
                 session.owner,
                 session.state,
+                rendered["classification"].as_str().unwrap_or("-"),
                 session.serial.as_deref().unwrap_or("-"),
                 session.avd.as_deref().unwrap_or("-"),
+                session.age_seconds,
                 session.stale,
                 session.operation.as_deref().unwrap_or("-"),
+                rendered["reason"].as_str().unwrap_or("-"),
             ));
         }
     }
     Ok(success("session.list", result, human))
 }
 
+fn classify_session(session: &androidforge_core::session::SessionListEntry) -> &'static str {
+    match session.state {
+        SessionState::Released => "released",
+        SessionState::Failed => "failed",
+        SessionState::Abandoned => "abandoned",
+        _ if session.stale => "stale",
+        _ if session.operation_active => "busy",
+        _ => "active",
+    }
+}
+
+fn session_reason(
+    session: &androidforge_core::session::SessionListEntry,
+    classification: &str,
+) -> String {
+    match classification {
+        "released" => "session was released; this is a tombstone".to_string(),
+        "failed" => session
+            .last_error
+            .clone()
+            .unwrap_or_else(|| "session failed without a recorded error".to_string()),
+        "abandoned" => "session was reclaimed because its heartbeat stopped".to_string(),
+        "stale" => format!(
+            "heartbeat is {}s old; run `androidforge session gc --reclaim --dry-run` to preview cleanup",
+            session.age_seconds
+        ),
+        "busy" => format!(
+            "operation '{}' is active",
+            session.operation.as_deref().unwrap_or("unknown")
+        ),
+        _ => "session heartbeat is current".to_string(),
+    }
+}
+
 async fn inspect(ctx: &CliContext, detailed: bool) -> Result<CommandSuccess> {
-    let session = ctx.require_session()?;
+    let mut session = ctx.require_session()?;
     let adb = ctx.adb()?;
     let mut device = None;
     if let Ok(serial) = session.serial() {
         device = adb.inspect(serial).await.ok();
+    }
+    let mut live_build_refreshed = false;
+    let mut live_build_error = None;
+    if let Ok(serial) = session.serial().map(str::to_string) {
+        match refresh_live_build(ctx, &mut session, &serial).await {
+            Ok(refreshed) => live_build_refreshed = refreshed,
+            Err(error) => live_build_error = Some(error.message().to_string()),
+        }
     }
     let emulator = if detailed {
         let manager = ctx.emulator_manager()?;
@@ -1032,8 +1115,16 @@ async fn inspect(ctx: &CliContext, detailed: bool) -> Result<CommandSuccess> {
             "operation_active".to_string(),
             Value::from(session.operation_active()),
         );
+        object.insert(
+            "live_build_refreshed".to_string(),
+            Value::from(live_build_refreshed),
+        );
+        object.insert(
+            "live_build_error".to_string(),
+            serde_json::to_value(&live_build_error).unwrap_or(Value::Null),
+        );
     }
-    let human = format!(
+    let mut human = format!(
         "session {}\nowner: {}\nstate: {:?}\nserial: {}\navd: {}\nport: {}\nheadless: {}\nheartbeat age: {}s\n",
         session.id,
         session.owner,
@@ -1047,6 +1138,17 @@ async fn inspect(ctx: &CliContext, detailed: bool) -> Result<CommandSuccess> {
         session.headless,
         session.age_seconds()
     );
+    if let Some(build) = &session.build {
+        human.push_str(&format!(
+            "build: {}\ninstalled APK: {}\ninstalled SHA-256: {}\n",
+            build.summary(),
+            build.installed_apk_path.as_deref().unwrap_or("-"),
+            build.installed_apk_sha256.as_deref().unwrap_or("-")
+        ));
+    }
+    if let Some(error) = &live_build_error {
+        human.push_str(&format!("live build refresh failed: {error}\n"));
+    }
     Ok(success(
         if detailed {
             "session.status"
@@ -1056,6 +1158,61 @@ async fn inspect(ctx: &CliContext, detailed: bool) -> Result<CommandSuccess> {
         result,
         human,
     ))
+}
+
+/// Refresh the cached build identity from the live device. The session file is
+/// updated so later runs do not inherit an install record that an out-of-band
+/// `adb install` has made stale.
+async fn refresh_live_build(ctx: &CliContext, session: &mut Session, serial: &str) -> Result<bool> {
+    let Some(package) = session
+        .build
+        .as_ref()
+        .and_then(|build| build.package.clone())
+        .or_else(|| ctx.config.package().map(str::to_string))
+    else {
+        return Ok(false);
+    };
+    let adb = ctx.adb()?;
+    let inspector = ctx.inspector();
+    let live = androidforge_app::inspect_installed(&adb, &inspector, serial, &package).await?;
+    let mut build = session
+        .build
+        .clone()
+        .unwrap_or_else(|| androidforge_core::model::BuildIdentity::for_package(package.clone()));
+    build.package = Some(package.clone());
+    match live {
+        Some(live) => {
+            build.version_name = live.version_name.clone();
+            build.version_code = live.version_code;
+            build.installed_apk_path = Some(live.base_remote_path.clone());
+            build.installed_apk_sha256 = Some(live.base_apk.sha256.clone());
+            build.cert_sha256 = live
+                .base_apk
+                .signature
+                .cert_sha256
+                .clone()
+                .or(build.cert_sha256.take());
+            build.debug_signed = live.base_apk.signature.debug_signed();
+            build.verified = true;
+            for warning in live.warnings {
+                if !build.notes.contains(&warning) {
+                    build.notes.push(warning);
+                }
+            }
+        }
+        None => {
+            build.installed_apk_path = None;
+            build.installed_apk_sha256 = None;
+            build.verified = false;
+            let note = format!("package {package} is not currently installed on {serial}");
+            if !build.notes.contains(&note) {
+                build.notes.push(note);
+            }
+        }
+    }
+    session.build = Some(build);
+    session.save(&ctx.paths)?;
+    Ok(true)
 }
 
 fn caller_owner(owner: Option<&str>) -> String {
@@ -1272,8 +1429,33 @@ async fn gc(ctx: &CliContext, args: &SessionGcArgs) -> Result<CommandSuccess> {
     }
     Ok(success(
         "session.gc",
-        serde_json::json!({"report": report, "warnings": warnings}),
-        serde_json::to_string_pretty(&report).unwrap_or_default() + "\n",
+        serde_json::json!({
+            "report": report,
+            "warnings": warnings,
+            "would_reclaim": if ctx.dry_run { report.reclaimed_sessions.clone() } else { Vec::<String>::new() },
+            "next_commands": if ctx.dry_run && !report.reclaimed_sessions.is_empty() {
+                vec!["androidforge session gc --reclaim".to_string()]
+            } else {
+                Vec::<String>::new()
+            },
+        }),
+        format!(
+            "{}{}{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default(),
+            if ctx.dry_run && !report.reclaimed_sessions.is_empty() {
+                format!(
+                    "\nDry run: {} session(s) would be marked abandoned. Re-run `androidforge session gc --reclaim` to apply it; add --stop to also stop abandoned emulators.\n",
+                    report.reclaimed_sessions.len()
+                )
+            } else {
+                String::new()
+            },
+            if !warnings.is_empty() {
+                format!("\nwarnings:\n{}\n", warnings.join("\n"))
+            } else {
+                String::new()
+            }
+        ),
     ))
 }
 

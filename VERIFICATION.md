@@ -1,11 +1,126 @@
 # Verification record
 
-This document records what was actually run for the `0.11.0` desktop and agent-onboarding beta, the
-`0.10.0` agent-surface release, the `0.9.4` safety and repeatability release, the `0.9.3` contract and
-coverage release, the `0.9.2` patch, the `0.9.1` patch, the `0.9.0` Alpha delivery, the `0.8.0`
-delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` records. It
-separates automated checks, real Android validation, desktop workflow validation and packaging
-validation from areas that were not exercised.
+This document records what was actually run for the `0.12.0` stable pre-1.0 release, the `0.11.0`
+desktop and agent-onboarding beta, the `0.10.0` agent-surface release, the `0.9.4` safety and
+repeatability release, the `0.9.3` contract and coverage release, the `0.9.2` patch, the `0.9.1` patch,
+the `0.9.0` Alpha delivery, the `0.8.0` delivery, the `0.7.1` patch, and the `0.7.0`, `0.6.0`, `0.5.0`,
+`0.4.0` and `0.3.0` records. It separates automated checks, real Android validation, desktop workflow
+validation and packaging validation from areas that were not exercised.
+
+## v0.12.0 verification (2026-11-22)
+
+### Scope
+
+Truthful verification and automation gap closure from the IronPulse 5.1.2 campaign:
+
+1. Live install truth in `session status` and install verification commands.
+2. Byte-truthful `--only-if-changed` and explicit live version/hash expectations.
+3. Compose `--test-tag` selector alias and actionable diagnostic.
+4. Configurable long-press/drag gestures, holds and mid-gesture screenshots.
+5. Text-gone, idle and stable waits; `ui assert-no-text`.
+6. App-data export/import/reset/seed with pre-import backup and remote hash verification.
+7. `adb reverse` management and a bounded local HTTP/TLS mock server with request logs.
+8. Screenshot baseline/region comparison, tap before/after captures and session hygiene filters.
+9. Documentation, schemas, MCP mappings and regression coverage for every new surface.
+
+### Environment
+
+- Windows 11 host, Rust `1.100`, workspace version `0.12.0`.
+- Disposable headless `androidforge_test` emulator (API 36, `emulator-5554`), launched and stopped by
+  the verification workstreams.
+- Physical device present but never targeted or mutated: Xiaomi `DM9X8LFQYHSSQKIN`.
+- Isolated `ANDROIDFORGE_HOME` per workstream; no devices stolen from another owner.
+- Test APK: an archived debuggable MobileDeck build (`com.remerer.mobiledeck` 1.3.2/code 21), copied and
+  re-signed in a temp directory for install-truth tests.
+- All delegated test workstreams used exactly `opencode-go/hy4-flash-free#high`: quality/test gate,
+  package-asset verification, documentation audit, no-device mock/TLS/help smoke, emulator
+  install-truth, app-data, session-hygiene and testTag-diagnostic runs.
+
+### Automated gates
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo test --workspace`: **347 passed / 0 failed / 0 ignored**, 27 test executables.
+- Targeted visual tests: 5/5, including the visual-diff payload schema test.
+- `androidforge.exe --version`: `androidforge 0.12.0`.
+- `androidforge-desktop.exe --version`: `androidforge-desktop 0.12.0`.
+- `schema list --json`: 30 schemas; all new schemas present and parseable.
+- MCP `tools schema --format mcp`: 40 tools; all nine new tools present.
+- `capabilities --json`: new entries present with `status=supported`.
+
+### Live install and verification
+
+- Baseline APK SHA-256 `2785092a55d0341dcc2879bf1867aeb46b073a28fd7b569f9cf3bf7e4a268bee`.
+- Same-package/same-version rebuilt APK with an added asset SHA-256
+  `7b96823adc9fbf121fe2e06a26ab215e651788b76eb5244dbd5cf4cb210a718e`.
+- Baseline install: `skipped:false`, `decision:installed`, installed hash equal to local.
+- `app verify-installed`: `overall:same`, `safe_to_skip_install:true`, all 9 fields `same`.
+- `app status --expect-apk-sha256`: `passed:true` against the live hash.
+- Installing the baseline again: `skipped:true` with the byte-identity reason.
+- Installing the modified same-version APK: `skipped:false`, `reason:content_different`, installed hash
+  equal to the modified local hash. This is the core regression proof.
+- Out-of-band `adb install -r` of the baseline, then `session status`: `live_build_refreshed:true` and
+  `build.installed_apk_sha256` equal to the baseline hash.
+
+### Emulator UI and data validation
+
+- `ui long-press --duration 1200`: executed against Settings.
+- `ui drag --from-x 300 --from-y 1200 --to-x 800 --to-y 1200 --capture-mid`: returned 12 steps and a
+  mid-capture frame with SHA-256.
+- `ui tap --capture-before/--capture-after`: both frames present and hashed.
+- `ui wait --for-idle --timeout 10`: `stable:true`, 2 attempts.
+- `ui wait --for-stable --stable-for 2s --timeout 15`: `stable:true`, 2 attempts.
+- `ui wait --for-text-gone "Definitely absent text"`: `absent:true`.
+- `ui wait --for-text-gone "Search Settings"`: exit 7 `E_UI_ASSERTION_FAILED` with lingering bounds,
+  proving the check is not a no-op.
+- `ui assert-no-text --contains "Search Settings"`: exit 7 with the matching node.
+- `app data export`: 5,632-byte tar, SHA-256 `537ef7c71d82e55ea586bf576964bc3cb08559e5071eda546cee695d8cd68fd3`.
+- `app data seed`: `remote_hash_verified:true`, remote hash equal to the 35-byte local probe.
+- `app data import`: pre-import backup 6,656 bytes plus `app_data_pre_import` artifact, then restore.
+- `app data reset --baseline --backup-current`: clear succeeded; backup 6,656 bytes; baseline restored.
+- `ui tap --test-tag definitely_missing_tag`: exit 7 `E_SELECTOR_NOT_FOUND` with the
+  `testTagsAsResourceId` suggestion. `ui find --test-tag` returned zero matches without error.
+
+### Network and visual validation
+
+- `network reverse add/list/remove tcp:18080`: add and list passed; remove left an empty list.
+- Mock HTTP: `GET /health` 200 with `{"ok":true}`, `POST /login` 401, unmatched route 404,
+  `requests:2`, `stopped_by:max_requests`; NDJSON log recorded method/path/status/route/duration and
+  redacted `authorization`.
+- Mock TLS: self-signed certificate/key, `curl -k` returned 200 and result `tls:true`.
+- Screenshot compare: two identical 1080x2400 captures produced `changed_pixels:0`,
+  `compared_pixels:2592000`, `passed:true`.
+- Visual unit tests cover identical images, region changes, threshold tolerance, invalid regions and
+  schema validation.
+
+### Session hygiene validation
+
+- Fabricated sessions covered fresh ready (alice), stale ready (bob, −3h), released tombstone and failed
+  session.
+- List classifications matched active/stale/released/failed with reasons and ages.
+- `--active` excluded released/failed; `--mine`/`--owner bob` filtered by owner.
+- `gc --reclaim --dry-run`: `would_reclaim:["ses-stale-bob"]`, `next_commands`, all four session file
+  hashes unchanged.
+- Applying reclaim changed only the stale session to `abandoned`; fresh/released/failed were untouched.
+- Session-list schema validation passed for unfiltered and filtered output; unfiltered output omits
+  `owner` rather than emitting `null`.
+
+### Not validated
+
+- Physical-device installs, uninstall and vendor ROM mutation paths. The physical Xiaomi was present
+  but never touched.
+- A real Maestro flow and a real instrumentation test APK.
+- Snapshot restore and root-only time changes.
+- Real Tesseract recognition accuracy.
+- MCP transports other than local stdio.
+- macOS and Linux hosts.
+- Long-duration stress or very large suites.
+- Code signing.
+
+### Release publication
+
+Release publication details and published checksums are added after the tag and release workflow
+complete.
 
 ## v0.11.0 verification (2026-11-19)
 
@@ -1480,7 +1595,7 @@ The released native desktop was launched and exercised with keyboard/mouse again
 The application was launched at client sizes corresponding to 1280×720, 1366×768 and 1920×1080 logical
 pixels (physical 1600×900, 1708×960 and 2400×1350 at 125% Windows scaling). Layout clipping, sidebar
 reachability, card alignment and table column fit were checked. Final screenshots are stored in
-[`docs/screenshots/v0.3.0/`](screenshots/v0.3.0/).
+[`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/).
 
 ## Packaging validation
 

@@ -290,7 +290,7 @@ androidforge tools schema --format openai --json
 ```
 
 `mcp serve` is a local stdio JSON-RPC server. It writes only protocol lines to stdout; logs go to
-stderr. It exposes the same 31 tools as `tools schema`, shells out to the same CLI and requires
+stderr. It exposes the same 40 tools as `tools schema`, shells out to the same CLI and requires
 `confirm=true` for destructive tools. There is no HTTP listener, account or key. Use `tools schema`
 to feed the same catalog to another function-calling client.
 
@@ -546,7 +546,9 @@ androidforge session release --session ses-... --owner MyAgent --json
 androidforge session stop --session ses-... --owner MyAgent --json
 ```
 
-`session use` writes `.androidforge/current-session` for the project. `ANDROIDFORGE_SESSION` is the environment alternative. `session release` releases ownership and restores prepared settings; `session stop` also stops an emulator the session owns, or an attached emulator with `--attached`. `session release --stop` stops an owned emulator; attached emulators additionally require `--stop-attached`. If you release an owned emulator without stopping it, the released tombstone can still be stopped with `session stop --session <ID>` as long as no new session owns the device. `session list --active` hides released/failed tombstones.
+`session use` writes `.androidforge/current-session` for the project. `ANDROIDFORGE_SESSION` is the environment alternative. `session release` releases ownership and restores prepared settings; `session stop` also stops an emulator the session owns, or an attached emulator with `--attached`. `session release --stop` stops an owned emulator; attached emulators additionally require `--stop-attached`. If you release an owned emulator without stopping it, the released tombstone can still be stopped with `session stop --session <ID>` as long as no new session owns the device. `session list --active` hides released, failed and abandoned tombstones. `session list --mine` filters to the current owner (`ANDROIDFORGE_OWNER`, or the OS user), and `--owner <name>` selects an explicit owner. Each list entry carries a `classification` (`active`, `busy`, `stale`, `released`, `failed`, `abandoned`), its heartbeat age and a `reason` so tombstones are never mistaken for live sessions.
+
+`session gc --reclaim --dry-run` is the safe preview. It reports `would_reclaim`, leaves every session file untouched, and prints the exact command to apply the change. Reclaim never touches a session with a current heartbeat or another owner's live operation.
 
 `session status` and `session inspect` report the heartbeat and advisory lease. There is no standalone `session heartbeat` subcommand; use `session status --session <ID> --json` when an agent needs a liveness sample.
 
@@ -650,6 +652,18 @@ androidforge app data-backup com.example.app .\backup.tar --session <ID> --json
 
 Use `--no-verify` only when you explicitly need to skip post-install hash verification; it weakens evidence.
 
+Two read-only commands answer "what is actually installed?" without trusting cached session metadata:
+
+```powershell
+androidforge app verify-installed --apk .\app-debug.apk --session <ID> --json
+androidforge app verify-installed --apk .\base.apk --split .\config.arm64_v8a.apk --session <ID> --json
+androidforge app status com.example.app --session <ID> --expect-version-name 5.1.2 --expect-version-code 512 --expect-apk-sha256 <64-hex> --json
+```
+
+`app verify-installed` pulls the live base APK, hashes it, reads the live package metadata and compares package, version, certificate and split identity. It exits non-zero with `E_INSTALL_VERIFICATION_FAILED` when the device does not match. `app status` applies each expectation to live state and returns a structured pass/fail record; a mismatch is an assertion failure, not a warning.
+
+`session status --json` also refreshes the cached build identity from `pm path` on every call, so an out-of-band `adb install -r` cannot leave a stale `installed_apk_sha256` in the session. The refresh is persisted for later reports.
+
 ## 9. App control
 
 ```powershell
@@ -691,6 +705,17 @@ androidforge app file-pull files/seed.json .\pulled.json --package com.example.a
 
 Remote paths are relative to the app's private data directory and may not contain `..`.
 
+### App data fixtures
+
+```powershell
+androidforge app data export com.example.app .\data.tar --session <ID> --json
+androidforge app data import com.example.app .\data.tar --session <ID> --yes --json
+androidforge app data reset com.example.app --baseline .\seeded.tar --backup-current .\before.tar --session <ID> --yes --json
+androidforge app data seed com.example.app --file .\fixture.db --remote databases/app.db --session <ID> --yes --json
+```
+
+`app data export` and `app data import` use `run-as` and therefore require a debuggable build; a non-debuggable package fails with `E_APP_NOT_DEBUGGABLE` and a clear suggestion. `app data import` always captures a pre-import archive into the run before restoring, so an overwrite is recoverable. `app data reset` clears app data, optionally saves `--backup-current`, then restores `--baseline`. `app data seed` writes one file to a path relative to the app-private data directory. Import, reset and seed require `--yes`; physical devices additionally require `--allow-physical-mutation`. Use `--dry-run` to preview all paths.
+
 ## 10. UI work
 
 Start with a dump or a find, not coordinates.
@@ -711,7 +736,11 @@ Actions:
 
 ```powershell
 androidforge ui tap --session <ID> --text "Save" --json
-androidforge ui long-press --session <ID> --content-desc "Delete" --json
+androidforge ui tap --session <ID> --test-tag save_button --json
+androidforge ui long-press --session <ID> --content-desc "Delete" --duration 1500 --json
+androidforge ui long-press --session <ID> --text "Card" --duration 1200 --capture-mid .\held.png --json
+androidforge ui drag --session <ID> --from "text=Item" --to "id=com.example.app:id/trash" --duration 800 --hold-before 200 --hold-after 200 --json
+androidforge ui drag --session <ID> --from-x 200 --from-y 600 --to-x 800 --to-y 600 --capture-mid .\dragging.png --json
 androidforge ui text "hello world" --session <ID> --class android.widget.EditText --clear --hide-keyboard --json
 androidforge ui clear --session <ID> --json
 androidforge ui back --session <ID> --hide-keyboard --json
@@ -732,11 +761,17 @@ Waiting and assertions:
 ```powershell
 androidforge ui wait --session <ID> --text "Saved" --timeout 20 --json
 androidforge ui wait --session <ID> --contains "Loading" --not-exists --timeout 20 --json
+androidforge ui wait --session <ID> --for-text-gone "Loading" --for-text-gone "Saving" --timeout 20 --json
+androidforge ui wait --session <ID> --for-idle --timeout 10 --json
+androidforge ui wait --session <ID> --for-stable --stable-for 2s --timeout 15 --json
 androidforge ui settle --session <ID> --timeout 10 --json
 androidforge ui assert --session <ID> --contains "Welcome" --json
 androidforge ui assert --session <ID> --text "Error" --not-exists --json
+androidforge ui assert-no-text --session <ID> --contains "Loading" --timeout 5 --json
 androidforge ui scroll-to --session <ID> --text "Settings" --json
 ```
+
+`--for-text-gone` polls visible text and content descriptions until every supplied string is absent; on timeout it reports every lingering match with bounds. `--for-idle` waits for one byte-identical hierarchy dump; `--for-stable` requires the hierarchy hash to remain unchanged for `--stable-for` (default 2s). These modes are mutually exclusive with selectors and `--not-exists`.
 
 Rules:
 
@@ -750,12 +785,13 @@ Rules:
 - `ui clear` with no selector clears the focused editable field. If none is focused it returns `E_SELECTOR_NOT_FOUND` with the focused nodes and a selector suggestion. Android Settings and some OEM fields expose their hint as `text`; AndroidForge treats an exact hint as empty before typing and after clearing, so clearing a search field does not false-fail.
 - Ambiguity is an error with candidates. Add `--index N` from the candidate list or narrow the selector.
 - Taps use current device pixels and optionally a clickable ancestor.
+- `ui tap --capture-before <png>` and `--capture-after <png>` capture evidence around the action and include `before_screenshot`/`after_screenshot` in the result or receipt. They are explicit because screenshots add device round-trips.
 - Text entry verifies the focused editable field, clears with batched deletes when asked, re-reads and compares. Password fields report unverified.
 - `ui back` refuses while the IME is up unless `--hide-keyboard` is explicit.
 - On a fresh AVD, run `ui dismiss-overlays` before app assertions so the SystemUI immersive cling
   cannot hide the app hierarchy.
 - Avoid fixed sleeps. Use `wait`, `settle` and `scroll-to`.
-- Compose test tags are not visible unless the app exposes them as accessibility resource IDs. Use instrumentation for internal tags.
+- Compose test tags are not visible unless the app exposes them as accessibility resource IDs. `--test-tag` is an alias for the resource id and fails with an actionable suggestion when the tag is absent. In a debug build, set `Modifier.semantics { testTagsAsResourceId = true }` on the relevant composable (or the root semantics) so UIAutomator can see `testTag` values. This is an app-side setting; AndroidForge does not inject it and does not claim tags exist when the app has not enabled them.
 
 ## 11. Evidence
 
@@ -763,12 +799,14 @@ Rules:
 
 ```powershell
 androidforge capture screenshot --session <ID> --label before --json
+androidforge capture screenshot --session <ID> --compare .\baseline.png --json
+androidforge capture screenshot --session <ID> --compare .\baseline.png --region 0,120,1080,900 --max-diff-ratio 0.002 --diff-output .\diff.png --json
 androidforge capture record start --session <ID> --time-limit 30 --json
 androidforge capture record status --session <ID> --json
 androidforge capture record stop --session <ID> --json
 ```
 
-Screenshots include dimensions, display size, timestamp and SHA-256. Recordings are MP4, no audio, and Android caps standard `screenrecord` at 180 seconds. A recording started inside a caller-owned run does not finalize that run on stop.
+Screenshots include dimensions, display size, timestamp and SHA-256. With `--compare`, AndroidForge decodes both PNGs, limits comparison to `--region x1,y1,x2,y2` when supplied, applies an optional per-channel `--diff-threshold`, and reports changed pixels, ratio, mean channel delta and the changed bounding box. The check fails with `E_UI_ASSERTION_FAILED` when the ratio exceeds `--max-diff-ratio`; a diff visualization is stored as a run artifact. Baselines may be a direct path or a path relative to the artifact directory. Recordings are MP4, no audio, and Android caps standard `screenrecord` at 180 seconds. A recording started inside a caller-owned run does not finalize that run on stop.
 
 ### Logcat
 
@@ -850,6 +888,25 @@ Network profiles are `default`, `offline`, `wifi-only`, `data-only` and `no-prox
 records the previous airplane/Wi-Fi/data/proxy state in the session; `network restore` puts it back
 and removes the record. Profiles do not simulate latency, loss or bandwidth. `network profile list`
 works without a device.
+
+### Reverse mappings and local mocks
+
+```powershell
+androidforge network reverse add tcp:8080 --session <ID> --json
+androidforge network reverse list --session <ID> --json
+androidforge network reverse remove tcp:8080 --session <ID> --json
+androidforge network reverse clear --session <ID> --json
+androidforge network mock serve --session <ID> --port 8080 --route 'GET /health=200:{"ok":true}' --route 'POST /login=401' --reverse --max-requests 2 --json
+androidforge network mock serve --session <ID> --port 8443 --routes .\routes.json --tls-cert .\cert.pem --tls-key .\key.pem --duration 30s --json
+```
+
+Reverse mappings are per device and recorded in the session; `clear` removes them all. `network mock serve` binds loopback by default and never exposes the listener to the LAN. Routes are exact method/path matches (`*` is a wildcard), configured inline as `METHOD /path=STATUS[:BODY]` or with a JSON file:
+
+```json
+{"routes":[{"method":"GET","path":"/api/user","status":200,"headers":{"content-type":"application/json"},"body":"{\"name\":\"Ada\"}"}]}
+```
+
+Pass `--reverse` to add and later remove `adb reverse tcp:PORT tcp:PORT` automatically. `--max-requests` or `--duration` bounds non-interactive runs; otherwise stop with Ctrl+C. Every request appends method, path, query, redacted headers, bounded body preview and SHA-256, status, matched route, duration and peer to an NDJSON artifact. Authorization, proxy-authorization, cookie, set-cookie and API-key headers are redacted. TLS is a local certificate/key pair only: Android must trust the certificate through its own user-CA/network-security configuration. AndroidForge never claims public CA trust and does not install a CA.
 
 ## 12. Runs and reports
 

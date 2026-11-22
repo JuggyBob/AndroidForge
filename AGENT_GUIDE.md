@@ -396,7 +396,7 @@ androidforge tools schema --format openai --json
 
 `mcp serve` speaks newline-delimited JSON-RPC on stdin/stdout. Only JSON-RPC lines go to stdout;
 diagnostics go to stderr. Destructive tools require `confirm=true`, and uninstall/fresh-install are
-guarded. `tools schema` exports the same 31-tool catalog.
+guarded. `tools schema` exports the same 40-tool catalog.
 
 Selector v2 and OCR:
 
@@ -458,6 +458,31 @@ androidforge network restore --session ses-... --json
 Profiles are `default`, `offline`, `wifi-only`, `data-only`, `no-proxy`. Apply records the previous
 state in the session; `restore` puts it back and removes the record. Latency/loss shaping is not
 implemented.
+
+Truth-first install and gap-closure surfaces:
+
+```powershell
+androidforge app verify-installed --apk .\app-debug.apk --session ses-... --json
+androidforge app status com.example --session ses-... --expect-version-code 512 --expect-apk-sha256 <64-hex> --json
+androidforge ui long-press --session ses-... --text "Card" --duration 1200 --capture-mid .\held.png --json
+androidforge ui drag --session ses-... --from "text=Item" --to "tag=trash" --hold-before 200 --json
+androidforge ui wait --session ses-... --for-text-gone "Loading" --json
+androidforge ui wait --session ses-... --for-idle --json
+androidforge ui wait --session ses-... --for-stable --stable-for 2s --json
+androidforge ui assert-no-text --session ses-... --contains "Error" --json
+androidforge app data reset com.example --baseline .\seeded.tar --session ses-... --yes --json
+androidforge network reverse add tcp:8080 --session ses-... --json
+androidforge network mock serve --session ses-... --port 8080 --route 'GET /health=200' --reverse --max-requests 1 --json
+androidforge capture screenshot --session ses-... --compare .\baseline.png --region 0,120,1080,900 --max-diff-ratio 0.002 --json
+androidforge session list --mine --active --json
+androidforge session gc --reclaim --dry-run --json
+```
+
+`session status` re-reads live `pm path` metadata and persists the refreshed build. `--only-if-changed`
+skips only when package, version code, base APK hash and split hashes all match. `--test-tag` is a
+resource-id alias and only works when the debug app enables `testTagsAsResourceId`; the failure
+includes that guidance. `session list --mine` uses `ANDROIDFORGE_OWNER` (or the OS user) and reports
+`classification`/`reason`; GC dry-run never mutates state and prints the exact apply command.
 
 Device waiting:
 

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/ui-wait.schema.json",
+  "title": "AndroidForge ui wait/assert result",
+  "type": "object",
+  "required": ["attempts", "duration_ms"],
+  "properties": {
+    "present": { "type": "boolean" },
+    "matched": { "type": "boolean" },
+    "absent": { "type": "boolean" },
+    "stable": { "type": "boolean" },
+    "attempts": { "type": "integer", "minimum": 0 },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "xml_sha256": { "type": "string" },
+    "matched_element": { "type": "object", "additionalProperties": true },
+    "lingering": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "texts": { "type": "array", "items": { "type": "string" } },
+    "hierarchy_package": { "type": "string" }
+  },
+  "additionalProperties": true
+}
