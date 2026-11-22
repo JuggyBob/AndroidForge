@@ -35,8 +35,20 @@ supersedes the v0.12.0 assets. It contains no intentional feature changes.
 - Local `cargo deny check advisories bans licenses sources`: advisories, bans, licenses and sources
   all report `ok`.
 - Mock TLS was re-tested with a self-signed certificate after the PEM parser migration.
-- Package/ZIP/installer versions report `0.12.1`; published checksums are added to
-  [VERIFICATION.md](VERIFICATION.md) after the release workflow completes.
+- Package/ZIP/installer versions report `0.12.1`; published checksums are recorded in
+  [VERIFICATION.md](VERIFICATION.md) and below.
+- Release workflow succeeded: [run 45023428623](https://github.com/JuggyBob/AndroidForge/actions/runs/45023428623).
+
+Published asset checksums:
+
+```text
+23663c21218c3916c520edadf81f390af2a46c2ff8cb31693fa0ce7f7262fc09  androidforge-cli-windows-x86_64.zip
+0d808b6130543f990fb8bc92ce6603e6b43bae31b76c420406389379568447ed  androidforge-desktop-windows-x86_64.zip
+b7fbe33ada7334ded37027fa8229e84ac01441ea5bf1ffb24210d0fda70f2371  androidforge-windows-x86_64-setup.exe
+```
+
+GitHub release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.1>. A normal stable release,
+not a prerelease.
 
 ## [0.12.0] - 2026-11-22
 

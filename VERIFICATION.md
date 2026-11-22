@@ -30,8 +30,20 @@ Dependency and supply-chain patch for v0.12.0:
 
 ### Release publication
 
-Release publication details and published checksums are added after the tag and release workflow
-complete.
+- Release: <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.1>; title
+  **AndroidForge v0.12.1**; not a draft; **not a prerelease**; marked latest.
+- Tag: annotated `v0.12.1`, tag object `9f69a8611b029397d229656f8777b628f0d6815d`, commit
+  `fa98e0f480d336d5c279d4b0666f51bc04c128e1`.
+- Release workflow: [run 45023428623](https://github.com/JuggyBob/AndroidForge/actions/runs/45023428623),
+  success.
+- Assets: `androidforge-cli-windows-x86_64.zip`, `androidforge-desktop-windows-x86_64.zip`,
+  `androidforge-windows-x86_64-setup.exe`, `SHA256SUMS.txt`.
+- Published checksums:
+  - `23663c21218c3916c520edadf81f390af2a46c2ff8cb31693fa0ce7f7262fc09` CLI ZIP
+  - `0d808b6130543f990fb8bc92ce6603e6b43bae31b76c420406389379568447ed` portable desktop ZIP
+  - `b7fbe33ada7334ded37027fa8229e84ac01441ea5bf1ffb24210d0fda70f2371` installer
+- v0.12.0 remains published as the feature release but is superseded by v0.12.1 for the dependency
+  fix. Its release body was updated to point users to v0.12.1.
 
 ## v0.12.0 verification (2026-11-22)
 
