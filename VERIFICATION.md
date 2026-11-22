@@ -165,8 +165,28 @@ intact and a legitimate `tools_status` call still succeeds, while `androidforge_
 
 ### Release publication
 
-Release publication details and published checksums are added after the tag and release workflow
-complete.
+- Tag `v0.13.0` points at release commit `88fd9f7`; published as a normal (non-prerelease) release on
+  2026-11-22T17:08:50Z at <https://github.com/JuggyBob/AndroidForge/releases/tag/v0.13.0>. GitHub's
+  latest-release endpoint returns `v0.13.0` with `prerelease=false`, `draft=false`.
+- Release workflow `Release` (run `45047126780`) completed successfully in 7m15s and uploaded:
+  - `androidforge-cli-windows-x86_64.zip` (7,194,755 bytes)
+    `9e214d938c1ae2ff8e8a846dc23f313fff98f4acde0a3c746ae8c174fb9fdfab`
+  - `androidforge-desktop-windows-x86_64.zip` (14,033,531 bytes)
+    `77168f86948322535661f8ee6b1b1555b28e0ba62fb5525e0127fbace5ddea9f`
+  - `androidforge-windows-x86_64-setup.exe` (10,608,498 bytes)
+    `42a5ea03bf93bc4e9c26069b9073ca056662792de5faa4bf141e1b218977d348`
+  - `SHA256SUMS.txt` (315 bytes), SHA-256
+    `06befb15fd43ee3f363f3d39c31d26bbc8993e074c3f40d1524052b66e812461`, listing the three hashes
+    above.
+- Downloaded all four published assets into a fresh directory and recomputed every hash. All matched the
+  published `SHA256SUMS.txt`, the GitHub asset `digest` fields and the local recomputation; the extracted
+  CLI and desktop binaries reported `0.13.0`, the catalog exported 191 commands, the MCP schema exported
+  192 tools and the packaged CHANGELOG contained the v0.13.0 section. The installer was inspected
+  read-only (`FileVersion`/`ProductVersion` 0.13.0) and was not executed.
+- No screenshot asset was published; the v0.11.0 gallery remains the representative desktop gallery.
+- The Scoop manifest pins the published desktop ZIP version and hash. The installer was compiled with
+  Inno Setup 6.7.3; its version metadata and payload were verified, but a silent install/uninstall cycle
+  was not run on this host.
 
 ## v0.12.1 verification (2026-11-22)
 
