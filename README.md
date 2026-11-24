@@ -22,6 +22,8 @@ The same CLI binary runs every project. Project-specific behavior lives in `.and
 fixtures, hooks, conformance manifests and scripts. The Rust core contains no app names, package ids or
 project branches.
 
+![AndroidForge 1.0.0 desktop cockpit - tool database](docs/screenshots/v1.0.0/02-tool-database.png)
+
 ## Why this exists
 
 Agent-driven Android testing usually fails at the same places:
@@ -84,15 +86,14 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 ## Screenshots
 
 Real captures from the **v1.0.0** native desktop cockpit. This five-image gallery replaces the older
-v0.11.0 gallery. The three polished showcase pages are featured below; Setup and Overview also exist in
-the gallery but show the environment-validation state visible when they were captured. See
+v0.11.0 gallery. The Tool database capture is shown at the top of this README; Ownership and Failure
+triage are shown below. Setup and Overview also exist in the gallery but show the
+environment-validation state visible when they were captured. See
 [docs/screenshots/v1.0.0/README.md](docs/screenshots/v1.0.0/README.md) for all five images and notes.
 
-| Tool database | Ownership |
-| --- | --- |
-| [![Tool database](docs/screenshots/v1.0.0/02-tool-database.png)](docs/screenshots/v1.0.0/02-tool-database.png) | [![Ownership](docs/screenshots/v1.0.0/04-ownership.png)](docs/screenshots/v1.0.0/04-ownership.png) |
-| **Failure triage** | |
-| [![Failure triage](docs/screenshots/v1.0.0/05-triage.png)](docs/screenshots/v1.0.0/05-triage.png) | |
+![Ownership](docs/screenshots/v1.0.0/04-ownership.png)
+
+![Failure triage](docs/screenshots/v1.0.0/05-triage.png)
 
 ## What is new in v1.0.0
 
@@ -116,228 +117,7 @@ REDMAGIC UI automation and device actions are **NOT RUN**. Final asset hashes ar
 - **Release validation:** CI/release checks now fail on version drift, catalog/schema count drift and
   missing release content. Assets remain unsigned; verify `SHA256SUMS.txt`.
 
-## What is new in v0.13.0
-
-**Optional Maestro, a complete tool database and a 192-tool MCP surface.** The 0.13 line keeps the
-truthful verification work and adds discoverability, optional external tooling and a documented
-compatibility contract.
-
-- **Optional Maestro installer:** `tools install maestro` downloads the pinned, checksum-verified
-  Maestro CLI 2.12.1 Windows build, installs it under `%LOCALAPPDATA%\AndroidForge\tools\maestro`, and
-  `tools status` reports the active path/source. The desktop Setup → Environment page shows an Install
-  Maestro button, the active version/path and Copy path. Maestro remains optional and best-effort.
-- **Desktop Tool database:** a new sidebar page under Workspace, generated from the same clap parser as
-  the CLI. Search commands, arguments and help text; sort A-Z/Z-A; click a row to open a full detail page
-  with usage, examples, an argument table, safety classification and the generated MCP tool name, with a
-  slide/fade transition.
-- **Complete MCP surface:** the server now exposes 192 tools. Curated safety-reviewed tools keep their
-  friendly schemas; every other bounded, non-unsafe CLI leaf command is generated from
-  `tools catalog --json`. Raw `adb` and `run exec` are deliberately excluded, and generated tools skip
-  long-running catalog entries; the curated mock-server tool stays bounded by
-  `max_requests`/`duration`. Mutating generated tools require `confirm=true`; physical mutation cannot
-  be self-approved from the MCP JSON object.
-- **Compatibility policy:** [COMPATIBILITY.md](COMPATIBILITY.md) defines stable CLI/JSON/exit-code/
-  report/MCP surfaces, additive changes and the deprecation window. A new `tools-catalog.schema.json`
-  documents the catalog.
-- **Security hardening:** fail-closed physical-device classification, package-name validation for
-  external file paths, physical guards on app launch/broadcast/service/force-stop/kill, tar member
-  validation for app-data restore, bounded MCP execution/output, mock-server timeouts/connection caps,
-  redacted mock body logs, secure update staging and stricter release URL handling.
-- **Physical device validation:** install, verify, same-version `--only-if-changed`, UI observation/
-  screenshot/recording, out-of-band refresh and cleanup passed on the Xiaomi POCO X4 GT for an isolated
-  debug test package.
-
-## What is new in v0.12.0
-
-**Truthful Verification & Automation Gap Closure — the first stable (pre-1.0) release.** The main
-theme is refusing to report success unless the device actually proves it.
-
-- **Live install truth:** `session status` re-reads `pm path`/package metadata and persists the
-  refreshed build. An out-of-band `adb install -r` can no longer leave a stale installed hash.
-- **Byte-truthful `--only-if-changed`:** skips only when package, version code, base APK SHA-256 and
-  sorted split hashes all match. A same-version rebuilt APK with different bytes is installed.
-- **Verification commands:** `app verify-installed --apk`, and
-  `app status --expect-version-name/--expect-version-code/--expect-apk-sha256`.
-- **Compose tag support:** `--test-tag` aliases the accessibility resource id and gives an actionable
-  diagnostic when the app has not enabled `testTagsAsResourceId`.
-- **Gestures and waits:** configurable `ui long-press --duration`, `ui drag` with holds,
-  `--capture-mid`, `ui wait --for-text-gone/--for-idle/--for-stable`, and `ui assert-no-text`.
-- **App data fixtures:** `app data export/import/reset/seed`, with a pre-import backup and remote hash
-  verification after seeding.
-- **Network control:** `network reverse add/list/remove/clear`, plus a bounded local HTTP/TLS mock
-  server with inline/JSON routes, redacted request logs and optional automatic `adb reverse`.
-- **Visual regression:** `capture screenshot --compare` with full/region diffs, changed-pixel metrics,
-  diff bounding boxes and a diff PNG. `ui tap --capture-before/--capture-after` captures action evidence.
-- **Session hygiene:** `session list --mine --active` with active/busy/stale/released/failed/abandoned
-  classification, reasons and ages; `session gc --reclaim --dry-run` guidance without mutation.
-- **Truthful tests:** 347 workspace tests, strict clippy/fmt, no-device mock/TLS smoke and a full
-  disposable-emulator campaign covering install truth, gestures, data, reverse and visual comparison.
-
-## What is new in v0.11.0
-
-The desktop & agent-onboarding beta. The CLI contract is unchanged; this release makes the desktop
-cockpit substantially more usable and gives a finished setup a ready-to-send agent prompt.
-
-- **Complete visual overhaul:** GitHub-dark and light themes, consistent card gutters, rounded cards
-  and rows, thinner status pills with larger text, solid scrollbars, page slide-up transitions and a
-  gliding sidebar highlight.
-- **Setup → Agent Handoff:** the wizard gains an eighth and final step with a copyable prompt that
-  contains the full documentation paths, CLI executable, workspace and agent loop. Setup step changes
-  now fade/slide and the step-rail highlight glides.
-- **Settings as a page:** color-wheel accent picker, brightness slider, 33-font catalog including
-  embedded JetBrains Mono, live font previews, persistent theme/accent/font choices and a path block
-  with rounded Copy/Open actions.
-- **Recursive Inspector cards:** top-level hierarchy rows expand into cards of child rows, recursively,
-  with whole-row activation and an animated collapse.
-- **Row tables everywhere:** Sessions, Ownership, Runs, Overview and Inspector use raised rounded row
-  cards with a visibly lighter surface, aligned columns and consistent pills.
-- **Native desktop polish:** compact topbar Refresh with a painted icon and hover state; connection tag
-  matched to the Refresh height; compact clickable CLI card that opens a persistent console; light-mode
-  sidebar text is readable.
-- **Fixed:** `run resume --from-checkpoint` keeps a `failure_history` record when the previous attempt
-  ended in a failed terminal status without a structured step failure.
-- **Screenshots:** the release includes a 16-image gallery of the updated UI in
-  [`docs/screenshots/v0.11.0/`](docs/screenshots/v0.11.0/README.md) and a downloadable
-  `androidforge-screenshots-v0.11.0.zip` asset.
-
-## What is new in v0.10.0
-
-Seven agent-facing capabilities, delivered together:
-
-- **MCP server and tool export:** `androidforge mcp serve` runs a local stdio MCP server (JSON-RPC
-  2025-06-18). It exposes 40 tools and 29 resources, shells out to the same CLI, and refuses
-  destructive calls without `confirm=true`. `tools schema --format mcp|openai|json` exports the same
-  catalog for other function-calling clients.
-- **Selector v2 and OCR fallback:** selectors gain `--role`, `--text-regex`, `--region`, `--within`,
-  `--above`, `--below`, `--left-of` and `--right-of`. `--ocr-fallback` runs only when UIAutomator has
-  no match; OCR supports text, regex, region and index, and cannot pretend to prove resource IDs,
-  roles or relative relationships.
-- **Resumable runs and NDJSON events:** `run checkpoint`, `run resume --from-checkpoint`,
-  `run events [--follow]` and `report repro`. Failure history and resume counts are preserved in the
-  report; events are append-only `events.ndjson`.
-- **Logcat query and watch:** `diagnostics logcat query` returns structured threadtime records with
-  level, package, time and regex filters. `diagnostics logcat watch` streams log/crash/ANR events as
-  raw NDJSON with a bounded timeout.
-- **Generic intents and deep links:** `app launch --action/--data/--mime-type/--category/--extra/
-  --flag/--component/--wait/--force-stop`, plus `app broadcast` and `app service`. Extras use
-  `key:type:value` (`s`, `i`, `l`, `f`, `z`, `esa`, `eia`).
-- **Network profiles and proxy:** `network proxy get|set|clear`, `network profile list|apply` and
-  `network restore`. Profiles are honest (`default`, `offline`, `wifi-only`, `data-only`, `no-proxy`);
-  latency/loss simulation is not faked.
-- **Device waiting and parallel matrix:** `session ensure --wait --timeout` waits for a busy device
-  instead of failing immediately. `agent matrix --parallel N` runs one independent child matrix per
-  target, with late-binding port allocation and per-target reports. `--fail-fast` is best-effort:
-  already-running targets finish.
-
-## What is new in v0.9.4
-
-- **Uninstall confirmation:** `app uninstall` now requires `--yes`, matching `clear-data` and `data-restore`. `--dry-run` still previews without confirmation.
-- **Physical-device safety:** data-changing commands refuse physical devices unless `--allow-physical-mutation` is passed. Protected operations include install, uninstall, clear-data, file-push, data-restore, permission/AppOps changes, Doze/standby/battery/network/time changes, notification clearing and job triggers. Dry-runs report the requirement.
-- **Full-spectrum receipt effects:** action receipts collect complete actionable/context lists before classifying an effect, so a text or state change outside the compact cap is no longer reported as `no_visible_change`.
-- **Overlay dismissal:** `ui dismiss-overlays` safely clears the SystemUI immersive "Got it" overlay on fresh AVDs without tapping app content or permission decisions.
-- **Snapshot reliability:** the emulator's tabular snapshot list is parsed correctly, and snapshot save now waits for the asynchronous save to appear instead of failing immediately. AndroidForge-launched emulators still default to `-no-snapshot-save`; pass `--snapshot-save` to allow manual snapshots.
-- **Correct recording duration:** `capture record stop` reports the actual recording duration, not the time spent stopping and pulling the file.
-- **Crash-safe state writes:** Windows atomic state replacement uses `MoveFileExW` with replace/write-through semantics instead of removing the old file first.
-- **Privacy gate:** `report bundle --metadata-only` emits the manifest, summary and explanation without any run artifact.
-- **Repeatable harnesses:** `tests/long-horizon.ps1`, `tests/real-device.ps1`, `tests/upgrade-rollback.ps1`, `tests/fault-injection.ps1` and `tests/supply-chain.ps1` turn the ad-hoc certification work into local release gates.
-- **Supply-chain policy:** `deny.toml` and a CI job check advisories, licenses, wildcard dependencies and unknown sources; workspace packages now declare the MIT license.
-- **Documentation:** `session heartbeat` is documented as part of `session status`, and the real-device and long-horizon procedures are recorded in `docs/`.
-
-## What is new in v0.9.3
-
-- **Schema enforcement in tests:** `cargo test --workspace` now compiles every released JSON Schema with the `jsonschema` crate and validates real `context`, `agent brief`, `agent test`, observation, receipt, diff, performance, diagnosis and bundle payloads. The pass exposed and fixed two contract mismatches: `agent-test.run_id` is nullable before a run exists, and brief stages keep the schema-required `command_argv` field as an empty array.
-- **Strict adapter contract:** unknown fields in nested adapter sections and hook entries are rejected instead of silently ignored, matching the published schema. `config validate` and `context` now fail with `E_CONFIG_INVALID` and name the offending field.
-- **Bounded observation storage:** `[storage] observation_retention` (default 20, range 2-1000) controls how many observation records are kept per session. Token allocation, writes and pruning are serialized with a cross-process `StateLock`, so parallel commands cannot reuse a token or race retention.
-- **Empty hierarchy recovery:** a valid but empty UIAutomator hierarchy is treated as a transient capture failure and retried instead of being returned as a blank successful screen.
-- **Certification coverage:** the 26 checks that were `NOT RUN` in the v0.9.1/v0.9.2 certification record were exercised against a clean API 36 AVD, including session restart, warm/cold performance, flaky analysis, reconcile, JUnit import failure, bundle screenshot handling, mismatched adapters and a 10-cycle app soak.
-- **Desktop render gate:** `desktop/tests/smoke.ps1` launches all 15 pages, captures a screenshot per page, checks the window rendered, records the Windows UI Automation tree and invokes Refresh on overview. The v0.11.0 run covered 14 pages; v0.13 adds the Tool database page.
-- **Exit-code drift test:** `EXIT_CODES.md` is now checked against `ErrorCode::ALL`; `session stop` is documented as owner-guarded rather than `--yes`-guarded.
-- **Physical device:** not validated. The Poco X4 GT / HyperOS 2 device was not connected during this release, so item 4 is recorded as **BLOCKED** in [VERIFICATION.md](VERIFICATION.md), not passed.
-
-## What is new in v0.9.2
-
-- **Full-observation refs:** a context node marked `actionable_via: "ancestor"` now keeps that marker on its full-hierarchy copy, so `ui tap --ref` works with and without `--full`. Ref lookup prefers the compact context copy.
-- **Session project binding:** action commands refuse a session bound to another project with `E_SESSION_PROJECT_MISMATCH`; `context` ignores the foreign session and returns a warning instead of silently serving the wrong project.
-- **Honest hook results:** `hook run` now reports `verified` and `verification_state`. A hook without a `verify` block is `unverified` with an explicit note; the shipped IronPulse hooks now verify `CURRENT STREAK` and `Appearance`.
-- **Bounded logcat capture:** `diagnostics logcat start` follows from the current buffer tail (`-T 1`) and treats a capture that reaches its byte cap as completed rather than failed. `status` reports `completed` and `completed_reason: "max_bytes"`.
-- **Receipt clarity:** a satisfied postcondition with an empty semantic diff now carries evidence that the expected state may already have been visible before the action. CalcSuite's live preview means `=` is correctly `no_visible_change`.
-- **Certification:** independent v0.9.1 run: 192 PASS, 6 FAIL, 3 BLOCKED, 9 N/A, 26 NOT RUN. The five actionable product/adapter defects above were fixed and rechecked; the sixth was a test expectation, not a product defect.
-
-## What is new in v0.9.1
-
-- **Long-session reliability:** observation retention now evicts by recorded time, never deletes the observation just written, and fails explicitly if the store cannot evict. Refs are derived from node identity instead of the observation token, so unchanged nodes keep the same ref across repeated observations.
-- **Reference actions:** `ui tap`/`ui long-press` accept refs to context text inside a clickable ancestor and dispatch on that ancestor, matching `--text` behavior. Observations mark these nodes with `actionable_via: "ancestor"`.
-- **Selector diagnostics:** `--clickable` again matches a clickable ancestor, and `E_SELECTOR_NOT_FOUND` puts the requested label first and reports `visible_labels_total`/`visible_labels_truncated`.
-- **Failure taxonomy:** `element_reference` and `observation` are first-class diagnosis categories with targeted next actions; observation-store errors are no longer auto-resolved by an unrelated passing run.
-- **Consistent report selection:** `report explain` and `report bundle` share strict project scoping. `latest` is the newest completed run and `latest-failure` is the newest failed run.
-- **Evidence integrity:** bundle `manifest.json` records `checksums_verified:true` after a successful verification; performance results carry `run_id`, `run_dir` and artifact paths, and the brief summary includes the jank frame sample.
-- **Hook route proof:** hook verification supports `ui_text`, `ui_activity` and `ui_package`, so an ADB exit 0 cannot claim success when the app never reached the expected screen. The IronPulse example hooks use this.
-- **Brief agent test:** brief output keeps compact stage entries and `next_actions`.
-
-## What is new in v0.9.0
-
-- **Agent output profiles:** `--output-profile full|compact|brief`, `--compact`, `--brief`, `ANDROIDFORGE_PROFILE` and `[agent] profile`. Full output stays the default and unchanged. Compact minifies JSON, caps lists, drops optional repetition, and adds a one-line `summary` plus short `next` commands. Brief is the decision-oriented projection for context, `agent test`, `report explain` and performance.
-- **`agent brief`:** one small project/session/device/app/screen snapshot for the start of an agent turn, with the current observation token and next commands.
-- **Compact observations, receipts and diffs:** node lists are capped with explicit totals/truncation flags, optional node duplication is removed, and receipts keep effect/completeness/identity while dropping redundant payloads.
-- **Short handles and commands:** refs use 12 hex characters, observation tokens use 12 hex characters, and common commands have aliases (`ui o/d/t/w`, `app i/l`, `diagnostics perf`, `report why`, `agent b`, `context ctx`). Selector aliases include `--id`, `--desc` and `--token`.
-- **Measured reduction:** on an Android 16 emulator, the same Settings observation fell from 12,357 to 4,464 bytes compact (63.9%) and 3,015 bytes brief (75.6%); a performance report fell from 11,535 to 816 bytes brief (92.9%); `report explain` fell from 22,145 to 4,241 bytes brief (80.8%).
-
-## What is new in v0.8.0
-
-- **Split artifacts:** `app install` accepts a single APK, an explicit `--split` set, a split directory or an `.apks` archive. Split sets use `adb install-multiple`; archives are extracted exactly as provided without bundletool or automatic device targeting. Package and version identity are checked before any install; standalone/universal entries are never mixed into a split set.
-- **Split-aware identity:** `apk diff` compares sorted split SHA-256 values, `--only-if-changed` skips only when the base APK and the complete split set match, and unknown split identity never skips. `apk inspect`/`apk resolve` report artifact kind, split count, split hashes and archive SHA-256. `agent test --variant` compares installed split hashes before claiming the build is current.
-- **Refs for more actions:** `ui text`, `ui clear`, `ui scroll`, `ui wait` and `ui assert` accept `--ref` plus `--expect-token`. Text/clear require an editable field, scroll requires a scrollable node, and wait/assert may reference context text. Identity is re-checked before dispatch; stale or changed refs fail closed with no text or coordinate fallback.
-- **Performance evidence:** `diagnostics performance` measures startup (`am start -W`), frame jank (`gfxinfo`), memory (`meminfo`) and CPU (`cpuinfo`, with `/proc/<pid>/stat` sampling when needed). Cold startup requires the explicit `--cold` flag, every unavailable metric carries an unknown reason, and a `performance/report.json` artifact is written.
-- **Desktop:** the Inspector now has a performance panel with an explicit cold-start option and startup/jank/memory/CPU summaries.
-- **Version:** workspace, CLI, desktop, installer and compatibility version are `0.8.0`.
-
-## What is new in v0.7.1
-
-- The desktop Logcat panel now requests bounded read-only retries and displays the CLI retry attempt report. This is a patch to the v0.7.0 Matrix & Device Control line.
-
-## What is new in v0.7.0
-
-- **Sequential device matrix:** `agent matrix` plans and runs the same flow on multiple independent AVDs/serials, with one owned session per target, per-device health, artifacts, aggregate `passed`/`failed`/`partial` status, fail-fast and explicit cleanup. Parallel execution is rejected until validated.
-- **Stable semantic refs:** `ui observe` returns `ref` values. `ui tap --ref ... --expect-token ...` (and long-press) validates session, device, observation token and current node identity immediately before dispatch. Stale or changed refs fail closed without text/coordinate fallback.
-- **Wireless ADB and health:** `devices pair` (stdin-safe code), `connect`, `disconnect` and a read-only `devices health` report covering battery, thermal, storage, memory, network, screen, uptime and unknown reasons.
-- **Bounded read-only retries:** `--retries 0..5` on `ui observe`, fresh `ui diff` and logcat peek/tail, with transient classification, backoff, a 20-second window and transparent per-attempt results. No state-changing retries.
-- **Desktop:** Matrix page, per-device health and wireless controls, element-ref copy actions, action receipt details and stdin-backed pairing-code handling.
-
-## What is new in v0.6.0
-
-- **Action receipts:** `ui tap`, `ui long-press`, `ui text` and `ui scroll` accept `--receipt` / `--receipt-full`. One command returns before/after observation tokens, a compact semantic diff, focus/package/activity transitions, a deterministic effect classification, postcondition result and explicit completeness. The action is dispatched at most once.
-- **Failure recurrence memory:** `report recurrences`, `report history --fingerprint` and recurrence data in `report explain` classify failures as `new`, `recurring`, `regressed` or `unknown`. Memory is derived from existing local run reports; a passing run proves resolution only when it exercised the same project, scenario and failing step.
-- **APK/build resolution:** optional `[build.variants]` patterns, conventional Gradle output fallback, `apk resolve`, `agent test --variant`, `apk diff installed:<package>` and `app install --only-if-changed`. Resolution never runs Gradle and never claims equality from version strings alone.
-- **Diagnostic bundles:** `report bundle` creates a redacted, checksummed ZIP with summary, explanation, reproduction argv, evidence excerpts, bounded logcat, manifest and exclusion list. Markdown and JSON forms are available; screenshots/recordings and full logs are explicit opt-ins.
-- **Desktop integration:** new Context and Ownership pages, recurrence history in Triage, and a diagnostic-bundle inclusion preview/creation workflow driven entirely by the CLI.
-- **Safer persistence:** run reports now record the exact invocation argv when available; older reports remain readable and are marked as lacking exact reproduction data.
-
-## What is new in v0.5.0
-
-- **Honest pipeline status:** a failed `agent test` now returns envelope `status: "failed"` with its nonzero exit code, while preserving the full stage result. Blocked dry runs use `status: "blocked"`.
-- **Shared-host session acquisition:** `session ensure` avoids ports already used by connected emulators, adds `--port`, binds the project on start/attach, and no longer creates misleading failed tombstones for port collisions.
-- **UIAutomator recovery:** a stuck helper is detected, cleaned up and retried automatically; persistent failures use the specific `E_UI_AUTOMATOR_UNAVAILABLE` code.
-- **Better diagnosis:** `report explain` classifies UIAutomator infrastructure failures as `ui_automation`, prefers the newest failed run for `latest`, and searches current/ancestor artifact stores so project-scoped calls can find unprojected runs.
-- **Clearer observations:** `ui observe` now exposes `token`, separates interactive `actionable` nodes from non-interactive `context` text, always includes `clickable` and `enabled`, filters empty resource ids, and redacts password text.
-- **Smaller diffs:** `ui diff` returns compact node summaries capped at 12 per category by default; `--full` raises the cap to 100. Totals and truncation remain explicit.
-- **CLI/desktop polish:** `report list --all` discovers runs across artifact stores, selector errors suggest scrolling or `--clickable`, `doctor` counts active sessions instead of noisy tombstones, and the desktop answers `--help`/`--version` without opening its GUI.
-
-## What is new in v0.4.0
-
-- **`context`**: one compact snapshot of project, environment, owned session, device, app, screen and last run, plus exact next-action argv. Partial results and freshness are explicit.
-- **`report explain`**: deterministic failure category, confidence, evidence, stable fingerprint and exact next commands. No LLM, network or invented cause.
-- **`ui observe` and `ui diff`**: compact semantic observations with session-scoped, reboot-aware tokens; semantic added/removed/modified changes without pixel-noise.
-- **UI postconditions**: `--wait-for-text`, `--wait-for-value`, `--wait-for-package`, `--wait-for-activity`, `--wait-for-absent-text` and `--timeout` turn action-plus-verify into one command. Actions execute once.
-- **`session ensure`**: idempotent ownership-safe acquisition with warm-emulator attachment, project binding, advisory lease metadata and clear reconciliation.
-- **`doctor fix --plan`**: a strictly read-only repair plan with exact component names and commands. Nothing is installed or edited.
-- **`agent test`**: a transparent ensure/inspect/install/fixture/conformance/explain pipeline with `--dry-run`, stage timings, exact commands, failure evidence and no hidden destructive actions.
-- **Desktop integration**: Triage shows deterministic explanations and copyable next commands, Setup shows the read-only repair plan, Sessions shows lease and project binding.
-
-Previous desktop work from v0.3.0 is unchanged: setup, runs, triage, comparison, live logcat, device preview, semantic inspector, maintenance and update repair.
-
-Screenshots of the desktop application are in [`docs/screenshots/v0.3.0/`](docs/screenshots/v0.3.0/); the v0.7.0 desktop keeps the same design system with Context, Matrix, Ownership, health/wireless and receipt panels.
-
-![AndroidForge desktop overview](docs/screenshots/v0.3.0/overview-1280x720.png)
+For older releases, see [docs/release-notes/](docs/release-notes/).
 
 ## Requirements
 
