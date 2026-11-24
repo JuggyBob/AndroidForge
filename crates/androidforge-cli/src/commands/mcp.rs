@@ -638,6 +638,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "project": {"type": "string"},
                 "max": {"type": "integer", "minimum": 1, "maximum": 10},
                 "dry_run": {"type": "boolean"},
+                "confirm": {"type": "boolean", "description": "Required unless dry_run is true."},
             }),
             &["session"],
         ),
@@ -1266,29 +1267,77 @@ fn resource_definitions() -> Vec<Value> {
     resources
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum RequestLine {
+    Eof,
+    Ready,
+    Oversized,
+}
+
+/// Read one newline-delimited MCP request with a hard bound on retained bytes.
+///
+/// `take` keeps the allocation at `max_line + 1` bytes. If the newline was not
+/// part of the retained bytes, the remainder is consumed in small buffered
+/// chunks so the next read starts on the following line instead of the middle
+/// of the oversized request.
+fn read_request_line<R: BufRead>(
+    reader: &mut R,
+    buffer: &mut Vec<u8>,
+    max_line: usize,
+) -> Result<RequestLine> {
+    buffer.clear();
+    let read = reader
+        .by_ref()
+        .take(max_line as u64 + 1)
+        .read_until(b'\n', buffer)
+        .map_err(|error| ForgeError::internal(format!("could not read MCP stdin: {error}")))?;
+    if read == 0 {
+        return Ok(RequestLine::Eof);
+    }
+    if buffer.len() > max_line {
+        if buffer.last() != Some(&b'\n') {
+            loop {
+                let chunk = reader.fill_buf().map_err(|error| {
+                    ForgeError::internal(format!("could not read MCP stdin: {error}"))
+                })?;
+                if chunk.is_empty() {
+                    break;
+                }
+                if let Some(index) = chunk.iter().position(|byte| *byte == b'\n') {
+                    reader.consume(index + 1);
+                    break;
+                }
+                let length = chunk.len();
+                reader.consume(length);
+            }
+        }
+        buffer.clear();
+        return Ok(RequestLine::Oversized);
+    }
+    Ok(RequestLine::Ready)
+}
+
 pub fn serve_stdio() -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut reader = std::io::BufReader::new(stdin.lock());
     let mut buffer = Vec::new();
+    const MAX_REQUEST_LINE: usize = 16 * 1024 * 1024;
     loop {
-        buffer.clear();
-        let read = reader
-            .read_until(b'\n', &mut buffer)
-            .map_err(|error| ForgeError::internal(format!("could not read MCP stdin: {error}")))?;
-        if read == 0 {
-            break;
-        }
-        if buffer.len() > 16 * 1024 * 1024 {
-            write_response(
-                &mut stdout,
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": Value::Null,
-                    "error": {"code": -32700, "message": "MCP request line exceeded the 16 MiB limit"}
-                }),
-            )?;
-            continue;
+        match read_request_line(&mut reader, &mut buffer, MAX_REQUEST_LINE)? {
+            RequestLine::Eof => break,
+            RequestLine::Oversized => {
+                write_response(
+                    &mut stdout,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": Value::Null,
+                        "error": {"code": -32700, "message": "MCP request line exceeded the 16 MiB limit"}
+                    }),
+                )?;
+                continue;
+            }
+            RequestLine::Ready => {}
         }
         let line = match std::str::from_utf8(&buffer) {
             Ok(line) => line,
@@ -1742,17 +1791,27 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             push_selector(&mut argv, arguments);
         }
         "androidforge_ui_dismiss_overlays" => {
+            let dry_run = arg_bool(arguments, "dry_run");
+            if !dry_run && !arg_bool(arguments, "confirm") {
+                return Err(
+                    "androidforge_ui_dismiss_overlays is a device-mutation command and requires confirm=true"
+                        .to_string(),
+                );
+            }
             argv.extend([
                 "ui".to_string(),
                 "dismiss-overlays".to_string(),
                 "--json".to_string(),
             ]);
             push_global(&mut argv, arguments);
+            if !dry_run {
+                argv.push("--yes".to_string());
+            }
             if let Some(max) = arguments.get("max").and_then(Value::as_u64) {
                 argv.push("--max".to_string());
                 argv.push(max.to_string());
             }
-            if arg_bool(arguments, "dry_run") {
+            if dry_run {
                 argv.push("--dry-run".to_string());
             }
         }
@@ -2658,6 +2717,91 @@ mod tests {
     use super::*;
 
     #[test]
+    fn oversized_stdin_line_is_discarded_and_stream_resynchronizes() {
+        const MAX: usize = 32;
+        let first = b"{\"id\":1}\n";
+        let oversized = vec![b'x'; MAX + 100];
+        let second = b"{\"id\":2}\n";
+        let mut stream = Vec::new();
+        stream.extend_from_slice(first);
+        stream.extend_from_slice(&oversized);
+        stream.push(b'\n');
+        stream.extend_from_slice(second);
+
+        // A deliberately tiny BufReader forces the discard loop to cross
+        // several fill_buf boundaries before it finds the oversized newline.
+        let mut reader = std::io::BufReader::with_capacity(16, std::io::Cursor::new(stream));
+        let mut buffer = Vec::new();
+
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Ready
+        );
+        assert_eq!(buffer, first);
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Oversized
+        );
+        assert!(
+            buffer.len() <= MAX + 1,
+            "oversized input must not be retained"
+        );
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Ready
+        );
+        assert_eq!(
+            buffer, second,
+            "the next request must not be desynchronized"
+        );
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Eof
+        );
+    }
+
+    #[test]
+    fn oversized_line_with_newline_in_window_still_resynchronizes() {
+        const MAX: usize = 16;
+        let mut stream = vec![b'x'; MAX];
+        stream.push(b'\n');
+        stream.extend_from_slice(b"{\"id\":3}\n");
+        let mut reader = std::io::BufReader::new(std::io::Cursor::new(stream));
+        let mut buffer = Vec::new();
+
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Oversized
+        );
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Ready
+        );
+        assert_eq!(buffer, b"{\"id\":3}\n");
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Eof
+        );
+    }
+
+    #[test]
+    fn unterminated_oversized_line_ends_cleanly() {
+        const MAX: usize = 8;
+        let stream = vec![b'x'; MAX + 50];
+        let mut reader = std::io::BufReader::with_capacity(4, std::io::Cursor::new(stream));
+        let mut buffer = Vec::new();
+
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Oversized
+        );
+        assert_eq!(
+            read_request_line(&mut reader, &mut buffer, MAX).unwrap(),
+            RequestLine::Eof
+        );
+    }
+
+    #[test]
     fn every_tool_has_a_name_description_and_schema() {
         let tools = tool_definitions();
         assert!(tools.len() >= 12);
@@ -2865,7 +3009,7 @@ mod tests {
     fn matrix_serial_array_is_forwarded() {
         let argv = tool_argv(
             "androidforge_agent_matrix",
-            &json!({"serial": ["emulator-5554", "emulator-5556"]}),
+            &json!({"serial": ["emulator-5554", "emulator-5556"], "confirm": true}),
         )
         .unwrap();
         assert_eq!(
@@ -2880,7 +3024,7 @@ mod tests {
 
         let single = tool_argv(
             "androidforge_agent_matrix",
-            &json!({"serial": "emulator-5554"}),
+            &json!({"serial": "emulator-5554", "confirm": true}),
         )
         .unwrap();
         assert_eq!(
@@ -2904,19 +3048,31 @@ mod tests {
 
     #[test]
     fn generated_mutating_tools_require_confirmation() {
-        let error =
-            tool_argv("androidforge_session_stop", &json!({"session": "ses-1"})).unwrap_err();
-        assert!(error.contains("confirm=true"), "{error}");
-
-        let error = tool_argv(
-            "androidforge_app_data_restore",
-            &json!({"package": "com.example", "path": "backup.tar"}),
-        )
-        .unwrap_err();
-        assert!(error.contains("confirm=true"), "{error}");
-
-        let error = tool_argv("androidforge_doze_unforce", &json!({})).unwrap_err();
-        assert!(error.contains("confirm=true"), "{error}");
+        for (name, arguments) in [
+            ("androidforge_session_stop", json!({"session": "ses-1"})),
+            (
+                "androidforge_app_data_restore",
+                json!({"package": "com.example", "path": "backup.tar"}),
+            ),
+            ("androidforge_doze_unforce", json!({})),
+            ("androidforge_test_maestro", json!({"flow": "flow.yaml"})),
+            (
+                "androidforge_test_instrumentation",
+                json!({"package": "com.example.test"}),
+            ),
+            ("androidforge_snapshot_save", json!({"name": "snap"})),
+            (
+                "androidforge_standby_set",
+                json!({"package": "com.example", "bucket": "active"}),
+            ),
+            ("androidforge_agent_test", json!({})),
+            ("androidforge_agent_matrix", json!({})),
+            ("androidforge_notifications_tap", json!({})),
+            ("androidforge_ui_dismiss_overlays", json!({})),
+        ] {
+            let error = tool_argv(name, &arguments).unwrap_err();
+            assert!(error.contains("confirm=true"), "{name}: {error}");
+        }
 
         let argv = tool_argv(
             "androidforge_session_stop",

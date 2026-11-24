@@ -557,7 +557,7 @@ async fn run_verification(
         match verification_once(config, adb, session, run, verify, trace).await {
             Ok(after) => {
                 last_output = after.clone();
-                let changed = before.as_deref() != Some(after.as_str());
+                let changed = verification_changed(before.as_deref(), &after);
                 let contains = verify
                     .expect_contains
                     .as_deref()
@@ -710,6 +710,10 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+fn verification_changed(before: Option<&str>, after: &str) -> bool {
+    before.is_some_and(|before| before != after)
+}
+
 fn truncate(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         value.to_string()
@@ -721,6 +725,13 @@ fn truncate(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn must_change_requires_a_before_snapshot() {
+        assert!(!verification_changed(None, "after"));
+        assert!(!verification_changed(Some("same"), "same"));
+        assert!(verification_changed(Some("before"), "after"));
+    }
 
     #[test]
     fn expands_environment_references() {

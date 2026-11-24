@@ -1,14 +1,186 @@
 # Changelog
 
 All notable changes to AndroidForge are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses semantic versioning
-within its pre-1.0 release line.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses semantic versioning;
+the 1.0 line is the supported stable contract. Historical pre-1.0 entries are preserved unchanged.
 
 ## [Unreleased]
 
+No unreleased changes. See [1.0.0](#100---2026-11-24) for the current release.
+
+## [1.0.0] - 2026-11-24
+
+**The first 1.0 stable release.** It closes the pre-1.0 contract and safety gaps with explicit breaking
+changes, JSON fixture manifests, stronger redaction, the official Android robot icon with third-party
+notices, and a release-validation gate. Envelope and report schema stay at `1`. Host gate, packaging
+inspection and the two-ROM scope are recorded below: POCO X4 GT full approved upgrade/UI plus REDMAGIC
+zero-touch read-only coverage. REDMAGIC UI automation and device actions are **NOT RUN**. See
+[v1.0.0 release notes](docs/release-notes/v1.0.0.md).
+
+### Added
+
+- **JSON fixture manifests:** `.json` and `fixture.json` are discovered alongside TOML fixtures, and
+  malformed JSON is reported instead of silently skipped.
+- **JSON and mock query redaction:** JSON-style key/value secrets and mock-server query strings are
+  redacted like headers and bodies in reports and request logs.
+- **Official robot icon and notices:** the Android robot with hard hat and wrench is the documented
+  application icon; `THIRD_PARTY_NOTICES.md` records the Android/Lucide/font attribution and the two
+  font OFL license texts ship in the portable ZIP and installer.
+- **Release and validation notes:** `docs/release-notes/v1.0.0.md` adds the 1.0 narrative, breaking
+  changes, upgrade notes and the physical-ROM verification checklist; CI and the release workflow now
+  fail on version drift, catalog/schema count drift and missing release content.
+- **Fresh v1.0.0 desktop gallery:** five native cockpit captures in `docs/screenshots/v1.0.0/`,
+  published as `androidforge-screenshots-v1.0.0.zip` when the screenshot ZIP is produced.
+
+### BREAKING CHANGES
+
+- **`notifications clear` requires a selector:** a package/id/tag/title/text selector is now mandatory;
+  the old "clear everything by default" behavior is removed. Scripts must name what they clear.
+- **More MCP tools require `confirm=true`:** `agent test`, `agent matrix`, `notifications tap`,
+  `ui dismiss-overlays`, `test maestro`, `test instrumentation` and `conformance run` are now
+  device-mutating, in addition to the previously gated tools. MCP callers must pass `confirm=true`.
+- **`snapshot save` / `standby set` reclassified:** these moved from `read-only` to `device-mutation`;
+  generated MCP wrappers now require `confirm=true`.
+- **Physical-device mutation guards:** `devices prepare`/`devices restore` and `conformance run` now
+  enforce `--allow-physical-mutation`; `test maestro`, `test instrumentation` and `conformance run`
+  require the same guard. MCP strips `allow_physical_mutation`, so physical use fails closed.
+- **`emulator status` rejects non-emulator serials** instead of silently reporting a connected physical
+  device. Use `devices inspect` for physical devices.
+- **`finalize_pass` fails a `Running` step** instead of reporting it as passed with failed steps.
+- **Strict conformance schema `oneOf`:** script/maestro/fixture flows no longer accept each other's
+  fields (for example `timeout_secs` only applies where supported). Conformance `version` remains `1`.
+- **`--run` warns when no step is appended** instead of silently producing an empty passed run.
+- **Generated MCP tools forward `--yes`** to the underlying CLI, so confirmed generated calls no
+  longer fail on a missing confirmation flag.
+
+**Migration and operational impact:** no state-file or report migration is required. Sessions, adapters,
+reports and artifacts remain readable and keep schema version `1`. Automation that relied on selector-
+free notification clearing, on `emulator status` against a physical serial, on implicit `read-only`
+classification of `snapshot save`/`standby set`, or on MCP calls without `confirm=true` must be updated
+before upgrading. Re-run affected flows after upgrade; existing report artifacts remain valid.
+
 ### Changed
 
-- Nothing yet.
+- Desktop icon is now the official Android robot wearing a compact hard hat between its antennae and
+  holding a wrench. The SVG is the source of truth; see `THIRD_PARTY_NOTICES.md` for attribution.
+
+### Fixed
+
+- `logcat watch --package` now keeps the package's process logs plus lines mentioning the package name,
+  matching `logcat query`. When the package is absent, it falls back to name matching and emits a note
+  on stderr.
+- `app status --expect-version-name/--expect-version-code/--expect-apk-sha256` now reports
+  `E_PACKAGE_NOT_FOUND` when the package is absent, including on vendor builds where `pm path` exits
+  non-zero for a missing package.
+- `notifications clear` now requires a package/id/tag/title/text selector instead of clearing every
+  notification by default and reports partial progress on failure. The selector-required error still
+  references `notifications tap` as the way to interact with a specific notification; it is not a
+  substitute for naming what to clear.
+- Fixture discovery/loading now accepts `.json` and `fixture.json` alongside TOML, and malformed JSON
+  fixtures are reported rather than silently ignored.
+- Recording stop verifies the remote `screenrecord` command line and unique output path before SIGINT;
+  emulator stop verifies the host process image name before `taskkill`. PID reuse now fails closed.
+- The clear-probe path now revalidates focus and field identity, moves to the end before probing, and
+  refuses to treat focus loss as a successful clear.
+- `ui text` accepts the requested text when an editable field replaces its hint/placeholder text, and
+  probes once after a clear to distinguish a revealed hint from real leftover text; real appends are
+  still verified.
+- `conformance.schema.json` now uses a `oneOf` for script/maestro/fixture flows so `timeout_secs` is
+  advertised only for the flow types that support it.
+- Redaction now catches JSON-style `"token":"..."` and similar key/value secrets, and mock-server
+  query strings are redacted like bodies and headers.
+- App-private push paths are shell-quoted before `run-as ... sh -c`, closing device-side command
+  injection through file names; control characters are rejected.
+- Device preparation records each previous setting before mutating it, so a failed verification still
+  leaves a restore path.
+- Hook `must_change` can no longer pass when the before-snapshot failed; a missing before state counts
+  as unchanged.
+- Session GC and prune run under the global state lock, preventing concurrent operation/lease updates
+  from being overwritten.
+- `.apks` loading rejects an entry whose declared size exceeds the 2 GiB bound before reading or
+  writing its payload; extraction reads through a bounded reader.
+- UI scroll/tap reject negative bounds instead of wrapping them to huge device coordinates.
+- Device-lock filenames percent-encode unsafe serial characters, so distinct serials cannot collide.
+  Locks written by 0.13 with `_`-encoded serials are still honored for ownership, release and GC after
+  upgrading to `%XX` encoding, so an active legacy session cannot be bypassed or stolen.
+- Unreadable device-lock files now fail closed with `E_DEVICE_BUSY` and manual-cleanup guidance instead
+  of being deleted, so an unreadable primary lock cannot remove a colliding legacy lock belonging to
+  another serial.
+- `finalize_pass` reports a failed run instead of a passed run with failed steps.
+- `agent test`, `agent matrix`, `notifications tap` and `ui dismiss-overlays` are classified
+  device-mutating; `devices prepare`/`devices restore` and `conformance run` now enforce the physical
+  mutation guard.
+- `--run` now emits a warning when the selected command does not append a step, instead of silently
+  producing an empty passed run.
+- `test maestro`, `test instrumentation` and `conformance run` now require the physical-device mutation
+  guard; the first two are also classified `device-mutation`, so MCP callers must pass `confirm=true`.
+  MCP still strips `allow_physical_mutation`, making physical use fail closed.
+- `snapshot save` and `standby set` are classified `device-mutation` instead of `read-only`.
+- MCP stdio rejects oversized request lines before allocation with bounded buffering and resynchronizes
+  at the next newline instead of parsing the remaining bytes as a new request.
+- `emulator status` rejects non-emulator serials instead of silently reporting the connected physical
+  device.
+- `report explain` maps `E_IME_VISIBLE` to UI automation with a `ui back --hide-keyboard` next action.
+- Desktop evidence images are capped at 32 MiB before decoding; updater downloads are HTTPS-only.
+- Added font OFL notices and shipped the font license texts in the portable ZIP and installer.
+
+### Compatibility
+
+- Envelope (`schema_version`) and run report schema remain `1`; v0.13 and older reports stay readable.
+- The desktop requires an exact CLI version match (`1.0.0`) and refuses a mismatched CLI.
+- Supported host matrix is Windows 10/11 x86_64 only; Linux and macOS are not validated.
+- Release binaries are unsigned. Verify `SHA256SUMS.txt` and expect SmartScreen warnings.
+- Maestro remains optional and best-effort; physical-device mutation is excluded from MCP self-service.
+
+### Validation
+
+- **Full host gate passed after the final lock fix:** `cargo fmt --all -- --check` and strict clippy
+  (`-D warnings`) clean; `cargo test --workspace --locked` **392 passed / 0 failed** across 27 suites
+  (including 4 new unreadable-lock tests); `cargo deny` clean; release build clean. CLI and desktop
+  both report `1.0.0`; 191 catalog commands, 192 MCP tools (also confirmed by MCP `initialize` and
+  `tools/list`) and 31/31 schemas.
+- **Packaged assets and installer:** final hashes matched `dist/SHA256SUMS.txt`; installer
+  `FileVersion`/`ProductVersion` `1.0.0`; ZIPs contained all required docs/notices/fonts; extracted CLI
+  and desktop both `1.0.0`; silent install/uninstall exit 0, installed EXE hashes matched
+  `target/release`, install directory removed and registry/Start Menu clean. Final hashes are recorded
+  in the v1.0.0 release notes.
+- **POCO X4 GT / HyperOS 2 / Android 14 (API 34):** approved in-place IronPulse 5.1.0/code 15 →
+  5.1.2/code 17 with `decision: installed`, `reason: content_different`, same debug certificate and
+  installed base APK SHA-256 `2321cd4619e65502409f9d2f87fceff2cdbcc1c576732948b242edfa74c235e4`;
+  `app verify-installed` matched and all expectations passed. Data preserved (65 files / 2389 KB before
+  and immediately after; 66 files / 2373 KB after launch), package and settings counts unchanged,
+  foreground launch, 84-node observation with 29 clickable matches, screenshot/recording evidence and
+  clean session release.
+- **REDMAGIC 10 Pro / RedMagicOS 11.0.6_EU / Android 16 (API 36):** 8/8 zero-touch read-only checks
+  passed (`doctor` warnings non-blocking, `devices inspect`, `devices health`, `app list` 438 packages,
+  `app status` 5.1.2/code 17, `notifications list`, bounded `logcat peek`, screenshot). Before/after
+  `pm list packages`, `settings global`, `settings secure`, `/data/local/tmp`, `getprop` and `df` were
+  identical; no session was created and no app was launched or modified. Screenshot SHA-256
+  `cfa4b6d356132645115fd322ea72e3e5b3fe39ef9fb6ed2511e9c82186568148`. **REDMAGIC UI automation and
+  all device actions are NOT RUN** by the explicit zero-touch rule. Emulator evidence remains
+  baseline/supporting only; full details are in `VERIFICATION.md`.
+- Static release gates are in place: CI and release workflows compare `Cargo.toml`, `androidforge
+  --version` and installer `ProductVersion`, check catalog counts (191 commands / 192 MCP tools /
+  31 schemas), and require `THIRD_PARTY_NOTICES.md`, both font OFL files and `docs/release-notes/v1.0.0.md`.
+
+### Known limitations
+
+- Maestro is optional/best-effort; physical-device Maestro flows and a real instrumentation test APK
+  remain unvalidated. Vendor ROM mutation flows remain best-effort.
+- `logcat watch --package` samples package PIDs at startup; if the app restarts mid-stream, name
+  matching is the fallback. This is also documented in `logcat watch --package --help`.
+- Physical-device mutation is deliberately excluded from MCP self-service.
+- Snapshot restore, root-only time changes, macOS/Linux hosts and code signing remain unverified.
+- The Scoop manifest pins the final v1.0.0 desktop ZIP hash. REDMAGIC UI automation and device actions
+  are NOT RUN by the zero-touch rule.
+
+### Release assets
+
+- `androidforge.exe` and `androidforge-desktop.exe` — standalone CLI and desktop cockpit executables,
+  byte-identical to the copies inside the ZIPs and installer. Keep them adjacent for the desktop.
+- `androidforge-cli-windows-x86_64.zip`, `androidforge-desktop-windows-x86_64.zip` and
+  `androidforge-windows-x86_64-setup.exe` — CLI-only, portable desktop + CLI + docs, and per-user installer.
+- `SHA256SUMS.txt` — SHA-256 for every published asset, including the two standalone executables.
 
 ## [0.13.0] - 2026-11-22
 
@@ -1147,7 +1319,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v1.0.0
 [0.13.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.13.0
 [0.12.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.1
 [0.12.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.0

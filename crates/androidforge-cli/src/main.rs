@@ -138,6 +138,12 @@ async fn run() -> i32 {
             if success.duration_ms == 0 {
                 success.duration_ms = started.elapsed().as_millis() as u64;
             }
+            if cli.run.is_some() && success.run_id.is_none() {
+                eprintln!(
+                    "[androidforge] warning: --run was provided but {} did not append a step",
+                    success.command
+                );
+            }
             compact::apply_success(&mut success, plan);
             let exit_code = success.exit_code;
             if let Err(error) = emit_success(output.clone(), &success) {
@@ -155,6 +161,13 @@ async fn run() -> i32 {
             exit_code
         }
         Err(mut error) => {
+            let used_run = error.body().context.contains_key("run_id");
+            if cli.run.is_some() && !used_run {
+                eprintln!(
+                    "[androidforge] warning: --run was provided but {} did not append a step",
+                    command_name
+                );
+            }
             compact::apply_error(&mut error, plan);
             let duration = started.elapsed().as_millis() as u64;
             let session = error.body().session_id.clone();

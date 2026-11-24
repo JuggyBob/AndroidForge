@@ -20,6 +20,11 @@ use crate::apk::{ApkInfo, ApkInspector};
 const MAX_ARCHIVE_APKS: usize = 200;
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// Reject an entry based on its declared size before reading any payload.
+fn declared_size_exceeds_limit(declared: u64, total: u64) -> bool {
+    declared > MAX_ARCHIVE_BYTES.saturating_sub(total)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApkArtifactKind {
@@ -317,7 +322,7 @@ impl ApkArtifact {
         let mut total = 0u64;
         let mut extracted_entries = Vec::new();
         for index in 0..zip.len() {
-            let mut entry = zip.by_index(index).map_err(|error| {
+            let entry = zip.by_index(index).map_err(|error| {
                 ForgeError::new(
                     ErrorCode::ApkInvalid,
                     format!("could not read .apks entry {index}: {error}"),
@@ -339,20 +344,29 @@ impl ApkArtifact {
             extracted += 1;
             let target = temp.path().join(format!("{:03}-{safe_name}", extracted));
             extracted_entries.push((target.clone(), file_name_of_entry(&entry_name).to_string()));
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).map_err(|error| {
-                ForgeError::new(
-                    ErrorCode::ApkInvalid,
-                    format!("could not extract {entry_name}: {error}"),
-                )
-            })?;
-            total = total.saturating_add(bytes.len() as u64);
-            if total > MAX_ARCHIVE_BYTES {
+            let declared = entry.size();
+            let remaining = MAX_ARCHIVE_BYTES.saturating_sub(total);
+            if declared_size_exceeds_limit(declared, total) {
                 return Err(ForgeError::new(
                     ErrorCode::ApkInvalid,
                     ".apks archive exceeds the 2 GiB size limit",
                 ));
             }
+            let mut bytes = Vec::new();
+            let mut limited = entry.take(remaining.saturating_add(1));
+            limited.read_to_end(&mut bytes).map_err(|error| {
+                ForgeError::new(
+                    ErrorCode::ApkInvalid,
+                    format!("could not extract {entry_name}: {error}"),
+                )
+            })?;
+            if bytes.len() as u64 > remaining {
+                return Err(ForgeError::new(
+                    ErrorCode::ApkInvalid,
+                    ".apks archive exceeds the 2 GiB size limit",
+                ));
+            }
+            total = total.saturating_add(bytes.len() as u64);
             std::fs::write(&target, &bytes).map_err(|error| {
                 ForgeError::new(
                     ErrorCode::ArtifactWriteFailed,
@@ -612,7 +626,63 @@ fn sanitize_entry_name(name: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, Write};
+
     use super::*;
+
+    /// Build a tiny .apks whose central directory declares an oversized entry.
+    /// Only the 4-byte uncompressed-size field is patched, so the archive never
+    /// contains the claimed payload.
+    fn apks_with_declared_size(declared: u32) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file("splits/base-master.apk", options)
+            .unwrap();
+        writer.write_all(b"tiny payload").unwrap();
+        let cursor = writer.finish().unwrap();
+        let mut bytes = cursor.into_inner();
+
+        let header = [0x50, 0x4b, 0x01, 0x02]; // PK\x01\x02 central directory
+        let position = bytes
+            .windows(4)
+            .position(|window| window == header)
+            .expect("central directory header");
+        let size_at = position + 24;
+        bytes[size_at..size_at + 4].copy_from_slice(&declared.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn archive_declared_size_guard_enforces_remaining_budget() {
+        assert!(declared_size_exceeds_limit(MAX_ARCHIVE_BYTES + 1, 0));
+        assert!(!declared_size_exceeds_limit(MAX_ARCHIVE_BYTES, 0));
+        assert!(declared_size_exceeds_limit(2, MAX_ARCHIVE_BYTES - 1));
+        assert!(!declared_size_exceeds_limit(1, MAX_ARCHIVE_BYTES - 1));
+    }
+
+    #[tokio::test]
+    async fn apks_rejects_declared_size_above_limit_without_writing_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("oversized.apks");
+        std::fs::write(
+            &archive,
+            apks_with_declared_size((MAX_ARCHIVE_BYTES + 1) as u32),
+        )
+        .unwrap();
+        let inspector = ApkInspector::new(None, None, None, false);
+
+        let error = ApkArtifact::load_archive(&inspector, &archive)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ApkInvalid);
+        assert!(
+            error.message().contains("2 GiB"),
+            "unexpected error: {}",
+            error.message()
+        );
+    }
 
     #[test]
     fn archive_names_cannot_escape_the_temp_directory() {

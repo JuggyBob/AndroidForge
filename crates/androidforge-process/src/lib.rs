@@ -17,7 +17,7 @@ mod shell;
 
 pub use detached::{DetachedSpec, spawn_detached};
 pub use encoding::{decode_lossless, decode_text, looks_like_text};
-pub use process_util::{kill_tree, process_exists};
+pub use process_util::{kill_tree, process_exists, process_image_name};
 pub use runner::{CommandOutput, CommandSpec, ProcessError, ProcessResult, Runner};
 pub use shell::{escape_input_text, shell_quote, shell_quote_join};
 

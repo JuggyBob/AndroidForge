@@ -20,6 +20,50 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Validate release version and content
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          if ([string]::IsNullOrWhiteSpace($version)) { throw "No workspace version found in Cargo.toml" }
+
+          $iss = Get-Content packaging/windows/androidforge.iss -Raw
+          $patterns = @{
+            'MyAppVersion' = '#define MyAppVersion "([^"]+)"'
+            'VersionInfoVersion' = 'VersionInfoVersion=([^\r\n]+)'
+            'VersionInfoProductVersion' = 'VersionInfoProductVersion=([^\r\n]+)'
+            'VersionInfoTextVersion' = 'VersionInfoTextVersion=([^\r\n]+)'
+          }
+          foreach ($key in $patterns.Keys) {
+            $match = [regex]::Match($iss, $patterns[$key])
+            if (-not $match.Success) { throw "androidforge.iss is missing $key" }
+            $actual = $match.Groups[1].Value.Trim()
+            $expected = if ($key -eq 'VersionInfoVersion') { "$version.0" } else { $version }
+            if ($actual -ne $expected) { throw "androidforge.iss $key is '$actual', expected '$expected'" }
+          }
+
+          $scoop = Get-Content packaging/scoop/androidforge.json -Raw | ConvertFrom-Json
+          if ($scoop.version -ne $version) { throw "Scoop version '$($scoop.version)' != Cargo.toml version '$version'" }
+          $scoopUrl = $scoop.architecture.'64bit'.url
+          if ($scoopUrl -notlike "*v$version/*") { throw "Scoop URL '$scoopUrl' does not target v$version" }
+
+          $notes = "docs/release-notes/v$version.md"
+          if (-not (Test-Path $notes)) { throw "Missing release notes: $notes" }
+          $escaped = [regex]::Escape($version)
+          $changelog = Get-Content CHANGELOG.md -Raw
+          if ($changelog -notmatch "(?m)^## \[$escaped\]") { throw "CHANGELOG.md has no [$version] section" }
+          if ($changelog -notmatch "\[$escaped\]:") { throw "CHANGELOG.md has no [$version] link" }
+
+          $required = @('THIRD_PARTY_NOTICES.md', 'desktop/assets/fonts/OFL-Inter.txt', 'desktop/assets/fonts/OFL-JetBrainsMono.txt')
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing release content: $file" }
+          }
+          $packageScript = Get-Content packaging/package.ps1 -Raw
+          foreach ($name in @('THIRD_PARTY_NOTICES.md', 'OFL-Inter.txt', 'OFL-JetBrainsMono.txt')) {
+            if (-not $packageScript.Contains($name)) { throw "package.ps1 does not package $name" }
+            if (-not $iss.Contains($name)) { throw "installer does not package $name" }
+          }
+          Write-Host "Release content checks passed for v$version"
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -27,7 +71,7 @@ jobs:
       - name: Build and verify
         shell: pwsh
         run: |
-          cargo build --workspace --release
+          cargo build --locked --workspace --release
           if ($LASTEXITCODE -ne 0) { throw "release build failed" }
 
           $tag = $env:GITHUB_REF_NAME
@@ -44,6 +88,27 @@ jobs:
             throw "CLI reported '$cliVersion', expected 'androidforge $version'"
           }
 
+      - name: Catalog, MCP and schema drift check
+        shell: pwsh
+        run: |
+          $cli = ".\target\release\androidforge.exe"
+
+          $catalog = & $cli tools catalog --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "tools catalog failed" }
+          if ($catalog.PSObject.Properties.Name -contains 'result') { $catalog = $catalog.result }
+          $commands = @($catalog.commands).Count
+          if ($commands -ne 191) { throw "CLI catalog has $commands commands, expected 191" }
+
+          $tools = & $cli tools schema --format mcp --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "tools schema failed" }
+          if ($tools.PSObject.Properties.Name -contains 'result') { $tools = $tools.result }
+          $toolCount = @($tools.tools).Count
+          if ($toolCount -ne 192) { throw "MCP schema has $toolCount tools, expected 192" }
+
+          $schemas = @(Get-ChildItem schema -Filter *.json).Count
+          if ($schemas -ne 31) { throw "schema/ has $schemas JSON files, expected 31" }
+          Write-Host "Catalog drift check passed: $commands commands, $toolCount tools, $schemas schemas"
+
       - name: Package portable ZIP, installer and checksums
         shell: pwsh
         run: |
@@ -56,6 +121,41 @@ jobs:
             throw "portable ZIP was not produced"
           }
 
+      - name: Final gate - asset hashes (release only)
+        shell: pwsh
+        run: |
+          # Release-only: normal CI must stay green while hashes are pending in the freeze.
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          $sums = @(Get-Content dist/SHA256SUMS.txt)
+          $assets = @('androidforge-cli-windows-x86_64.zip', 'androidforge-desktop-windows-x86_64.zip', 'androidforge-windows-x86_64-setup.exe', 'androidforge.exe', 'androidforge-desktop.exe')
+
+          $scoop = Get-Content packaging/scoop/androidforge.json -Raw | ConvertFrom-Json
+          $scoopHash = [string]$scoop.architecture.'64bit'.hash
+          if ($scoopHash -notmatch '^[a-fA-F0-9]{64}$') {
+            throw "Scoop hash '$scoopHash' is not a 64-hex SHA-256; replace the pending placeholder before publishing v$version"
+          }
+
+          $notes = "docs/release-notes/v$version.md"
+          $notesRaw = Get-Content $notes -Raw
+          $rows = @(Get-Content $notes | Where-Object { $_ -match '^\|\s*`androidforge-' })
+          if ($rows.Count -lt 3) { throw "$notes has no complete final asset hash table" }
+          foreach ($row in $rows) {
+            if ($row -match 'PENDING') { throw "$notes still contains PENDING in the final asset hash table: $row" }
+          }
+
+          foreach ($asset in $assets) {
+            $line = $sums | Where-Object { $_ -match "\s+$([regex]::Escape($asset))$" } | Select-Object -First 1
+            if (-not $line) { throw "SHA256SUMS.txt has no entry for $asset" }
+            $hash = ($line -split '\s+')[0].Trim().ToLower()
+            if ($notesRaw -notmatch [regex]::Escape($hash)) {
+              throw "$notes does not contain the $asset hash from SHA256SUMS.txt"
+            }
+            if ($asset -eq 'androidforge-desktop-windows-x86_64.zip' -and $scoopHash.ToLower() -ne $hash) {
+              throw "Scoop hash '$scoopHash' does not match SHA256SUMS.txt '$hash'"
+            }
+          }
+          Write-Host "Final asset hash gate passed for v$version"
+
       - uses: actions/upload-artifact@v4
         with:
           name: androidforge-windows-x86_64-release
@@ -65,6 +165,8 @@ jobs:
             dist/androidforge-screenshots-*.zip
             dist/androidforge-windows-x86_64-setup.exe
             dist/SHA256SUMS.txt
+            target/release/androidforge.exe
+            target/release/androidforge-desktop.exe
           if-no-files-found: error
 
       - name: Create or update GitHub release
@@ -81,6 +183,8 @@ jobs:
             "dist/androidforge-desktop-windows-x86_64.zip"
             "dist/androidforge-windows-x86_64-setup.exe"
             "dist/SHA256SUMS.txt"
+            "target/release/androidforge.exe"
+            "target/release/androidforge-desktop.exe"
           )
           $screenshot = "dist/androidforge-screenshots-v$version.zip"
           if (Test-Path $screenshot) { $assets += $screenshot }

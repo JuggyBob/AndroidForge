@@ -14,6 +14,7 @@ AndroidForge is a local developer tool. It is not a sandbox and does not claim t
 - AndroidForge never reads keystores, signing passwords or `gradle.properties` secrets.
 - A fixture or hook value may reference `${ENV:NAME}`. The referenced value is resolved at run time and is not written to reports or artifacts.
 - Logcat, dumps and error output pass through redaction by default. Common token/password/authorization shapes are replaced with `[REDACTED]`; structural XML booleans such as `password="false"` are preserved.
+- Redaction also covers JSON-style `"token":"..."`-shaped key/value secrets and mock-server query strings, not just headers and bodies.
 - Redaction is best-effort. A secret embedded in an app's own custom log line can still escape if it does not match a known shape. Treat artifacts as sensitive test data.
 - Do not put secrets directly in `.androidforge/project.toml`, fixtures, hook actions or conformance scripts. Use environment references and a local secret manager.
 
@@ -49,6 +50,7 @@ Fixtures, hooks and conformance flows execute project-authored commands with the
 - AndroidForge stops only emulators it started, or an attached emulator when `--stop-attached` is explicit.
 - Do not "fix" `E_DEVICE_BUSY` by killing the emulator. Inspect sessions and reclaim only genuinely dead owners.
 - Physical devices may contain personal data. Use dedicated test devices or emulators, and prefer fixture-scoped app data.
+- Physical-device mutation is never self-service from MCP: `allow_physical_mutation` is stripped from MCP calls, and device-mutating MCP tools require `confirm=true`. Authorize physical mutation only in an explicit CLI invocation.
 
 ## Filesystem boundaries
 
@@ -73,8 +75,8 @@ Redact paths, serial numbers, package names and app data where possible.
 
 ## Supported versions
 
-AndroidForge is a pre-1.0 stable release line. Security fixes target the latest published release on `main`.
-Older pre-release builds may not receive fixes.
+AndroidForge is on the stable 1.0 release line. Security fixes target the latest published 1.0.x release
+on `main`. Older pre-1.0 builds may not receive fixes.
 
 ## Scope
 

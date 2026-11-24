@@ -49,7 +49,9 @@ The schema files:
 | `agent-brief.schema.json` | `agent brief` project/session/device/app/screen/last-run snapshot and next actions. |
 | `wireless.schema.json` | Wireless pair/connect/disconnect results (never pairing codes). |
 
-Every schema is versioned with `schema_version = 1`, `adapter_version = 1`, fixture `version = 1`, and conformance `version = 1`. Unknown adapter fields are rejected deliberately.
+Every schema is versioned with `schema_version = 1`, `adapter_version = 1`, fixture `version = 1`, and conformance `version = 1`. Unknown adapter fields are rejected deliberately. The 1.0 release does not bump the envelope or report schema: both remain `1`, so older readers and reports stay usable.
+
+Fixture manifests may be TOML or JSON: `fixture.toml`, `fixture.json` and `*.json` files are discovered and loaded, with malformed JSON reported as an error rather than skipped. `conformance.schema.json` uses a strict `oneOf` so flow-specific fields such as `timeout_secs` are advertised only for the flow types that support them; the conformance `version` remains `1`.
 
 ## Agent loop payloads
 

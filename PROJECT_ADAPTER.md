@@ -113,7 +113,8 @@ Unknown health metrics are reported with reasons and do not reject a target.
 ## Fixture format
 
 A fixture is a versioned manifest, either `.androidforge/fixtures/<name>.toml` or
-`.androidforge/fixtures/<name>/fixture.toml`.
+`.androidforge/fixtures/<name>/fixture.toml`. The equivalent `.json` / `fixture.json` forms are also
+accepted and validated against the same typed manifest.
 
 ```toml
 version = 1

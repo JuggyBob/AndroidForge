@@ -372,20 +372,33 @@ fn line_priority(line: &str) -> Option<u8> {
     }
 }
 
+/// Whether a single logcat line belongs to a package.
+///
+/// Both bounded collection (`logcat query`, diagnostics) and streaming
+/// (`logcat watch`) use the same predicate: keep the package's process lines
+/// plus lines that mention the package name. `pids` may be empty when the
+/// package is not running, in which case only name matches are kept.
+pub fn logcat_line_matches_package(
+    line: &str,
+    pid: Option<u32>,
+    package: &str,
+    pids: &[u32],
+) -> bool {
+    line.contains(package)
+        || line.starts_with("--------- beginning of")
+        || pid.is_some_and(|pid| pids.contains(&pid))
+}
+
 pub fn filter_logcat(raw: &str, package: &str, pids: &[u32]) -> String {
     let pid_pattern =
         Regex::new(r"^\S+\s+\S+\s+(\d+)\s+\d+\s+[VDIWEF]/").expect("valid logcat pid regex");
     let mut output = String::new();
     for line in raw.lines() {
-        let keep = line.contains(package)
-            || line.starts_with("--------- beginning of")
-            || pid_pattern
-                .captures(line)
-                .and_then(|captures| captures.get(1))
-                .and_then(|value| value.as_str().parse::<u32>().ok())
-                .map(|pid| pids.contains(&pid))
-                .unwrap_or(false);
-        if keep {
+        let pid = pid_pattern
+            .captures(line)
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<u32>().ok());
+        if logcat_line_matches_package(line, pid, package, pids) {
             output.push_str(line);
             output.push('\n');
         }
@@ -904,6 +917,52 @@ mod tests {
         assert!(filtered.contains("hello com.example"));
         assert!(filtered.contains("E/Tag: other"));
         assert!(!filtered.contains("unrelated"));
+    }
+
+    #[test]
+    fn package_filter_predicate_keeps_process_and_name_matches() {
+        let package = "com.example";
+        let process_line = "11-15 10:00:01.000  1234  1300 I/Tag: process log";
+        let named_line = "11-15 10:00:02.000  9999  1300 I/Tag: starting com.example";
+        let unrelated = "11-15 10:00:03.000  9999  1300 I/Tag: unrelated";
+
+        assert!(logcat_line_matches_package(
+            process_line,
+            Some(1234),
+            package,
+            &[1234]
+        ));
+        assert!(logcat_line_matches_package(
+            named_line,
+            Some(9999),
+            package,
+            &[1234]
+        ));
+        assert!(!logcat_line_matches_package(
+            unrelated,
+            Some(9999),
+            package,
+            &[1234]
+        ));
+        // A package that is not running has no PIDs; name matches still work.
+        assert!(logcat_line_matches_package(
+            named_line,
+            Some(9999),
+            package,
+            &[]
+        ));
+        assert!(!logcat_line_matches_package(
+            unrelated,
+            Some(9999),
+            package,
+            &[]
+        ));
+        assert!(logcat_line_matches_package(
+            "--------- beginning of main",
+            None,
+            package,
+            &[]
+        ));
     }
 
     #[test]

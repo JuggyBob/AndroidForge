@@ -323,8 +323,16 @@ impl UiManager {
 
     pub async fn tap_xy(&self, serial: &str, x: i32, y: i32) -> Result<Option<(u32, u32)>> {
         let display = self.display_size(serial, None).await;
+        if x < 0 || y < 0 {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                format!("tap coordinate ({x}, {y}) must be non-negative"),
+            )
+            .with_suggestion("Prefer semantic selectors such as --text or --resource-id.")
+            .device(serial.to_string()));
+        }
         if let Some((width, height)) = display
-            && (x < 0 || y < 0 || x >= width as i32 || y >= height as i32)
+            && (x >= width as i32 || y >= height as i32)
         {
             return Err(ForgeError::new(
                     ErrorCode::InvalidArgument,
@@ -610,8 +618,9 @@ impl UiManager {
             before_text = None;
         }
         let mut cleared = false;
+        let mut placeholder_unchanged = false;
         if clear {
-            cleared = self
+            (cleared, placeholder_unchanged) = self
                 .clear_focused_field(serial, &focused_node, &mut notes)
                 .await?;
         }
@@ -662,10 +671,19 @@ impl UiManager {
             } else {
                 format!("{}{}", before_text.clone().unwrap_or_default(), text)
             };
-            let placeholder_after_clear =
-                clear && text.is_empty() && focused_after.text_is_placeholder_after_clear();
-            if after_text.as_deref().unwrap_or("") == expected.as_str() || placeholder_after_clear {
+            let placeholder_after_clear = clear
+                && text.is_empty()
+                && (focused_after.text_is_placeholder_after_clear() || placeholder_unchanged);
+            let actual = after_text.as_deref().unwrap_or("");
+            if text_verification_matches(actual, text, &expected) || placeholder_after_clear {
                 verified = true;
+                if !clear && actual == text && !before_text.as_deref().unwrap_or("").is_empty() {
+                    let note =
+                        "the field replaced its existing/hint text; accepted the requested text";
+                    if !notes.iter().any(|existing| existing == note) {
+                        notes.push(note.to_string());
+                    }
+                }
                 if placeholder_after_clear && !after_text.as_deref().unwrap_or("").is_empty() {
                     let note = "the field exposes its hint/placeholder as text after clearing; treating it as empty";
                     if !notes.iter().any(|existing| existing == note) {
@@ -1091,6 +1109,14 @@ impl UiManager {
             )
         };
         let (x1, y1, x2, y2) = scroll_points(target, direction)?;
+        if [x1, y1, x2, y2].iter().any(|value| *value < 0) {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "scroll bounds produced a negative coordinate",
+            )
+            .with_suggestion("Re-observe the screen; the node bounds are malformed.")
+            .device(serial.to_string()));
+        }
         self.adb
             .input_swipe(serial, x1 as u32, y1 as u32, x2 as u32, y2 as u32, 350)
             .await?;
@@ -1127,6 +1153,14 @@ impl UiManager {
         }
         let target = node.bounds;
         let (x1, y1, x2, y2) = scroll_points(target, direction)?;
+        if [x1, y1, x2, y2].iter().any(|value| *value < 0) {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "scroll bounds produced a negative coordinate",
+            )
+            .with_suggestion("Re-observe the screen; the node bounds are malformed.")
+            .device(serial.to_string()));
+        }
         self.adb
             .input_swipe(serial, x1 as u32, y1 as u32, x2 as u32, y2 as u32, 350)
             .await?;
@@ -1411,19 +1445,19 @@ impl UiManager {
         serial: &str,
         node: &UiNode,
         notes: &mut Vec<String>,
-    ) -> Result<bool> {
+    ) -> Result<(bool, bool)> {
         let Some(current) = node.text.clone() else {
-            return Ok(false);
+            return Ok((false, false));
         };
         if current.is_empty() {
-            return Ok(false);
+            return Ok((false, false));
         }
         if node.text_is_hint() {
             notes.push(
                 "the field only contains its hint/placeholder; no deletion was necessary"
                     .to_string(),
             );
-            return Ok(false);
+            return Ok((false, true));
         }
         self.adb.keyevent(serial, "KEYCODE_MOVE_END", None).await?;
         let delete_count = if node.password {
@@ -1448,7 +1482,7 @@ impl UiManager {
         let focused_after = after.nodes.iter().find(|candidate| candidate.focused);
         if node.password {
             notes.push("password field cannot be read back after clearing".to_string());
-            return Ok(true);
+            return Ok((true, true));
         }
         if let Some(after_node) = focused_after {
             if after_node.text_is_placeholder_after_clear() {
@@ -1458,7 +1492,50 @@ impl UiManager {
                             .to_string(),
                     );
                 }
-                return Ok(true);
+                return Ok((true, true));
+            }
+            // Some apps expose a placeholder only as `text` and ignore the
+            // delete keys. If the text is byte-identical after clearing, treat
+            // it as a placeholder; the subsequent input verification still
+            // fails if the field was really holding user text.
+            if after_node.text.as_deref().unwrap_or("").is_empty() {
+                return Ok((true, true));
+            }
+            self.adb.keyevent(serial, "KEYCODE_MOVE_END", None).await?;
+            self.adb.keyevent(serial, "KEYCODE_DEL", None).await?;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let probe = self.dump(serial).await?;
+            let probe_node = probe.nodes.iter().find(|candidate| candidate.focused);
+            let Some(probe_node) = probe_node else {
+                return Err(ForgeError::new(
+                    ErrorCode::TextVerificationFailed,
+                    "focus was lost during the clear probe",
+                )
+                .with_suggestion("Tap the field again and retry.")
+                .device(serial.to_string()));
+            };
+            if probe_node.path != node.path
+                || probe_node.class != node.class
+                || probe_node.resource_id != node.resource_id
+            {
+                return Err(ForgeError::new(
+                    ErrorCode::TextVerificationFailed,
+                    "the focused field changed during the clear probe",
+                )
+                .with_suggestion("Tap the intended field again and retry.")
+                .device(serial.to_string()));
+            }
+            let probe_text = probe_node.text.clone();
+            if probe_text == after_node.text {
+                notes.push(
+                    "a probe delete did not change the remaining text; treating it as a placeholder"
+                        .to_string(),
+                );
+                return Ok((true, true));
+            }
+            if probe_text.as_deref().unwrap_or("").is_empty() {
+                notes.push("a probe delete cleared the remaining text".to_string());
+                return Ok((true, true));
             }
             return Err(ForgeError::new(
                 ErrorCode::TextVerificationFailed,
@@ -1483,6 +1560,10 @@ impl UiManager {
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn text_verification_matches(actual: &str, requested: &str, expected: &str) -> bool {
+    actual == expected || (!requested.is_empty() && actual == requested)
 }
 
 /// Find visible nodes whose text or content description contains one of the
@@ -1600,5 +1681,17 @@ mod tests {
         assert!(y1 > y2);
         let (_, y1, _, y2) = scroll_points(bounds, "up").unwrap();
         assert!(y1 < y2);
+    }
+
+    #[test]
+    fn text_verification_accepts_replaced_placeholder() {
+        assert!(text_verification_matches("query", "query", "Searchquery"));
+        assert!(text_verification_matches(
+            "Searchquery",
+            "query",
+            "Searchquery"
+        ));
+        assert!(!text_verification_matches("other", "query", "Searchquery"));
+        assert!(!text_verification_matches("", "", "Search"));
     }
 }

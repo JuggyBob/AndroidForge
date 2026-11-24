@@ -351,7 +351,7 @@ pub fn load_fixture(config: &ForgeConfig, name: &str) -> Result<FixtureManifest>
             format!("could not read fixture {}: {error}", path.display()),
         )
     })?;
-    let mut manifest: FixtureManifest = toml::from_str(&text).map_err(|error| {
+    let mut manifest = parse_fixture_text(&path, &text).map_err(|error| {
         ForgeError::new(
             ErrorCode::FixtureInvalid,
             format!("could not parse fixture {}: {error}", path.display()),
@@ -361,6 +361,40 @@ pub fn load_fixture(config: &ForgeConfig, name: &str) -> Result<FixtureManifest>
     manifest.source_path = Some(path.to_string_lossy().into_owned());
     validate_manifest(config, &manifest)?;
     Ok(manifest)
+}
+
+fn parse_fixture_text(path: &Path, text: &str) -> std::result::Result<FixtureManifest, String> {
+    let is_json = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+    if is_json {
+        serde_json::from_str(text).map_err(|error| error.to_string())
+    } else {
+        toml::from_str(text).map_err(|error| error.to_string())
+    }
+}
+
+fn fixture_manifest_path(path: &Path) -> Option<PathBuf> {
+    if path.is_dir() {
+        for name in ["fixture.toml", "fixture.json"] {
+            let candidate = path.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    } else if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("toml") || extension.eq_ignore_ascii_case("json")
+        })
+    {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
 }
 
 fn fixture_path(config: &ForgeConfig, name: &str) -> Result<PathBuf> {
@@ -385,7 +419,7 @@ fn fixture_path(config: &ForgeConfig, name: &str) -> Result<PathBuf> {
     .with_context_string("available", available)
     .with_suggestion("Run `androidforge fixture list` to inspect fixture packs.")
     .with_suggestion(
-        "Create .androidforge/fixtures/<name>/fixture.toml or .androidforge/fixtures/<name>.toml.",
+        "Create .androidforge/fixtures/<name>/fixture.toml, <name>.toml, <name>/fixture.json or <name>.json.",
     ))
 }
 
@@ -408,18 +442,15 @@ pub fn list_fixtures(config: &ForgeConfig) -> Result<Vec<FixtureSummary>> {
             Ok(entry) => entry,
             Err(_) => continue,
         };
-        let path = if entry.path().is_dir() {
-            entry.path().join("fixture.toml")
-        } else if entry.path().extension().and_then(|ext| ext.to_str()) == Some("toml") {
-            entry.path()
-        } else {
-            continue;
+        let path = match fixture_manifest_path(&entry.path()) {
+            Some(path) => path,
+            None => continue,
         };
         if !path.is_file() {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        match toml::from_str::<FixtureManifest>(&text) {
+        match parse_fixture_text(&path, &text) {
             Ok(manifest) => {
                 let valid = validate_manifest(config, &manifest).is_ok();
                 let error = validate_manifest(config, &manifest)
@@ -460,7 +491,7 @@ pub fn validate_fixture(config: &ForgeConfig, name: &str) -> Result<FixtureValid
             format!("could not read fixture: {error}"),
         )
     })?;
-    let manifest: FixtureManifest = toml::from_str(&text).map_err(|error| {
+    let manifest = parse_fixture_text(&path, &text).map_err(|error| {
         ForgeError::new(
             ErrorCode::FixtureInvalid,
             format!("could not parse fixture: {error}"),
@@ -1486,6 +1517,19 @@ struct StepExecution {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_json_and_toml_fixture_text() {
+        let toml_manifest =
+            parse_fixture_text(Path::new("fixture.toml"), "version = 1\nname = \"toml\"\n")
+                .unwrap();
+        assert_eq!(toml_manifest.name, "toml");
+        let json_manifest =
+            parse_fixture_text(Path::new("fixture.json"), r#"{"version":1,"name":"json"}"#)
+                .unwrap();
+        assert_eq!(json_manifest.name, "json");
+        assert!(parse_fixture_text(Path::new("fixture.json"), "not json").is_err());
+    }
 
     #[test]
     fn resolves_project_and_variable_templates() {

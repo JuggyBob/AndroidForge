@@ -4,6 +4,7 @@ use std::time::Duration;
 use androidforge_adb::AdbClient;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::util::{ensure_dir, is_valid_package_name, sha256_hex, write_atomic};
+use androidforge_process::shell_quote;
 use serde::{Deserialize, Serialize};
 
 const MAX_STREAM_BYTES: usize = 256 * 1024 * 1024;
@@ -165,7 +166,7 @@ impl AppFiles {
                 )
                 .await?;
         }
-        let script = format!("cat > {}", relative);
+        let script = format!("cat > {}", shell_quote(&relative));
         let output = self
             .adb
             .shell_args_with_stdin(
@@ -577,6 +578,11 @@ fn validate_backup_tar(bytes: &[u8], package: &str, serial: &str) -> Result<()> 
 
 fn validate_relative(remote: &str) -> Result<String> {
     let relative = remote.replace('\\', "/");
+    if relative.chars().any(char::is_control) {
+        return Err(ForgeError::invalid_argument(
+            "app file paths may not contain control characters",
+        ));
+    }
     let path = Path::new(&relative);
     if path.is_absolute() {
         return Err(ForgeError::invalid_argument(
@@ -674,5 +680,25 @@ fn map_tar_error(error: ForgeError, package: &str, serial: &str) -> ForgeError {
         .device(serial.to_string())
     } else {
         error
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_relative_app_paths() {
+        assert_eq!(
+            validate_relative("files/state.json").unwrap(),
+            "files/state.json"
+        );
+        assert_eq!(
+            validate_relative("./files/state.json").unwrap(),
+            "files/state.json"
+        );
+        assert!(validate_relative("../secret").is_err());
+        assert!(validate_relative("/data/data/com.example").is_err());
+        assert!(validate_relative("files/line\nbreak").is_err());
     }
 }

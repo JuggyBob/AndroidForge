@@ -261,7 +261,7 @@ fn category_for_code(code: ErrorCode) -> Option<DiagnosisCategory> {
         | ErrorCode::ObservationSessionMismatch => Some(C::Observation),
         ErrorCode::UiAssertionFailed | ErrorCode::TextVerificationFailed => Some(C::Assertion),
         ErrorCode::UiHierarchyInvalid => Some(C::Application),
-        ErrorCode::UiAutomatorUnavailable => Some(C::UiAutomation),
+        ErrorCode::UiAutomatorUnavailable | ErrorCode::ImeVisible => Some(C::UiAutomation),
         ErrorCode::CommandTimeout => Some(C::Timeout),
         ErrorCode::PermissionDenied => Some(C::Permission),
         ErrorCode::ConfigInvalid
@@ -408,6 +408,16 @@ fn next_actions(
         .and_then(|value| value.as_str())
         .or(report.build.apk_path.as_deref());
     let mut actions = Vec::new();
+    if failure.is_some_and(|failure| failure.code == ErrorCode::ImeVisible) {
+        let mut back = argv(&["androidforge", "ui", "back", "--hide-keyboard"]);
+        back.extend(session.clone());
+        back.push("--json".to_string());
+        actions.push(action(
+            "Hide the soft keyboard, then retry the refused back action or continue the flow.",
+            "high",
+            back,
+        ));
+    }
     match category {
         DiagnosisCategory::Selector => {
             let mut observe = argv(&["androidforge", "ui", "observe"]);
@@ -1549,5 +1559,27 @@ mod tests {
         ));
         assert_eq!(killed.diagnosis.category, DiagnosisCategory::UiAutomation);
         assert_eq!(killed.diagnosis.confidence, Confidence::Medium);
+    }
+
+    #[test]
+    fn ime_visible_is_ui_automation_with_hide_keyboard_action() {
+        let explanation = explain_report(&report_with(
+            ErrorCode::ImeVisible,
+            "the soft keyboard is visible",
+        ));
+        assert_eq!(
+            explanation.diagnosis.category,
+            DiagnosisCategory::UiAutomation
+        );
+        assert_eq!(explanation.diagnosis.confidence, Confidence::High);
+        assert!(
+            explanation.next_actions.iter().any(|action| action
+                .command
+                .argv
+                .iter()
+                .any(|arg| arg == "--hide-keyboard")),
+            "{:?}",
+            explanation.next_actions
+        );
     }
 }

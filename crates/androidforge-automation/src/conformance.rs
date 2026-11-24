@@ -609,6 +609,25 @@ mod tests {
     }
 
     #[test]
+    fn conformance_timeout_secs_parses() {
+        let manifest: ConformanceManifest = toml::from_str(
+            r#"
+version = 1
+name = "timeout"
+[flow]
+type = "script"
+command = ["echo", "ok"]
+timeout_secs = 5
+"#,
+        )
+        .unwrap();
+        match manifest.flow {
+            ConformanceFlow::Script { timeout_secs, .. } => assert_eq!(timeout_secs, Some(5)),
+            _ => panic!("expected script flow"),
+        }
+    }
+
+    #[test]
     fn external_flow_checks_are_parsed_from_the_last_json_line() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("logs")).unwrap();

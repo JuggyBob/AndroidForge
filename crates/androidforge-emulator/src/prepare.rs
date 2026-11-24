@@ -273,6 +273,7 @@ impl DevicePreparer {
             )
             .with_suggestion("AndroidForge will not change a setting it cannot restore."));
         }
+        session.record_device_setting(paths, format!("{namespace}:{key}"), previous.clone())?;
         self.adb.settings_put(serial, namespace, key, value).await?;
         let actual = self.adb.settings_get(serial, namespace, key).await?;
         if actual.trim() != value {
@@ -281,7 +282,6 @@ impl DevicePreparer {
                 format!("{namespace}:{key} did not accept {value}; current value is {actual}"),
             ));
         }
-        session.record_device_setting(paths, format!("{namespace}:{key}"), previous.clone())?;
         Ok(PrepareChange {
             key: format!("{namespace}:{key}"),
             previous,
@@ -313,6 +313,7 @@ impl DevicePreparer {
                 note: Some("already at requested value".to_string()),
             });
         }
+        session.record_device_setting(paths, "prop:persist.sys.timezone", previous.clone())?;
         let output = self
             .adb
             .shell_args(
@@ -348,7 +349,6 @@ impl DevicePreparer {
             )
             .with_suggestion("This property may be read-only on a production device."));
         }
-        session.record_device_setting(paths, "prop:persist.sys.timezone", previous.clone())?;
         Ok(PrepareChange {
             key: "prop:persist.sys.timezone".to_string(),
             previous,
@@ -384,6 +384,7 @@ impl DevicePreparer {
                 .map(str::to_string)
         });
         let mode = if dark { "yes" } else { "no" };
+        session.record_device_setting(paths, "cmd:uimode_night", previous.clone())?;
         self.adb
             .shell_args(
                 serial,
@@ -418,7 +419,6 @@ impl DevicePreparer {
             )
             .with_context_string("output", after.trim().to_string()));
         }
-        session.record_device_setting(paths, "cmd:uimode_night", previous.clone())?;
         Ok(PrepareChange {
             key: "cmd:uimode_night".to_string(),
             previous,
@@ -500,6 +500,7 @@ impl DevicePreparer {
         } else {
             Some(before.clone())
         };
+        session.record_device_setting(paths, "wm:density", previous.clone())?;
         self.adb
             .shell_args(
                 serial,
@@ -525,7 +526,6 @@ impl DevicePreparer {
                 "density did not change",
             ));
         }
-        session.record_device_setting(paths, "wm:density", previous.clone())?;
         Ok(PrepareChange {
             key: "wm:density".to_string(),
             previous,

@@ -27,7 +27,7 @@ pub use jobs::{JobInfo, JobList, JobRunResult, JobSelector, JobWaitResult, Jobs}
 pub use logcat::{
     CrashEvent, CrashReport, LogcatCapture, LogcatPeek, LogcatRecord, LogcatResult, LogcatStatus,
     LogcatStopResult, LogcatStream, collect_logcat_peek, collect_logcat_tail, detect_crashes,
-    parse_threadtime_line,
+    logcat_line_matches_package, parse_threadtime_line,
 };
 pub use notifications::{NotificationInfo, NotificationList, NotificationSelector, Notifications};
 pub use performance::{

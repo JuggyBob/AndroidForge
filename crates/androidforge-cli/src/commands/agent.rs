@@ -765,6 +765,18 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
                 break 'pipeline;
             }
         };
+        if !ctx.dry_run
+            && let Err(error) =
+                ctx.ensure_physical_mutation_allowed(&device, "running an agent pipeline")
+        {
+            state.fail(
+                "verify_device",
+                device_started,
+                stage_argv(&["androidforge", "devices", "list", "--json"]),
+                error,
+            );
+            break 'pipeline;
+        }
         state.stage(
             "verify_device",
             "passed",

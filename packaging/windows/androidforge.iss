@@ -3,7 +3,7 @@
 ; The binaries are intentionally unsigned. Code signing is a documented future step.
 
 #define MyAppName "AndroidForge"
-#define MyAppVersion "0.13.0"
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "AndroidForge"
 #define MyAppURL "https://github.com/JuggyBob/AndroidForge"
 #define MyAppExeName "androidforge-desktop.exe"
@@ -34,9 +34,9 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=0.13.0.0
-VersionInfoProductVersion=0.13.0
-VersionInfoTextVersion=0.13.0
+VersionInfoVersion=1.0.0.0
+VersionInfoProductVersion=1.0.0
+VersionInfoTextVersion=1.0.0
 VersionInfoCompany=AndroidForge
 VersionInfoDescription=AndroidForge developer cockpit
 VersionInfoCopyright=AndroidForge contributors
@@ -54,6 +54,9 @@ Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignor
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\desktop\assets\fonts\OFL-Inter.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\desktop\assets\fonts\OFL-JetBrainsMono.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\AndroidForge"; Filename: "{app}\{#MyAppExeName}"

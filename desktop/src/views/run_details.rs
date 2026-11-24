@@ -542,8 +542,13 @@ fn select_artifact(app: &mut App, key: &str, ctx: &egui::Context) {
     state.evidence.image_texture = None;
     state.evidence.image_size = None;
     if is_image {
-        let result = evidence::safe_join(std::path::Path::new(&run_dir), key)
-            .and_then(|path| std::fs::read(path).map_err(crate::backend::DesktopError::Io));
+        let result = evidence::safe_join(std::path::Path::new(&run_dir), key).and_then(|path| {
+            let metadata = std::fs::metadata(&path).map_err(crate::backend::DesktopError::Io)?;
+            if metadata.len() > 32 * 1024 * 1024 {
+                return Err(crate::backend::DesktopError::EvidenceTooLarge);
+            }
+            std::fs::read(path).map_err(crate::backend::DesktopError::Io)
+        });
         match result {
             Ok(bytes) => match image::load_from_memory(&bytes) {
                 Ok(image) => {

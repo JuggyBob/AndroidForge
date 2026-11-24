@@ -2,13 +2,23 @@ use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 
 const DEFAULT_PATTERNS: &[(&str, bool)] = &[
-    // Boolean XML/JSON attributes named "password" are structural, not secrets.
+    // Quoted values may contain spaces. Keep the quotes and delimiters while
+    // replacing only the value.
     (
-        r#"(?i)((?:password|passwd|pwd)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)"#,
+        r#"(?i)((?:password|passwd|pwd)"?\s*[:=]\s*["'])([^"'\n]*)(["'])"#,
         true,
     ),
     (
-        r"(?i)((?:secret|token|api[_-]?key|authorization)\s*[:=]\s*(?:bearer\s+)?)([^\s,;]+)",
+        r#"(?i)((?:secret|token|api[_-]?key|authorization)"?\s*[:=]\s*["'])([^"'\n]*)(["'])"#,
+        false,
+    ),
+    // Boolean XML/JSON attributes named "password" are structural, not secrets.
+    (
+        r#"(?i)((?:password|passwd|pwd)"?\s*[:=]\s*["']?)([^"'\s,;&}]+)"#,
+        true,
+    ),
+    (
+        r#"(?i)((?:secret|token|api[_-]?key|authorization)"?\s*[:=]\s*(?:bearer\s+)?["']?)([^"'\s,;&}]+)"#,
         false,
     ),
     (r"(?i)((?:bearer\s+)[A-Za-z0-9._~+/=-]{8,})", false),
@@ -93,7 +103,8 @@ impl Redactor {
                         }
                     }
                     if caps.len() >= 2 {
-                        format!("{}[REDACTED]", &caps[1])
+                        let suffix = caps.get(3).map(|value| value.as_str()).unwrap_or("");
+                        format!("{}[REDACTED]{}", &caps[1], suffix)
                     } else {
                         "[REDACTED]".to_string()
                     }
@@ -127,13 +138,27 @@ impl Redactor {
                 }
             }
             Value::Object(map) => {
-                for item in map.values_mut() {
-                    self.redact_value(item);
+                for (key, item) in map.iter_mut() {
+                    if is_sensitive_key(key) {
+                        if !matches!(item, Value::Bool(_) | Value::Null) {
+                            *item = Value::String("[REDACTED]".to_string());
+                        }
+                    } else {
+                        self.redact_value(item);
+                    }
                 }
             }
             _ => {}
         }
     }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace(['-', ' '], "_");
+    matches!(
+        normalized.as_str(),
+        "password" | "passwd" | "pwd" | "secret" | "token" | "api_key" | "apikey" | "authorization"
+    )
 }
 
 #[cfg(test)]
@@ -164,6 +189,35 @@ mod tests {
         let xml = r#"<node password="false" focused="true" />"#;
         assert_eq!(redactor.redact(xml), xml);
         assert!(redactor.redact("password=hunter2").contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redacts_json_style_secrets() {
+        let redactor = Redactor::default();
+        let redacted = redactor.redact(r#"{"password":"hunter2","token":"abc123"}"#);
+        assert!(!redacted.contains("hunter2"), "{redacted}");
+        assert!(!redacted.contains("abc123"), "{redacted}");
+        assert!(redacted.contains("[REDACTED]"));
+
+        let spaced = redactor.redact(r#"{"token": "abc def ghi"}"#);
+        assert!(!spaced.contains("abc def ghi"), "{spaced}");
+        assert!(spaced.contains("\"token\": \"[REDACTED]\""), "{spaced}");
+
+        assert_eq!(
+            redactor.redact("password=BODYSECRET&note=visible"),
+            "password=[REDACTED]&note=visible"
+        );
+
+        let mut value = serde_json::json!({
+            "password": "hunter2",
+            "nested": {"token": "abc123", "safe": "visible"},
+            "password_enabled": false
+        });
+        redactor.redact_value(&mut value);
+        assert_eq!(value["password"], "[REDACTED]");
+        assert_eq!(value["nested"]["token"], "[REDACTED]");
+        assert_eq!(value["nested"]["safe"], "visible");
+        assert_eq!(value["password_enabled"], false);
     }
 
     #[test]

@@ -53,7 +53,7 @@ androidforge tools uninstall maestro --yes --json
 - `tools install` requires `--yes` because it downloads about 350 MB. `--dry-run` prints the URL, hash
   and target without downloading.
 
-Maestro remains **best-effort/optional** in the 0.13 line. The installer pins one tested version; a
+Maestro remains **best-effort/optional** in the 1.0 line. The installer pins one tested version; a
 manually installed copy on `PATH` is still detected through `[maestro].binary`, `[sdk].maestro` or
 `ANDROIDFORGE_MAESTRO`.
 

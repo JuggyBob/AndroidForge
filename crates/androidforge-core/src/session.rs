@@ -332,59 +332,94 @@ impl Session {
         let serial = serial.to_string();
         let owner = self.owner.clone();
         with_global_lock(paths, || {
-            let lock_path = device_lock_path(paths, &serial)?;
-            if lock_path.is_file() {
-                if let Ok(existing) = read_json::<DeviceLock>(&lock_path) {
-                    if existing.session_id != id {
-                        let existing_session = Session::load(paths, &existing.session_id).ok();
-                        if let Some(existing_session) = &existing_session {
-                            let stale_operation = existing_session
-                                .operation
-                                .as_ref()
-                                .map(|operation| {
-                                    !androidforge_process::process_exists(operation.pid)
-                                        && age_secs(&operation.started_at)
-                                            > DEAD_OPERATION_GRACE_SECS
-                                })
-                                .unwrap_or(false);
-                            let unusable = matches!(
-                                existing_session.state,
-                                SessionState::Released
-                                    | SessionState::Failed
-                                    | SessionState::Abandoned
-                            ) || (matches!(
-                                existing_session.state,
-                                SessionState::Starting | SessionState::Stopping
-                            ) && stale_operation);
-                            if unusable {
-                                let _ = fs::remove_file(&lock_path);
-                            } else {
-                                return Err(ForgeError::new(
-                                    ErrorCode::DeviceBusy,
-                                    format!(
-                                        "device {serial} is owned by session {} ({}, state {:?})",
-                                        existing_session.id,
-                                        existing_session.owner,
-                                        existing_session.state
-                                    ),
-                                )
-                                .with_suggestion(format!(
-                                    "Use `--session {}` if you are the owner.",
-                                    existing_session.id
-                                ))
-                                .with_suggestion("Run `androidforge session list` to inspect ownership.")
-                                .with_suggestion(
-                                    "If that session is abandoned, run `androidforge session gc --reclaim`.",
-                                )
-                                .device(serial.clone())
-                                .session(existing_session.id.clone()));
-                            }
-                        } else {
-                            let _ = fs::remove_file(&lock_path);
-                        }
+            let lock_paths = device_lock_paths(paths, &serial)?;
+            let primary = &lock_paths[0];
+            for lock_path in &lock_paths {
+                if !lock_path.is_file() {
+                    continue;
+                }
+                let existing = read_json::<DeviceLock>(lock_path).map_err(|error| {
+                    // Never delete an unreadable lock. A primary filename made
+                    // of safe characters can collide with a legacy `_` name for
+                    // a different serial, so removal could destroy another
+                    // device's lock. Fail closed and let an operator decide.
+                    ForgeError::new(
+                        ErrorCode::DeviceBusy,
+                        format!(
+                            "device lock {} for {serial} is unreadable: {error}",
+                            lock_path.display()
+                        ),
+                    )
+                    .with_cause(error)
+                    .with_suggestion(format!(
+                        "Inspect {} and remove it manually only if no session owns the device.",
+                        lock_path.display()
+                    ))
+                    .with_suggestion("Run `androidforge session list` to inspect ownership.")
+                    .device(serial.clone())
+                })?;
+                if existing.serial != serial {
+                    // Never delete or overwrite a colliding lock that belongs
+                    // to a different serial.
+                    if lock_path == primary {
+                        return Err(ForgeError::new(
+                            ErrorCode::DeviceBusy,
+                            format!(
+                                "device lock for {serial} collides with a lock for {}",
+                                existing.serial
+                            ),
+                        )
+                        .device(serial.clone()));
+                    }
+                    continue;
+                }
+                if existing.session_id == id {
+                    // Our own obsolete legacy lock can be dropped safely.
+                    if lock_path != primary {
+                        let _ = fs::remove_file(lock_path);
+                    }
+                    continue;
+                }
+                let existing_session = Session::load(paths, &existing.session_id).ok();
+                if let Some(existing_session) = &existing_session {
+                    let stale_operation = existing_session
+                        .operation
+                        .as_ref()
+                        .map(|operation| {
+                            !androidforge_process::process_exists(operation.pid)
+                                && age_secs(&operation.started_at) > DEAD_OPERATION_GRACE_SECS
+                        })
+                        .unwrap_or(false);
+                    let unusable = matches!(
+                        existing_session.state,
+                        SessionState::Released | SessionState::Failed | SessionState::Abandoned
+                    ) || (matches!(
+                        existing_session.state,
+                        SessionState::Starting | SessionState::Stopping
+                    ) && stale_operation);
+                    if unusable {
+                        let _ = fs::remove_file(lock_path);
+                    } else {
+                        return Err(ForgeError::new(
+                            ErrorCode::DeviceBusy,
+                            format!(
+                                "device {serial} is owned by session {} ({}, state {:?})",
+                                existing_session.id, existing_session.owner, existing_session.state
+                            ),
+                        )
+                        .with_suggestion(format!(
+                            "Use `--session {}` if you are the owner.",
+                            existing_session.id
+                        ))
+                        .with_suggestion("Run `androidforge session list` to inspect ownership.")
+                        .with_suggestion(
+                            "If that session is abandoned, run `androidforge session gc --reclaim`.",
+                        )
+                        .device(serial.clone())
+                        .session(existing_session.id.clone()));
                     }
                 } else {
-                    let _ = fs::remove_file(&lock_path);
+                    let _ = fs::remove_file(lock_path);
                 }
             }
 
@@ -395,7 +430,7 @@ impl Session {
                 owner,
                 acquired_at: now_rfc3339(),
             };
-            write_json_atomic(&lock_path, &lock)?;
+            write_json_atomic(primary, &lock)?;
             let mut disk = Session::load(paths, &id)?;
             disk.serial = Some(serial);
             disk.heartbeat_at = now_rfc3339();
@@ -629,73 +664,74 @@ pub fn gc_sessions(
     stop_live_emulators: bool,
     dry_run: bool,
 ) -> Result<SessionGcReport> {
-    let sessions = list_sessions(paths)?;
-    let mut report = SessionGcReport {
-        sessions_scanned: sessions.len(),
-        stale_sessions: Vec::new(),
-        reclaimed_sessions: Vec::new(),
-        cleared_operations: Vec::new(),
-        dry_run,
-    };
-
-    for entry in sessions {
-        let mut session = match Session::load(paths, &entry.id) {
-            Ok(session) => session,
-            Err(_) => continue,
+    with_global_lock(paths, || {
+        let sessions = list_sessions(paths)?;
+        let mut report = SessionGcReport {
+            sessions_scanned: sessions.len(),
+            stale_sessions: Vec::new(),
+            reclaimed_sessions: Vec::new(),
+            cleared_operations: Vec::new(),
+            dry_run,
         };
-        let mut changed = false;
 
-        if let Some(operation) = session.operation.clone()
-            && !androidforge_process::process_exists(operation.pid)
-            && age_secs(&operation.started_at) > DEAD_OPERATION_GRACE_SECS
-        {
-            report
-                .cleared_operations
-                .push(format!("{}:{}", session.id, operation.operation));
-            if !dry_run {
-                session.operation = None;
-                changed = true;
-            }
-        }
+        for entry in sessions {
+            let mut session = match Session::load(paths, &entry.id) {
+                Ok(session) => session,
+                Err(_) => continue,
+            };
+            let mut changed = false;
 
-        if session.is_stale()
-            && !matches!(
-                session.state,
-                SessionState::Released | SessionState::Abandoned
-            )
-        {
-            report.stale_sessions.push(session.id.clone());
-            if reclaim {
-                // A live process operation or emulator must not lose its device
-                // lock merely because the heartbeat is old. `--stop` explicitly
-                // authorizes reclaiming an emulator-backed session.
-                let operation_alive = session
-                    .operation
-                    .as_ref()
-                    .is_some_and(|operation| androidforge_process::process_exists(operation.pid));
-                let emulator_alive = session
-                    .emulator_pid
-                    .is_some_and(androidforge_process::process_exists);
-                if operation_alive || (emulator_alive && !stop_live_emulators) {
-                    continue;
-                }
-                report.reclaimed_sessions.push(session.id.clone());
+            if let Some(operation) = session.operation.clone()
+                && !androidforge_process::process_exists(operation.pid)
+                && age_secs(&operation.started_at) > DEAD_OPERATION_GRACE_SECS
+            {
+                report
+                    .cleared_operations
+                    .push(format!("{}:{}", session.id, operation.operation));
                 if !dry_run {
-                    if let Some(serial) = &session.serial {
-                        release_device_lock_unlocked(paths, &session.id, Some(serial))?;
-                    }
-                    session.state = SessionState::Abandoned;
                     session.operation = None;
                     changed = true;
                 }
             }
-        }
 
-        if changed {
-            session.touch(paths)?;
+            if session.is_stale()
+                && !matches!(
+                    session.state,
+                    SessionState::Released | SessionState::Abandoned
+                )
+            {
+                report.stale_sessions.push(session.id.clone());
+                if reclaim {
+                    // A live process operation or emulator must not lose its device
+                    // lock merely because the heartbeat is old. `--stop` explicitly
+                    // authorizes reclaiming an emulator-backed session.
+                    let operation_alive = session.operation.as_ref().is_some_and(|operation| {
+                        androidforge_process::process_exists(operation.pid)
+                    });
+                    let emulator_alive = session
+                        .emulator_pid
+                        .is_some_and(androidforge_process::process_exists);
+                    if operation_alive || (emulator_alive && !stop_live_emulators) {
+                        continue;
+                    }
+                    report.reclaimed_sessions.push(session.id.clone());
+                    if !dry_run {
+                        if let Some(serial) = &session.serial {
+                            release_device_lock_unlocked(paths, &session.id, Some(serial))?;
+                        }
+                        session.state = SessionState::Abandoned;
+                        session.operation = None;
+                        changed = true;
+                    }
+                }
+            }
+
+            if changed {
+                session.touch(paths)?;
+            }
         }
-    }
-    Ok(report)
+        Ok(report)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -725,60 +761,62 @@ pub fn prune_sessions(
     keep_last: usize,
     dry_run: bool,
 ) -> Result<SessionPruneReport> {
-    let sessions = list_sessions(paths)?;
-    let mut terminal: Vec<SessionListEntry> = sessions
-        .iter()
-        .filter(|entry| {
-            matches!(
-                entry.state,
-                SessionState::Released | SessionState::Failed | SessionState::Abandoned
-            )
-        })
-        .cloned()
-        .collect();
-    terminal.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    let terminal_sessions = terminal.len();
-    let mut report = SessionPruneReport {
-        sessions_scanned: sessions.len(),
-        terminal_sessions,
-        pruned: Vec::new(),
-        kept: sessions.len(),
-        dry_run,
-    };
-    for (index, entry) in terminal.iter().enumerate() {
-        if index < keep_last {
-            continue;
-        }
-        if entry.operation_active || entry.emulator_process_alive {
-            continue;
-        }
-        let age = age_secs(&entry.created_at);
-        if age < older_than.as_secs() as i64 {
-            continue;
-        }
-        let reason = format!("terminal session older than {}s", older_than.as_secs());
-        report.pruned.push(SessionPruneEntry {
-            id: entry.id.clone(),
-            state: entry.state,
-            serial: entry.serial.clone(),
-            created_at: entry.created_at.clone(),
-            reason,
-        });
-        if !dry_run {
-            release_device_lock_unlocked(paths, &entry.id, entry.serial.as_deref())?;
-            let dir = paths.sessions_dir().join(&entry.id);
-            if dir.is_dir() {
-                fs::remove_dir_all(&dir).map_err(|error| {
-                    ForgeError::new(
-                        ErrorCode::Internal,
-                        format!("could not remove session {}: {error}", dir.display()),
-                    )
-                })?;
+    with_global_lock(paths, || {
+        let sessions = list_sessions(paths)?;
+        let mut terminal: Vec<SessionListEntry> = sessions
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    SessionState::Released | SessionState::Failed | SessionState::Abandoned
+                )
+            })
+            .cloned()
+            .collect();
+        terminal.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        let terminal_sessions = terminal.len();
+        let mut report = SessionPruneReport {
+            sessions_scanned: sessions.len(),
+            terminal_sessions,
+            pruned: Vec::new(),
+            kept: sessions.len(),
+            dry_run,
+        };
+        for (index, entry) in terminal.iter().enumerate() {
+            if index < keep_last {
+                continue;
+            }
+            if entry.operation_active || entry.emulator_process_alive {
+                continue;
+            }
+            let age = age_secs(&entry.created_at);
+            if age < older_than.as_secs() as i64 {
+                continue;
+            }
+            let reason = format!("terminal session older than {}s", older_than.as_secs());
+            report.pruned.push(SessionPruneEntry {
+                id: entry.id.clone(),
+                state: entry.state,
+                serial: entry.serial.clone(),
+                created_at: entry.created_at.clone(),
+                reason,
+            });
+            if !dry_run {
+                release_device_lock_unlocked(paths, &entry.id, entry.serial.as_deref())?;
+                let dir = paths.sessions_dir().join(&entry.id);
+                if dir.is_dir() {
+                    fs::remove_dir_all(&dir).map_err(|error| {
+                        ForgeError::new(
+                            ErrorCode::Internal,
+                            format!("could not remove session {}: {error}", dir.display()),
+                        )
+                    })?;
+                }
             }
         }
-    }
-    report.kept = sessions.len().saturating_sub(report.pruned.len());
-    Ok(report)
+        report.kept = sessions.len().saturating_sub(report.pruned.len());
+        Ok(report)
+    })
 }
 
 pub fn resolve_session_id(
@@ -839,27 +877,44 @@ pub fn current_session(paths: &ForgePaths) -> Result<Option<String>> {
 }
 
 pub fn owner_of_serial(paths: &ForgePaths, serial: &str) -> Result<Option<Session>> {
-    let lock_path = match device_lock_path(paths, serial) {
-        Ok(path) => path,
+    let lock_paths = match device_lock_paths(paths, serial) {
+        Ok(paths) => paths,
         Err(_) => return Ok(None),
     };
-    if !lock_path.is_file() {
-        return Ok(None);
-    }
-    let lock: DeviceLock = match read_json(&lock_path) {
-        Ok(lock) => lock,
-        Err(_) => {
-            let _ = fs::remove_file(lock_path);
-            return Ok(None);
+    for lock_path in &lock_paths {
+        if !lock_path.is_file() {
+            continue;
         }
-    };
-    match Session::load(paths, &lock.session_id) {
-        Ok(session) => Ok(Some(session)),
-        Err(_) => {
-            let _ = fs::remove_file(lock_path);
-            Ok(None)
+        let lock: DeviceLock = read_json(lock_path).map_err(|error| {
+            // A safe-character primary name can collide with a legacy `_` name
+            // for another serial. Never delete an unreadable lock; fail closed
+            // so an operator can confirm ownership before removing it.
+            ForgeError::new(
+                ErrorCode::DeviceBusy,
+                format!(
+                    "device lock {} for {serial} is unreadable: {error}",
+                    lock_path.display()
+                ),
+            )
+            .with_cause(error)
+            .with_suggestion(format!(
+                "Inspect {} and remove it manually only if no session owns the device.",
+                lock_path.display()
+            ))
+            .with_suggestion("Run `androidforge session list` to inspect ownership.")
+            .device(serial.to_string())
+        })?;
+        if lock.serial != serial {
+            continue;
+        }
+        match Session::load(paths, &lock.session_id) {
+            Ok(session) => return Ok(Some(session)),
+            Err(_) => {
+                let _ = fs::remove_file(lock_path);
+            }
         }
     }
+    Ok(None)
 }
 
 pub fn check_serial_ownership(
@@ -912,22 +967,24 @@ fn release_device_lock_unlocked(
     let Some(serial) = serial else {
         return Ok(());
     };
-    let lock_path = device_lock_path(paths, serial)?;
-    if !lock_path.is_file() {
-        return Ok(());
-    }
-    if let Ok(lock) = read_json::<DeviceLock>(&lock_path)
-        && lock.session_id == session_id
-    {
-        fs::remove_file(&lock_path).map_err(|error| {
-            ForgeError::new(
-                ErrorCode::DeviceBusy,
-                format!(
-                    "could not release device lock {}: {error}",
-                    lock_path.display()
-                ),
-            )
-        })?;
+    for lock_path in device_lock_paths(paths, serial)? {
+        if !lock_path.is_file() {
+            continue;
+        }
+        if let Ok(lock) = read_json::<DeviceLock>(&lock_path)
+            && lock.session_id == session_id
+            && lock.serial == serial
+        {
+            fs::remove_file(&lock_path).map_err(|error| {
+                ForgeError::new(
+                    ErrorCode::DeviceBusy,
+                    format!(
+                        "could not release device lock {}: {error}",
+                        lock_path.display()
+                    ),
+                )
+            })?;
+        }
     }
     Ok(())
 }
@@ -946,15 +1003,49 @@ fn session_dir(paths: &ForgePaths, session_id: &str) -> Result<PathBuf> {
 }
 
 fn device_lock_path(paths: &ForgePaths, serial: &str) -> Result<PathBuf> {
+    validate_lock_serial(serial)?;
+    Ok(paths
+        .locks_dir()
+        .join("devices")
+        .join(format!("{}.json", sanitize_serial(serial))))
+}
+
+fn validate_lock_serial(serial: &str) -> Result<()> {
     if serial.trim().is_empty() {
         return Err(ForgeError::invalid_argument(
             "device serial cannot be empty",
         ));
     }
-    Ok(paths
+    Ok(())
+}
+
+/// Every filename that may hold a lock for `serial`, current encoding first.
+///
+/// Releases through 0.13 replaced unsafe serial characters with `_`; newer
+/// releases use `%XX` encoding. A live lock written by the old code must stay
+/// visible after an upgrade, otherwise a second session could steal the
+/// device. Both names are checked, and the lock's `serial` field is verified so
+/// colliding legacy names are never mistaken for another device.
+fn device_lock_paths(paths: &ForgePaths, serial: &str) -> Result<Vec<PathBuf>> {
+    validate_lock_serial(serial)?;
+    let primary = device_lock_path(paths, serial)?;
+    let mut legacy_name = String::with_capacity(serial.len());
+    for character in serial.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+            legacy_name.push(character);
+        } else {
+            legacy_name.push('_');
+        }
+    }
+    let legacy = paths
         .locks_dir()
         .join("devices")
-        .join(format!("{}.json", sanitize_serial(serial))))
+        .join(format!("{legacy_name}.json"));
+    if legacy == primary {
+        Ok(vec![primary])
+    } else {
+        Ok(vec![primary, legacy])
+    }
 }
 
 /// Process-wide state lock. It serializes session metadata, observation-store
@@ -1041,6 +1132,35 @@ mod tests {
         paths
     }
 
+    /// Simulate a device lock written by 0.13, which encoded `:` as `_`.
+    fn write_legacy_lock(paths: &ForgePaths, session: &Session, serial: &str) -> PathBuf {
+        let path = paths
+            .locks_dir()
+            .join("devices")
+            .join(format!("{}.json", serial.replace(':', "_")));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_json_atomic(
+            &path,
+            &DeviceLock {
+                schema_version: 1,
+                session_id: session.id.clone(),
+                serial: serial.to_string(),
+                owner: session.owner.clone(),
+                acquired_at: now_rfc3339(),
+            },
+        )
+        .unwrap();
+        path
+    }
+
+    /// Write a device lock whose contents cannot be parsed as a `DeviceLock`.
+    fn write_unreadable_lock(paths: &ForgePaths, filename: &str) -> PathBuf {
+        let path = paths.locks_dir().join("devices").join(filename);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ not valid json").unwrap();
+        path
+    }
+
     #[test]
     fn state_lock_excludes_a_second_holder_and_ignores_stale_contents() {
         let temp = tempfile::tempdir().unwrap();
@@ -1121,6 +1241,261 @@ mod tests {
                 .iter()
                 .any(|s| s.contains(&first.id))
         );
+    }
+
+    #[test]
+    fn legacy_lock_is_owned_and_blocks_a_second_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+        let mut first = Session::new(
+            "LegacyOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        first.create(&paths).unwrap();
+        first.mark_ready(&paths).unwrap();
+        let legacy = write_legacy_lock(&paths, &first, serial);
+        assert!(legacy.is_file());
+
+        assert_eq!(
+            owner_of_serial(&paths, serial).unwrap().unwrap().id,
+            first.id
+        );
+        assert!(check_serial_ownership(&paths, serial, Some("ses-other")).is_err());
+        assert!(check_serial_ownership(&paths, serial, Some(&first.id)).is_ok());
+
+        let mut second = Session::new(
+            "Upgraded",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        second.create(&paths).unwrap();
+        let error = second.acquire_device(&paths, serial).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        assert!(legacy.is_file(), "a live legacy lock must not be stolen");
+        assert!(
+            !paths
+                .locks_dir()
+                .join("devices")
+                .join("192.168.1.2%3A5555.json")
+                .is_file(),
+            "a failed acquire must not write a new-style lock"
+        );
+    }
+
+    #[test]
+    fn owner_of_serial_fails_closed_on_unreadable_primary_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+        let lock = write_unreadable_lock(&paths, "192.168.1.2%3A5555.json");
+
+        let error = owner_of_serial(&paths, serial).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        assert_eq!(error.body().device_serial.as_deref(), Some(serial));
+        assert!(error.message().contains("192.168.1.2%3A5555.json"));
+        assert!(
+            error
+                .body()
+                .suggestions
+                .iter()
+                .any(|suggestion| suggestion.contains("remove it manually only if no session"))
+        );
+        assert!(lock.is_file(), "unreadable lock must never be deleted");
+    }
+
+    #[test]
+    fn acquire_device_fails_closed_on_unreadable_primary_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+        let lock = write_unreadable_lock(&paths, "192.168.1.2%3A5555.json");
+
+        let mut session = Session::new(
+            "Agent",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        let error = session.acquire_device(&paths, serial).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        assert_eq!(ErrorCode::DeviceBusy.as_str(), "E_DEVICE_BUSY");
+        assert_eq!(error.exit_code(), 4);
+        assert_eq!(error.body().device_serial.as_deref(), Some(serial));
+        assert!(error.message().contains("192.168.1.2%3A5555.json"));
+        assert!(
+            error
+                .body()
+                .suggestions
+                .iter()
+                .any(|suggestion| suggestion.contains("remove it manually only if no session"))
+        );
+        assert!(lock.is_file(), "unreadable lock must never be deleted");
+    }
+
+    #[test]
+    fn acquire_device_fails_closed_on_unreadable_legacy_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+        // Only the legacy `_` name exists; there is no primary file beside it.
+        let legacy = write_unreadable_lock(&paths, "192.168.1.2_5555.json");
+
+        let mut session = Session::new(
+            "Agent",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        let error = session.acquire_device(&paths, serial).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        assert!(error.message().contains("192.168.1.2_5555.json"));
+        assert!(
+            legacy.is_file(),
+            "an unreadable legacy lock must never be deleted"
+        );
+        assert!(
+            !paths
+                .locks_dir()
+                .join("devices")
+                .join("192.168.1.2%3A5555.json")
+                .is_file(),
+            "a failed acquire must not write a primary lock"
+        );
+    }
+
+    #[test]
+    fn readable_live_legacy_lock_blocks_colliding_serial_without_deletion() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let legacy_serial = "a:b";
+        let colliding_serial = "a_b";
+
+        let mut owner = Session::new(
+            "LegacyOwner",
+            SessionKind::Attached,
+            Some(legacy_serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        owner.create(&paths).unwrap();
+        owner.mark_ready(&paths).unwrap();
+        let legacy = write_legacy_lock(&paths, &owner, legacy_serial);
+        assert_eq!(legacy.file_name().unwrap(), "a_b.json");
+
+        // The colliding serial's primary path is the legacy lock's filename.
+        // A readable lock for another serial is ignored, never removed.
+        assert!(owner_of_serial(&paths, colliding_serial).unwrap().is_none());
+        assert_eq!(
+            owner_of_serial(&paths, legacy_serial).unwrap().unwrap().id,
+            owner.id
+        );
+
+        let mut contender = Session::new(
+            "Colliding",
+            SessionKind::Attached,
+            Some(colliding_serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        contender.create(&paths).unwrap();
+        let error = contender
+            .acquire_device(&paths, colliding_serial)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        assert!(legacy.is_file(), "a readable live legacy lock must survive");
+        assert_eq!(
+            owner_of_serial(&paths, legacy_serial).unwrap().unwrap().id,
+            owner.id,
+            "the real owner must remain discoverable after the failed acquire"
+        );
+    }
+
+    #[test]
+    fn new_serial_encoding_lock_is_detected_and_released() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+        let mut session = Session::new(
+            "EncodedOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        session.acquire_device(&paths, serial).unwrap();
+        session.mark_ready(&paths).unwrap();
+        let current = paths
+            .locks_dir()
+            .join("devices")
+            .join("192.168.1.2%3A5555.json");
+        assert!(current.is_file());
+        assert_eq!(
+            owner_of_serial(&paths, serial).unwrap().unwrap().id,
+            session.id
+        );
+        assert!(check_serial_ownership(&paths, serial, Some("ses-other")).is_err());
+
+        session.release(&paths).unwrap();
+        assert!(!current.is_file());
+        assert!(owner_of_serial(&paths, serial).unwrap().is_none());
+    }
+
+    #[test]
+    fn release_and_gc_remove_legacy_locks() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+
+        let mut released = Session::new(
+            "ReleaseLegacy",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        released.create(&paths).unwrap();
+        released.mark_ready(&paths).unwrap();
+        let legacy = write_legacy_lock(&paths, &released, serial);
+        released.release(&paths).unwrap();
+        assert!(!legacy.is_file());
+
+        let mut stale = Session::new(
+            "GcLegacy",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        stale.create(&paths).unwrap();
+        stale.mark_ready(&paths).unwrap();
+        let legacy = write_legacy_lock(&paths, &stale, serial);
+        let mut disk = Session::load(&paths, &stale.id).unwrap();
+        disk.heartbeat_at = (Utc::now() - chrono::Duration::hours(4)).to_rfc3339();
+        disk.save(&paths).unwrap();
+
+        let report = gc_sessions(&paths, true, false, false).unwrap();
+        assert!(report.reclaimed_sessions.contains(&stale.id));
+        assert!(!legacy.is_file(), "GC must release the legacy lock too");
     }
 
     #[test]

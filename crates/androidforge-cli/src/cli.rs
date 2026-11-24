@@ -65,7 +65,8 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub project: Option<PathBuf>,
 
-    /// Append to an existing run id. Also read from ANDROIDFORGE_RUN_ID.
+    /// Append to an existing run id when the command records run steps. Also read from
+    /// ANDROIDFORGE_RUN_ID. Commands that do not record steps print a warning.
     #[arg(long, global = true)]
     pub run: Option<String>,
 
@@ -1461,6 +1462,7 @@ pub enum RecordCommand {
 
 #[derive(Debug, Args)]
 pub struct RecordStartArgs {
+    /// Maximum recording time in seconds.
     #[arg(long)]
     pub time_limit: Option<u64>,
     #[arg(long)]
@@ -1535,6 +1537,7 @@ pub struct LogcatQueryArgs {
     /// Bounded retries for transient read failures (0-5).
     #[arg(long, default_value_t = 0)]
     pub retries: u32,
+    /// Keep the package's process logs plus lines that mention the package name.
     #[arg(long)]
     pub package: Option<String>,
     #[arg(long, default_value_t = 2000)]
@@ -1557,6 +1560,10 @@ pub struct LogcatQueryArgs {
 
 #[derive(Debug, Args)]
 pub struct LogcatWatchArgs {
+    /// Keep the package's process logs plus lines that mention the package name.
+    /// Package PIDs are sampled at the start of the watch; if the app restarts
+    /// mid-stream, only lines mentioning the package name are guaranteed to
+    /// match.
     #[arg(long)]
     pub package: Option<String>,
     #[arg(long)]

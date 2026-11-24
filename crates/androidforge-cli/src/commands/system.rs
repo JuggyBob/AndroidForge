@@ -82,6 +82,7 @@ pub async fn notifications(
             .with_device(device.serial.clone()))
         }
         NotificationsCommand::Tap(args) => {
+            ctx.ensure_physical_mutation_allowed(&device, "tapping a notification")?;
             let selector = args.clone().into_selector();
             let ui = ctx.ui_manager()?;
             let result = notifications.tap(&device.serial, &selector, &ui).await?;

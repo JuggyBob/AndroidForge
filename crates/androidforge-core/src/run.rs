@@ -871,6 +871,18 @@ impl RunContext {
     }
 
     pub fn finalize_pass(&mut self) -> Result<()> {
+        if self
+            .report
+            .steps
+            .iter()
+            .any(|step| step.status == StepStatus::Running)
+        {
+            return self.finalize_with_reason(
+                RunStatus::Failed,
+                6,
+                "a step was still running when the run was finalized",
+            );
+        }
         self.finalize(RunStatus::Passed, 0)
     }
 
@@ -1150,6 +1162,26 @@ mod tests {
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.steps.len(), 1);
         assert!(context.manifest_path().is_file());
+    }
+
+    #[test]
+    fn finalize_pass_refuses_to_pass_a_running_step() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = RunOptions::new(
+            temp.path().join(".artifacts"),
+            temp.path(),
+            "Example",
+            "ui.assert",
+        );
+        let mut context = RunContext::create(options, Redactor::default()).unwrap();
+        context
+            .start_step("still running", "ui.assert --text Welcome")
+            .unwrap();
+        context.finalize_pass().unwrap();
+        let report: RunReport = read_json(&context.report_path()).unwrap();
+        assert_eq!(report.status, RunStatus::Failed);
+        assert_eq!(report.exit_code, 6);
+        assert_eq!(report.steps[0].status, StepStatus::Failed);
     }
 
     #[test]

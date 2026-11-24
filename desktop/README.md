@@ -60,6 +60,6 @@ confirmed, the UI reports that cancellation had no effect instead of showing a f
 
 ## Assets
 
-- `assets/icon.svg` — original scalable identity.
+- `assets/icon.svg` — worker-robot identity (Google Android robot CC BY 3.0 plus a Lucide wrench; see `THIRD_PARTY_NOTICES.md`).
 - `assets/icon.png` — window icon source.
 - `assets/icon.ico` — embedded executable icon through `build.rs` and `embed-resource`.

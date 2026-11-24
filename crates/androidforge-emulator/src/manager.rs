@@ -6,7 +6,9 @@ use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::Device;
 use androidforge_core::toolchain::Toolchain;
 use androidforge_core::util::ensure_dir;
-use androidforge_process::{DetachedSpec, kill_tree, process_exists, spawn_detached};
+use androidforge_process::{
+    DetachedSpec, kill_tree, process_exists, process_image_name, spawn_detached,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::avd::list_avds;
@@ -243,6 +245,10 @@ impl EmulatorManager {
 
     pub async fn stop(&self, serial: &str, pid: Option<u32>) -> Result<StopResult> {
         let mut notes = Vec::new();
+        let expected_image = self.toolchain.require_emulator().ok().and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
         let emu_result = self
             .adb
             .emu(serial, &["kill".to_string()], Some(Duration::from_secs(15)))
@@ -252,8 +258,9 @@ impl EmulatorManager {
             notes.push(format!("adb emu kill failed: {}", error.message()));
             match pid {
                 Some(pid) => {
-                    kill_tree(pid);
-                    method = "taskkill_tree".to_string();
+                    if kill_verified_emulator(pid, expected_image.as_deref(), &mut notes) {
+                        method = "taskkill_tree".to_string();
+                    }
                 }
                 None => {
                     return Err(ForgeError::new(
@@ -281,8 +288,10 @@ impl EmulatorManager {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        if !process_exited && let Some(pid) = pid {
-            kill_tree(pid);
+        if !process_exited
+            && let Some(pid) = pid
+            && kill_verified_emulator(pid, expected_image.as_deref(), &mut notes)
+        {
             method = "taskkill_tree".to_string();
             tokio::time::sleep(Duration::from_millis(400)).await;
             process_exited = !process_exists(pid);
@@ -563,6 +572,32 @@ fn truncate(value: &str, max: usize) -> String {
     }
 }
 
+fn kill_verified_emulator(pid: u32, expected_image: Option<&str>, notes: &mut Vec<String>) -> bool {
+    if !process_exists(pid) {
+        return false;
+    }
+    let Some(observed) = process_image_name(pid) else {
+        notes.push(format!(
+            "refusing to kill PID {pid}: could not read its process identity"
+        ));
+        return false;
+    };
+    let Some(expected) = expected_image else {
+        notes.push(format!(
+            "refusing to kill PID {pid}: emulator executable is unknown"
+        ));
+        return false;
+    };
+    if !observed.eq_ignore_ascii_case(expected) {
+        notes.push(format!(
+            "refusing to kill PID {pid}: process is '{observed}', not '{expected}'"
+        ));
+        return false;
+    }
+    kill_tree(pid);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +631,20 @@ mod tests {
     fn snapshot_names_are_restricted() {
         assert!(validate_snapshot_name("clean-install_1").is_ok());
         assert!(validate_snapshot_name("../bad").is_err());
+    }
+
+    #[test]
+    fn emulator_kill_refuses_an_unverified_process() {
+        let pid = std::process::id();
+        let mut notes = Vec::new();
+        assert!(!kill_verified_emulator(
+            pid,
+            Some("definitely-not-emulator.exe"),
+            &mut notes
+        ));
+        assert!(notes[0].contains("refusing to kill"));
+        let mut notes = Vec::new();
+        assert!(!kill_verified_emulator(pid, None, &mut notes));
+        assert!(notes[0].contains("executable is unknown"));
     }
 }

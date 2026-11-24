@@ -245,6 +245,8 @@ fn safety(path: &[String]) -> &'static str {
         return "destructive";
     }
     const MUTATING: &[&str] = &[
+        "agent test",
+        "agent matrix",
         "app install",
         "app launch",
         "app force-stop",
@@ -285,6 +287,12 @@ fn safety(path: &[String]) -> &'static str {
         "ui hide-keyboard",
         "capture record start",
         "capture record stop",
+        "notifications tap",
+        "ui dismiss-overlays",
+        "snapshot save",
+        "standby set",
+        "test maestro",
+        "test instrumentation",
     ];
     if MUTATING.iter().any(|prefix| joined.starts_with(prefix)) {
         return "device-mutation";
@@ -436,6 +444,14 @@ mod tests {
             ("report prune", "destructive"),
             ("ui tap", "device-mutation"),
             ("doze unforce", "device-mutation"),
+            ("snapshot save", "device-mutation"),
+            ("standby set", "device-mutation"),
+            ("test maestro", "device-mutation"),
+            ("test instrumentation", "device-mutation"),
+            ("agent test", "device-mutation"),
+            ("agent matrix", "device-mutation"),
+            ("notifications tap", "device-mutation"),
+            ("ui dismiss-overlays", "device-mutation"),
             ("tools install", "destructive"),
         ] {
             let command = catalog

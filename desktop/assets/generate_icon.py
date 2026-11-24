@@ -1,68 +1,81 @@
-"""Generate AndroidForge desktop icon PNG/ICO from the same geometry as icon.svg.
+"""Render the AndroidForge worker-robot icon from icon.svg.
+
+The SVG is the source of truth; Edge/Chrome renders it at 512px, then Pillow
+writes the PNG and multi-size Windows ICO.
 
 Run from the repository root:
     python desktop/assets/generate_icon.py
 """
 
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
-SCALE = 1024
-BG = "#0B0E13"
-BORDER = "#252C39"
-ACCENT = "#F5A524"
-BLUE = "#58A6FF"
-GREEN = "#3FB950"
+SVG = ROOT / "icon.svg"
+PNG = ROOT / "icon.png"
+ICO = ROOT / "icon.ico"
+
+BROWSER_CANDIDATES = [
+    Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+    Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+    Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+    Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+]
 
 
-def scaled(value: float) -> int:
-    return round(value * SCALE / 512)
+def find_browser() -> Path:
+    for candidate in BROWSER_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    for name in ("msedge", "chrome"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    raise SystemExit("Edge or Chrome is required to render desktop/assets/icon.svg.")
+
+
+def render_svg(browser: Path) -> Image.Image:
+    with tempfile.TemporaryDirectory(prefix="androidforge-icon-") as directory:
+        directory = Path(directory)
+        screenshot = directory / "icon.png"
+        profile = directory / "profile"
+        subprocess.run(
+            [
+                str(browser),
+                "--headless=new",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-sync",
+                "--hide-scrollbars",
+                "--no-first-run",
+                "--force-device-scale-factor=1",
+                f"--user-data-dir={profile}",
+                "--window-size=512,512",
+                f"--screenshot={screenshot}",
+                SVG.as_uri(),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        image = Image.open(screenshot)
+        with image:
+            image = image.convert("RGBA")
+        if image.size != (512, 512):
+            image = image.resize((512, 512), Image.Resampling.LANCZOS)
+        return image
 
 
 def main() -> None:
-    image = Image.new("RGBA", (SCALE, SCALE), BG)
-    draw = ImageDraw.Draw(image)
-
-    draw.rounded_rectangle(
-        [0, 0, SCALE - 1, SCALE - 1],
-        radius=scaled(112),
-        fill=BG,
-    )
-    draw.rounded_rectangle(
-        [scaled(20), scaled(20), SCALE - scaled(20), SCALE - scaled(20)],
-        radius=scaled(96),
-        outline=BORDER,
-        width=scaled(8),
-    )
-
-    hexagon = [
-        (scaled(256), scaled(82)),
-        (scaled(401), scaled(165)),
-        (scaled(401), scaled(347)),
-        (scaled(256), scaled(430)),
-        (scaled(111), scaled(347)),
-        (scaled(111), scaled(165)),
-        (scaled(256), scaled(82)),
-    ]
-    draw.line(hexagon, fill=ACCENT, width=scaled(24), joint="curve")
-    draw.polygon(
-        [(scaled(232), scaled(205)), (scaled(318), scaled(256)), (scaled(232), scaled(307))],
-        fill=ACCENT,
-    )
-
-    radius = scaled(18)
-    cx, cy = scaled(401), scaled(347)
-    draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=BLUE)
-
-    radius = scaled(12)
-    cx, cy = scaled(111), scaled(165)
-    draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=GREEN)
-
-    image.resize((512, 512), Image.Resampling.LANCZOS).save(ROOT / "icon.png")
+    image = render_svg(find_browser())
+    image.save(PNG)
     image.resize((256, 256), Image.Resampling.LANCZOS).save(
-        ROOT / "icon.ico",
+        ICO,
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
     )
 

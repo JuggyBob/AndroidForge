@@ -10,15 +10,37 @@
     "description": { "type": "string" },
     "setup_fixture": { "type": "string" },
     "flow": {
-      "type": "object",
-      "required": ["type"],
-      "properties": {
-        "type": { "enum": ["script", "maestro", "fixture"] },
-        "command": { "type": "array", "items": { "type": "string" } },
-        "path": { "type": "string" },
-        "name": { "type": "string" },
-        "timeout_secs": { "type": "integer", "minimum": 1 }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "command"],
+          "properties": {
+            "type": { "const": "script" },
+            "command": { "type": "array", "items": { "type": "string" } },
+            "timeout_secs": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "path"],
+          "properties": {
+            "type": { "const": "maestro" },
+            "path": { "type": "string" },
+            "timeout_secs": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "name"],
+          "properties": {
+            "type": { "const": "fixture" },
+            "name": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "expect": {
       "type": "object",

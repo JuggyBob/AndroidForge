@@ -1140,6 +1140,9 @@ async fn dismiss_overlays(
     device: &androidforge_core::model::Device,
     args: &UiDismissOverlaysArgs,
 ) -> Result<CommandSuccess> {
+    if !ctx.dry_run {
+        ctx.ensure_physical_mutation_allowed(device, "dismissing system overlays")?;
+    }
     execute_in_run!(
         ctx,
         "ui.dismiss-overlays",

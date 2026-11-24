@@ -35,8 +35,11 @@ if (Test-Path $portable) { Remove-Item -Recurse -Force $portable }
 New-Item -ItemType Directory -Force -Path $portable | Out-Null
 Copy-Item 'target\release\androidforge.exe' $portable
 Copy-Item 'target\release\androidforge-desktop.exe' $portable
-foreach ($doc in @('LICENSE', 'README.md', 'USER_GUIDE.md', 'CHANGELOG.md')) {
+foreach ($doc in @('LICENSE', 'README.md', 'USER_GUIDE.md', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md')) {
     if (Test-Path $doc) { Copy-Item $doc $portable }
+}
+foreach ($fontLicense in @('desktop\assets\fonts\OFL-Inter.txt', 'desktop\assets\fonts\OFL-JetBrainsMono.txt')) {
+    if (Test-Path $fontLicense) { Copy-Item $fontLicense $portable }
 }
 @"
 AndroidForge $version — portable Windows x86_64
@@ -95,7 +98,9 @@ $assets = @(
     $cliZip,
     $desktopZip,
     $screenshotsZip,
-    'dist\androidforge-windows-x86_64-setup.exe'
+    'dist\androidforge-windows-x86_64-setup.exe',
+    'target\release\androidforge.exe',
+    'target\release\androidforge-desktop.exe'
 ) | Where-Object { Test-Path $_ }
 
 $lines = foreach ($asset in $assets) {

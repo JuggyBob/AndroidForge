@@ -1,6 +1,7 @@
 # Verification record
 
-This document records what was actually run for the `0.13.0` optional Maestro/tool-database/MCP release,
+This document records what was actually run for the `1.0.0` first stable release, the `0.13.0`
+optional Maestro/tool-database/MCP release,
 the `0.12.1` dependency and supply-chain patch, the `0.12.0` stable pre-1.0 release, the `0.11.0`
 desktop and agent-onboarding beta, the `0.10.0` agent-surface release, the `0.9.4` safety and
 repeatability release, the `0.9.3` contract and coverage release, the `0.9.2` patch, the `0.9.1` patch,
@@ -1875,3 +1876,86 @@ data.
 
 Validation results are only claimed where the operation above was actually performed. Unsupported
 features return structured `E_UNSUPPORTED_OPERATION` errors rather than fabricated success.
+
+## v1.0.0 verification (2026-11-24)
+
+All delegated verification workstreams for this release used exactly `opencode-go/hy4-flash-free#high`.
+This section records the completed host gate, packaging inspection and two-ROM scope: POCO X4 GT with
+the approved in-place upgrade and UI work, plus REDMAGIC with zero-touch read-only coverage only.
+REDMAGIC UI automation and all device actions are **NOT RUN** by the explicit zero-touch rule.
+
+### Host gate (after the final lock fix)
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean.
+- `cargo test --workspace --locked`: **392 passed / 0 failed** across 27 suites, including 4 new
+  unreadable-lock tests.
+- `cargo deny check advisories bans licenses sources`: clean.
+- Release build: clean. CLI reports `androidforge 1.0.0`; desktop reports `androidforge-desktop 1.0.0`.
+- Catalog/schema/MCP: 191 catalog commands, 192 MCP tools, 31/31 schemas; MCP `initialize` and
+  `tools/list` both reported 192 tools.
+
+### Packaged assets and installer (final v1.0.0 package)
+
+- Final asset hashes matched `dist/SHA256SUMS.txt` and are recorded in the v1.0.0 release notes,
+  including the standalone executables `androidforge.exe`
+  (`ea8ed8ea18c34e9e35c00e38a5d5028bafe89a97209d99459ff1d60cc6300788`) and `androidforge-desktop.exe`
+  (`ce0e540403fafd94285ad20809f81de159932483185bd1e27708160be6b91aba`).
+- Both standalone EXEs are byte-identical to the copies inside the ZIPs and installer; the desktop
+  cockpit requires the CLI to remain adjacent.
+- Installer `FileVersion`/`ProductVersion`: `1.0.0`.
+- Both portable ZIPs contained all required docs, third-party notices and font OFL texts.
+- Extracted CLI and desktop both reported `1.0.0`.
+- Silent install exit 0; installed EXE hashes matched `target/release`; silent uninstall exit 0; install
+  directory removed; registry and Start Menu entries clean.
+
+### Physical device: POCO X4 GT / HyperOS 2 / Android 14 (API 34)
+
+Using the packaged AndroidForge 1.0.0 CLI. Physical mutation was limited to the explicitly approved
+in-place upgrade of `com.aistudio.fitness.ironpulse`.
+
+- In-place upgrade 5.1.0/code 15 → 5.1.2/code 17: `decision: installed`, `reason: content_different`,
+  same debug certificate `C1FD411D…ED691`, installed base APK SHA-256
+  `2321cd4619e65502409f9d2f87fceff2cdbcc1c576732948b242edfa74c235e4`.
+- `app verify-installed` reported the same identity; all expected version/code/hash assertions passed.
+- `firstInstallTime` unchanged `2026-11-20 20:52:34`; `lastUpdateTime` changed to
+  `2026-11-24 14:10:31`.
+- Data inventory: 65 files / 2389 KB before → 65 files / 2389 KB immediately after → 66 files /
+  2373 KB after launch. No data clear and no uninstall.
+- `pm list packages` 381 → 381 (0 diff); `settings global` 418 → 418 (0 diff); `settings secure`
+  354 → 354 (0 diff).
+- Foreground launch; `ui observe` 84 nodes and 29 clickable matches; screenshot SHA-256
+  `3336BCCC…1122D`; recording SHA-256 `69D7EBD6…18CF`; no residual device recording temp files.
+- Session released; IronPulse 5.1.2 remains installed with its data.
+
+### Physical device: nubia NX789J / REDMAGIC 10 Pro (Android 16 / API 36) — zero-touch read-only
+
+Using the packaged AndroidForge 1.0.0 CLI over wireless ADB. Device: arm64-v8a, production build,
+RedMagicOS `11.0.6_EU`. No session was created, the isolated AndroidForge home stayed empty, and no
+device action, launch, install or UI automation was attempted.
+
+- 8/8 read-only checks succeeded: `doctor` (exit 3 warnings only — no AVDs, no Maestro, no project
+  config; all non-blocking), `devices inspect`, `devices health`, `app list` (438 packages),
+  `app status` for IronPulse 5.1.2/code 17, `notifications list`, bounded `logcat peek` and screenshot.
+- IronPulse was already installed at 5.1.2/code 17 and debuggable; `firstInstallTime`
+  `2026-11-21 06:50:07`, `lastUpdateTime` `2026-11-21 11:37:20`, signature unchanged. The app was
+  neither launched nor modified.
+- Zero-touch proof: before/after `pm list packages` identical; `settings global` identical;
+  `settings secure` identical; `/data/local/tmp` listing identical (only pre-existing shizuku files);
+  `getprop` and `df` identical; IronPulse package metadata identical except transient `dumpsys` object
+  IDs and battery telemetry drift.
+- Screenshot SHA-256 `cfa4b6d356132645115fd322ea72e3e5b3fe39ef9fb6ed2511e9c82186568148`, 169,549
+  bytes, 1216×2688. Trace showed `exec-out screencap -p`; no device temp file was created.
+- UI automation and all device actions on REDMAGIC are **NOT RUN** by the explicit zero-touch rule.
+  No UI/tap/install result is claimed for this ROM.
+
+### Physical-ROM status
+
+| ROM | Status | Evidence |
+| --- | --- | --- |
+| POCO X4 GT / HyperOS 2 / Android 14 (API 34) | PASS — approved in-place upgrade, live verification and UI evidence | Details above |
+| nubia NX789J / REDMAGIC 10 Pro, Android 16 / API 36, RedMagicOS 11.0.6_EU | PASS — zero-touch read-only coverage only; UI/actions **NOT RUN** | Details above |
+
+The two-ROM scope is complete for the supported coverage: full approved mutation/UI on POCO X4 GT and
+zero-touch read-only inspection on REDMAGIC. Emulator runs on API 34 / API 36 remain baseline/supporting
+evidence. REDMAGIC UI automation, taps and installs remain deliberately unexercised.

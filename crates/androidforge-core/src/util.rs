@@ -414,16 +414,16 @@ fn valid_package_segment(segment: &str) -> bool {
 }
 
 pub fn sanitize_serial(serial: &str) -> String {
-    serial
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    let mut output = String::with_capacity(serial.len());
+    for byte in serial.bytes() {
+        let character = byte as char;
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+            output.push(character);
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
 }
 
 pub fn shell_safe_hint(value: &str) -> String {
@@ -440,6 +440,14 @@ pub fn shell_safe_hint(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_serial_is_injective_and_stable() {
+        assert_eq!(sanitize_serial("emulator-5554"), "emulator-5554");
+        assert_eq!(sanitize_serial("192.168.1.2:5555"), "192.168.1.2%3A5555");
+        assert_ne!(sanitize_serial("a:b"), sanitize_serial("a_b"));
+        assert_ne!(sanitize_serial("a:b"), sanitize_serial("a%3Ab"));
+    }
 
     #[test]
     fn parses_durations() {

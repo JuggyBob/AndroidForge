@@ -561,9 +561,15 @@ impl ForgeConfig {
 
     pub fn fixture_path(&self, name: &str) -> PathBuf {
         let dir = self.fixtures_dir();
-        let direct = dir.join(format!("{name}.toml"));
-        if direct.is_file() {
-            return direct;
+        for extension in ["toml", "json"] {
+            let direct = dir.join(format!("{name}.{extension}"));
+            if direct.is_file() {
+                return direct;
+            }
+            let nested = dir.join(name).join(format!("fixture.{extension}"));
+            if nested.is_file() {
+                return nested;
+            }
         }
         dir.join(name).join("fixture.toml")
     }
@@ -1189,9 +1195,29 @@ mod tests {
             "version = 1\nname = \"filefixture\"\n",
         )
         .unwrap();
+        std::fs::write(
+            temp.path().join(".androidforge/fixtures/jsonfixture.json"),
+            "{\"version\":1,\"name\":\"jsonfixture\"}",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join(".androidforge/fixtures/jsondir")).unwrap();
+        std::fs::write(
+            temp.path()
+                .join(".androidforge/fixtures/jsondir/fixture.json"),
+            "{\"version\":1,\"name\":\"jsondir\"}",
+        )
+        .unwrap();
         let paths = ForgePaths::discover(Some(temp.path().to_path_buf()), None).unwrap();
         let config = ForgeConfig::load(&paths).unwrap();
         assert!(config.fixture_path("filefixture").is_file());
         assert!(config.fixture_path("dirfixture").is_file());
+        assert_eq!(
+            config.fixture_path("jsonfixture").extension().unwrap(),
+            "json"
+        );
+        assert_eq!(
+            config.fixture_path("jsondir").file_name().unwrap(),
+            "fixture.json"
+        );
     }
 }

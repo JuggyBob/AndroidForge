@@ -474,21 +474,37 @@ impl Recorder {
             .session(session_id.to_string()));
         }
         let mut notes = state.notes.clone();
+        let mut signalled = false;
         if let Some(remote_pid) = state.remote_pid {
-            let _ = self
-                .adb
-                .shell_args(
-                    &state.serial,
-                    &["kill".to_string(), "-2".to_string(), remote_pid.to_string()],
-                    Some(Duration::from_secs(10)),
-                    None,
-                )
-                .await;
+            match verify_recording_process(&self.adb, &state.serial, remote_pid, &state.remote_path)
+                .await
+            {
+                RemoteIdentity::Verified => {
+                    let _ = self
+                        .adb
+                        .shell_args(
+                            &state.serial,
+                            &["kill".to_string(), "-2".to_string(), remote_pid.to_string()],
+                            Some(Duration::from_secs(10)),
+                            None,
+                        )
+                        .await;
+                    signalled = true;
+                }
+                RemoteIdentity::Mismatch => notes.push(format!(
+                    "remote PID {remote_pid} no longer belongs to this recording; skipped SIGINT"
+                )),
+                RemoteIdentity::Unknown => notes.push(format!(
+                    "could not verify remote PID {remote_pid}; skipped SIGINT (recording will end at its device time limit)"
+                )),
+            }
         } else {
             notes.push(
                 "remote recording PID was unavailable; the recording may continue until its device-side time limit"
                     .to_string(),
             );
+        }
+        if !signalled {
             kill_tree(state.local_pid);
         }
         let started = Instant::now();
@@ -638,6 +654,70 @@ fn truncate(value: &str, max: usize) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteIdentity {
+    Verified,
+    Mismatch,
+    Unknown,
+}
+
+fn classify_remote_identity(
+    cmdline: Option<&str>,
+    name: Option<&str>,
+    expected_remote_path: &str,
+) -> RemoteIdentity {
+    if let Some(cmdline) = cmdline {
+        if cmdline.contains("screenrecord") && cmdline.contains(expected_remote_path) {
+            return RemoteIdentity::Verified;
+        }
+        return RemoteIdentity::Mismatch;
+    }
+    match name {
+        Some(name) if name == "screenrecord" || name.rsplit('/').next() == Some("screenrecord") => {
+            RemoteIdentity::Verified
+        }
+        Some(_) => RemoteIdentity::Mismatch,
+        None => RemoteIdentity::Unknown,
+    }
+}
+
+async fn verify_recording_process(
+    adb: &AdbClient,
+    serial: &str,
+    pid: u32,
+    remote_path: &str,
+) -> RemoteIdentity {
+    let cmdline = adb
+        .shell_text(
+            serial,
+            &["cat".to_string(), format!("/proc/{pid}/cmdline")],
+            Some(Duration::from_secs(5)),
+        )
+        .await
+        .ok();
+    let name = if cmdline.is_none() {
+        adb.shell_args(
+            serial,
+            &[
+                "ps".to_string(),
+                "-p".to_string(),
+                pid.to_string(),
+                "-o".to_string(),
+                "NAME=".to_string(),
+            ],
+            Some(Duration::from_secs(5)),
+            None,
+        )
+        .await
+        .ok()
+        .map(|output| output.stdout_text().trim().to_string())
+        .filter(|name| !name.is_empty())
+    } else {
+        None
+    };
+    classify_remote_identity(cmdline.as_deref(), name.as_deref(), remote_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +744,43 @@ mod tests {
     #[test]
     fn recording_keys_are_safe() {
         assert_eq!(sanitize_key("ses/../../x"), "ses_______x");
+    }
+
+    #[test]
+    fn recording_identity_requires_the_expected_process_and_path() {
+        const NUL: &str = "\0";
+        let path = "/data/local/tmp/androidforge-record-abc.mp4";
+        assert_eq!(
+            classify_remote_identity(
+                Some(&format!(
+                    "screenrecord{NUL}--time-limit{NUL}005{NUL}{path}{NUL}"
+                )),
+                None,
+                path
+            ),
+            RemoteIdentity::Verified
+        );
+        assert_eq!(
+            classify_remote_identity(
+                Some(&format!(
+                    "screenrecord{NUL}--time-limit{NUL}005{NUL}/other.mp4{NUL}"
+                )),
+                None,
+                path
+            ),
+            RemoteIdentity::Mismatch
+        );
+        assert_eq!(
+            classify_remote_identity(None, Some("screenrecord"), path),
+            RemoteIdentity::Verified
+        );
+        assert_eq!(
+            classify_remote_identity(None, Some("sh"), path),
+            RemoteIdentity::Mismatch
+        );
+        assert_eq!(
+            classify_remote_identity(None, None, path),
+            RemoteIdentity::Unknown
+        );
     }
 }

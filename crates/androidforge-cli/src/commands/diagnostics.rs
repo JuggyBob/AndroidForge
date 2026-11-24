@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::ArtifactRef;
@@ -9,7 +10,7 @@ use androidforge_core::util::write_atomic;
 use androidforge_diagnostics::{
     LogcatRecord, LogcatStream, PerformanceOptions, PerformanceReport, Recorder, capture_frame,
     capture_screenshot, collect_diagnostics, collect_logcat_peek, collect_logcat_tail,
-    collect_performance, detect_crashes, parse_threadtime_line,
+    collect_performance, detect_crashes, logcat_line_matches_package, parse_threadtime_line,
 };
 
 use crate::cli::{
@@ -892,6 +893,32 @@ pub async fn stream_logcat_watch(cli: &crate::cli::Cli, args: &LogcatWatchArgs) 
         .transpose()
         .map_err(|error| ForgeError::invalid_argument(format!("invalid --grep: {error}")))?;
     let level = args.level.as_deref().and_then(priority).unwrap_or(0);
+    let package = args.package.as_deref();
+    let pids = if let Some(package) = package {
+        adb.shell_args(
+            &device.serial,
+            &["pidof".to_string(), package.to_string()],
+            Some(Duration::from_secs(5)),
+            None,
+        )
+        .await
+        .ok()
+        .map(|output| {
+            output
+                .stdout_text()
+                .split_whitespace()
+                .filter_map(|value| value.parse::<u32>().ok())
+                .collect::<Vec<u32>>()
+        })
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if package.is_some() && pids.is_empty() {
+        eprintln!(
+            "note: the package process was not running; only lines mentioning the package name will be kept"
+        );
+    }
     let mut child = tokio::process::Command::new(&adb.adb)
         .arg("-s")
         .arg(&device.serial)
@@ -918,7 +945,6 @@ pub async fn stream_logcat_watch(cli: &crate::cli::Cli, args: &LogcatWatchArgs) 
     let mut lines = BufReader::new(stdout).lines();
     let deadline = tokio::time::sleep(timeout);
     tokio::pin!(deadline);
-    let explicit_filter = args.crash || args.anr || regex.is_some();
     let mut emitted = 0usize;
     loop {
         let line = tokio::select! {
@@ -936,10 +962,14 @@ pub async fn stream_logcat_watch(cli: &crate::cli::Cli, args: &LogcatWatchArgs) 
         }
         let crash = record.level == "F" || record.message.contains("FATAL EXCEPTION");
         let anr = record.message.contains("ANR in ");
-        let grep_match = regex
-            .as_ref()
-            .is_some_and(|regex| regex.is_match(&record.message) || regex.is_match(&record.tag));
-        if explicit_filter && !((args.crash && crash) || (args.anr && anr) || grep_match) {
+        if !watch_record_allowed(
+            &record,
+            package,
+            &pids,
+            args.crash,
+            args.anr,
+            regex.as_ref(),
+        ) {
             continue;
         }
         let event = if crash {
@@ -986,6 +1016,30 @@ fn priority(value: &str) -> Option<u8> {
         "f" | "fatal" | "assert" => Some(5),
         _ => None,
     }
+}
+
+/// Decide whether a streamed record should be emitted. Any explicit filter
+/// (`--package`, `--crash`, `--anr`, `--grep`) narrows the stream, and a record
+/// matching any of the enabled filters is kept.
+fn watch_record_allowed(
+    record: &LogcatRecord,
+    package: Option<&str>,
+    pids: &[u32],
+    crash_only: bool,
+    anr_only: bool,
+    regex: Option<&regex::Regex>,
+) -> bool {
+    let crash = record.level == "F" || record.message.contains("FATAL EXCEPTION");
+    let anr = record.message.contains("ANR in ");
+    let grep_match =
+        regex.is_some_and(|regex| regex.is_match(&record.message) || regex.is_match(&record.tag));
+    let package_match = package
+        .is_some_and(|package| logcat_line_matches_package(&record.raw, record.pid, package, pids));
+    (!crash_only && !anr_only && regex.is_none() && package.is_none())
+        || (crash_only && crash)
+        || (anr_only && anr)
+        || grep_match
+        || package_match
 }
 
 async fn logcat_start(ctx: &CliContext, args: &LogcatStartArgs) -> Result<CommandSuccess> {
@@ -1260,4 +1314,107 @@ fn resolve_input_path(ctx: &CliContext, path: &Path) -> std::path::PathBuf {
         return artifact;
     }
     cwd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(pid: Option<u32>, tag: &str, message: &str) -> LogcatRecord {
+        let process = pid.unwrap_or(0);
+        LogcatRecord {
+            timestamp: "11-15 10:00:00.000".to_string(),
+            pid,
+            tid: Some(1300),
+            level: "I".to_string(),
+            tag: tag.to_string(),
+            message: message.to_string(),
+            raw: format!("11-15 10:00:00.000  {process}  1300 I/{tag}: {message}"),
+        }
+    }
+
+    #[test]
+    fn watch_package_filter_keeps_process_and_named_lines() {
+        let process = record(Some(1234), "Tag", "ordinary process line");
+        let named = record(Some(9999), "Tag", "starting com.example");
+        let other = record(Some(9999), "Tag", "unrelated line");
+        assert!(watch_record_allowed(
+            &process,
+            Some("com.example"),
+            &[1234],
+            false,
+            false,
+            None
+        ));
+        assert!(watch_record_allowed(
+            &named,
+            Some("com.example"),
+            &[1234],
+            false,
+            false,
+            None
+        ));
+        assert!(!watch_record_allowed(
+            &other,
+            Some("com.example"),
+            &[1234],
+            false,
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn watch_package_filter_without_running_process_still_matches_name() {
+        let named = record(Some(9999), "Tag", "starting com.example");
+        let other = record(Some(9999), "Tag", "unrelated line");
+        assert!(watch_record_allowed(
+            &named,
+            Some("com.example"),
+            &[],
+            false,
+            false,
+            None
+        ));
+        assert!(!watch_record_allowed(
+            &other,
+            Some("com.example"),
+            &[],
+            false,
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn watch_filters_are_combined_as_or() {
+        let other = record(Some(9999), "Tag", "unrelated line");
+        let fatal = record(Some(9999), "AndroidRuntime", "FATAL EXCEPTION: main");
+        let grep = regex::Regex::new("unrelated").unwrap();
+        assert!(watch_record_allowed(
+            &other,
+            Some("com.example"),
+            &[1234],
+            false,
+            false,
+            Some(&grep)
+        ));
+        assert!(watch_record_allowed(
+            &fatal,
+            Some("com.example"),
+            &[1234],
+            true,
+            false,
+            None
+        ));
+        assert!(!watch_record_allowed(
+            &other,
+            Some("com.example"),
+            &[1234],
+            true,
+            true,
+            None
+        ));
+        assert!(watch_record_allowed(&other, None, &[], false, false, None));
+    }
 }

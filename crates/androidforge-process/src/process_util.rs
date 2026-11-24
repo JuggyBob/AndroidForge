@@ -40,6 +40,41 @@ pub fn process_exists(pid: u32) -> bool {
     }
 }
 
+/// Best-effort image name for a local process. Used before destructive signals
+/// to reduce PID-reuse risk. Returns `None` when the identity cannot be read.
+pub fn process_image_name(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        use std::os::windows::process::CommandExt;
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text.lines().find(|line| !line.trim().is_empty())?;
+        if !line.starts_with('"') {
+            return None;
+        }
+        let name = line.split("\",\"").next()?.trim_matches('"').trim();
+        (!name.is_empty()).then(|| name.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            .ok()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+    }
+}
+
 /// Terminate a process and its descendants.
 ///
 /// On Windows `taskkill /T /F` is used. This is a native utility, not a shell,
@@ -94,5 +129,16 @@ pub fn kill_tree(pid: u32) {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_name_is_available_for_this_test_process() {
+        let name = process_image_name(std::process::id()).expect("current process image");
+        assert!(!name.trim().is_empty());
     }
 }

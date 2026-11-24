@@ -1,6 +1,6 @@
 # Contributing to AndroidForge
 
-Thanks for taking the time to contribute. AndroidForge is a pre-1.0 stable release line. Bug reports,
+Thanks for taking the time to contribute. AndroidForge is on the stable 1.0 release line. Bug reports,
 reproduction cases and small, focused pull requests are especially valuable.
 
 ## Before you start

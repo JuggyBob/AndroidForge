@@ -395,6 +395,16 @@ impl Notifications {
         serial: &str,
         selector: &NotificationSelector,
     ) -> Result<Vec<NotificationInfo>> {
+        if !selector.has_conditions() {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "notifications clear requires a selector; refusing to clear every notification",
+            )
+            .with_suggestion(
+                "Pass --package, --id, --tag, --title or --text, or use `notifications tap` for a specific notification.",
+            )
+            .device(serial.to_string()));
+        }
         let list = self.list(serial, selector.package.as_deref()).await?;
         let matched = list
             .notifications
@@ -446,9 +456,35 @@ impl Notifications {
             } else {
                 return Err(ForgeError::new(
                     ErrorCode::UnsupportedOperation,
-                    "this Android build does not expose `cmd notification cancel`",
+                    format!(
+                        "could not clear notification {package}/{id} with `cmd notification cancel`"
+                    ),
                 )
-                .with_suggestion("Dismiss the notification through the shade with `androidforge notifications tap` or `androidforge ui`.")
+                .with_context(
+                    "cleared_before_failure",
+                    serde_json::json!(cleared
+                        .iter()
+                        .map(|item| serde_json::json!({
+                            "package": item.package,
+                            "id": item.id,
+                            "tag": item.tag,
+                        }))
+                        .collect::<Vec<_>>()),
+                )
+                .with_context(
+                    "failed_notification",
+                    serde_json::json!({
+                        "package": package,
+                        "id": id,
+                        "tag": notification.tag,
+                    }),
+                )
+                .with_suggestion(
+                    "This build may not expose `cmd notification cancel`; expand the shade and swipe the row with `androidforge ui swipe`.",
+                )
+                .with_suggestion(
+                    "Use `cmd notification cancel_all` only when clearing every notification is intended.",
+                )
                 .device(serial.to_string()));
             }
         }
@@ -673,6 +709,18 @@ NotificationRecord{8b2c3d4e pkg=com.other id=1 tag=null channel=default importan
         assert_eq!(first.title.as_deref(), Some("New deal"));
         assert_eq!(first.text.as_deref(), Some("Save 20%"));
         assert!(parsed.channels.contains_key("deals"));
+    }
+
+    #[test]
+    fn notification_selector_requires_conditions() {
+        assert!(!NotificationSelector::default().has_conditions());
+        assert!(
+            NotificationSelector {
+                package: Some("com.example".to_string()),
+                ..NotificationSelector::default()
+            }
+            .has_conditions()
+        );
     }
 
     #[test]

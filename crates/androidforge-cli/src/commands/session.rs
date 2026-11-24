@@ -1669,6 +1669,14 @@ pub async fn emulator(ctx: &CliContext, command: &EmulatorCommand) -> Result<Com
                 Some(session) => session.serial()?.to_string(),
                 None => ctx.serial().await?,
             };
+            if !serial.starts_with("emulator-") {
+                return Err(ForgeError::new(
+                    ErrorCode::EmulatorNotFound,
+                    format!("{serial} is not an emulator serial"),
+                )
+                .with_suggestion("Pass --serial emulator-<port> or use `session status`.")
+                .device(serial));
+            }
             let manager = ctx.emulator_manager()?;
             let status = manager
                 .status(

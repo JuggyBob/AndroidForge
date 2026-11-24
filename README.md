@@ -6,10 +6,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Stable](https://img.shields.io/badge/status-stable-green.svg)](#project-status)
 
-> **Stable `v0.13.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Stable `v1.0.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows. Windows is the tested host; physical-device Maestro flows, instrumentation, snapshot
 > restore and root-only operations are not yet fully validated. Read [Project status](#project-status)
-> before relying on it.
+> and the [v1.0.0 release notes](docs/release-notes/v1.0.0.md) before relying on it.
 
 AndroidForge is a local-first Rust toolkit: a single native CLI for automation plus an optional native
 desktop cockpit for humans. The CLI gives an AI coding agent a reliable way to acquire an Android
@@ -83,17 +83,38 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 
 ## Screenshots
 
-Real captures from the v0.11.0 native desktop cockpit. The visual system is unchanged; v0.13.0 adds
-the **Tool database** page, which is not yet in this gallery. The full 16-image gallery is in
-[docs/screenshots/v0.11.0/](docs/screenshots/v0.11.0/README.md).
+Real captures from the **v1.0.0** native desktop cockpit. This five-image gallery replaces the older
+v0.11.0 gallery. The three polished showcase pages are featured below; Setup and Overview also exist in
+the gallery but show the environment-validation state visible when they were captured. See
+[docs/screenshots/v1.0.0/README.md](docs/screenshots/v1.0.0/README.md) for all five images and notes.
 
-| Setup / Agent Handoff | Overview |
+| Tool database | Ownership |
 | --- | --- |
-| [![Setup Agent Handoff](docs/screenshots/v0.11.0/02-setup-agent-handoff.png)](docs/screenshots/v0.11.0/02-setup-agent-handoff.png) | [![Overview](docs/screenshots/v0.11.0/03-overview.png)](docs/screenshots/v0.11.0/03-overview.png) |
-| **Sessions** | **Inspector** |
-| [![Sessions](docs/screenshots/v0.11.0/06-sessions.png)](docs/screenshots/v0.11.0/06-sessions.png) | [![Inspector](docs/screenshots/v0.11.0/13-inspector.png)](docs/screenshots/v0.11.0/13-inspector.png) |
-| **Settings** | **Light theme** |
-| [![Settings](docs/screenshots/v0.11.0/15-settings.png)](docs/screenshots/v0.11.0/15-settings.png) | [![Light theme overview](docs/screenshots/v0.11.0/16-overview-light.png)](docs/screenshots/v0.11.0/16-overview-light.png) |
+| [![Tool database](docs/screenshots/v1.0.0/02-tool-database.png)](docs/screenshots/v1.0.0/02-tool-database.png) | [![Ownership](docs/screenshots/v1.0.0/04-ownership.png)](docs/screenshots/v1.0.0/04-ownership.png) |
+| **Failure triage** | |
+| [![Failure triage](docs/screenshots/v1.0.0/05-triage.png)](docs/screenshots/v1.0.0/05-triage.png) | |
+
+## What is new in v1.0.0
+
+**The first 1.0 stable release.** v1.0.0 closes the pre-1.0 safety and contract gaps with explicit
+breaking changes, JSON fixture manifests, stronger redaction, the official Android robot icon with
+third-party notices, and a reproducible release-validation gate. The host gate, packaging inspection
+and two-ROM scope are recorded in [VERIFICATION.md](VERIFICATION.md): POCO X4 GT covered the approved
+in-place upgrade and UI work, while REDMAGIC 10 Pro / Android 16 covered zero-touch read-only checks.
+REDMAGIC UI automation and device actions are **NOT RUN**. Final asset hashes are listed in the
+[v1.0.0 release notes](docs/release-notes/v1.0.0.md).
+
+- **Breaking changes:** `notifications clear` now needs an explicit selector; more MCP tools require
+  `confirm=true`; `snapshot save`/`standby set` are reclassified `device-mutation`; physical-device
+  mutation is guarded; `emulator status` rejects non-emulator serials; `finalize_pass` fails a
+  `Running` step; the conformance schema uses a strict `oneOf`; `--run` warns when no step is appended;
+  and generated MCP tools forward `--yes`. Envelope and report schema stay at `1`.
+- **Fixtures and redaction:** JSON fixture manifests (`fixture.json`/`*.json`) load beside TOML;
+  JSON-style key/value secrets and mock-server query strings are redacted.
+- **Attribution and notices:** the official robot icon and bundled font licenses ship with the
+  installer and portable ZIP; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **Release validation:** CI/release checks now fail on version drift, catalog/schema count drift and
+  missing release content. Assets remain unsigned; verify `SHA256SUMS.txt`.
 
 ## What is new in v0.13.0
 
@@ -338,7 +359,9 @@ environment failure; missing Maestro is a warning.
 2. Choose an asset and verify it with `SHA256SUMS.txt`:
    - `androidforge-desktop-windows-x86_64.zip` - portable `androidforge.exe` + `androidforge-desktop.exe`, docs and license;
    - `androidforge-windows-x86_64-setup.exe` - per-user Windows installer with both executables, Start Menu shortcut and uninstaller;
-   - `androidforge-cli-windows-x86_64.zip` - standalone `androidforge.exe` for PATH/automation.
+   - `androidforge-cli-windows-x86_64.zip` - standalone `androidforge.exe` for PATH/automation;
+   - `androidforge.exe` - standalone CLI executable, byte-identical to the copy in the ZIPs and installer;
+   - `androidforge-desktop.exe` - standalone desktop cockpit executable, byte-identical to the packaged copy.
 3. For the installer, run the setup executable. No administrator rights are required. The application installs under your user profile.
 4. For the portable build, extract the ZIP and launch `androidforge-desktop.exe`. Keep `androidforge.exe` beside it.
 5. For the CLI only, extract the CLI zip, put `androidforge.exe` on `PATH`, and run:
@@ -348,9 +371,12 @@ androidforge --version
 androidforge doctor --json
 ```
 
-The desktop searches for the CLI beside itself, then a configured path, then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
+The two standalone EXEs are the exact binaries bundled in the ZIPs and installer. Keep
+`androidforge.exe` beside `androidforge-desktop.exe` when using the standalone files; the desktop
+cockpit requires that adjacency. The desktop searches for the CLI beside itself, then a configured path,
+then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `0.13.0` version line. The desktop refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `1.0.0` version line. The desktop requires an exact CLI version match and refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -573,9 +599,20 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Stable `v0.13.0` (pre-1.0).** The CLI has been exercised against real apps on Android 16 and Android
-14 emulators, including a two-AVD parallel matrix, and against a Xiaomi HyperOS device for read-only and
-safe UI paths. v0.12.0 closes the IronPulse 5.1.2 truth and automation gaps: live install metadata,
+**Stable `v1.0.0`.** The final host gate passed: fmt and strict clippy clean, `cargo test --workspace
+--locked` 392 passed / 0 failed across 27 suites (including 4 new unreadable-lock tests), clean
+`cargo deny` and release build; CLI and desktop both report `1.0.0`, with 191 catalog commands, 192
+MCP tools and 31/31 schemas. The final package passed checksum, installer metadata, bundled notices/fonts
+and silent install/uninstall verification. On the approved POCO X4 GT / HyperOS 2 /
+Android 14 (API 34) device, the packaged CLI completed an in-place IronPulse 5.1.0 → 5.1.2 upgrade
+(`content_different`, same certificate, data preserved) with passing live verification, UI observation
+and evidence capture. On REDMAGIC 10 Pro / RedMagicOS 11.0.6_EU / Android 16 (API 36), the same CLI
+passed 8/8 zero-touch read-only checks with identical before/after package, settings and `getprop`/`df`
+state; no session was created. REDMAGIC UI automation and all device actions are **NOT RUN** by the
+zero-touch rule. Final asset hashes are recorded in the
+[v1.0.0 release notes](docs/release-notes/v1.0.0.md). See [VERIFICATION.md](VERIFICATION.md).
+Earlier releases remain in the history
+below: v0.12.0 closes the IronPulse 5.1.2 truth and automation gaps: live install metadata,
 byte-truthful `--only-if-changed`, verification commands, configurable gestures and waits, app-data
 fixtures, adb reverse and local mock networking, visual regression, tap evidence and session-hygiene
 filters. The v0.11.0 desktop cockpit and agent-onboarding work remains in place, as do the v0.10.0
@@ -679,7 +716,8 @@ that was not exercised is not claimed as verified.
 - [USER_GUIDE.md](USER_GUIDE.md) — setup, devices, sessions, diagnostics, troubleshooting
 - [ARCHITECTURE.md](ARCHITECTURE.md) — crates, data flow, locking, process and report model
 - [desktop/README.md](desktop/README.md) - building and testing the native desktop cockpit
-- [docs/screenshots/v0.11.0/README.md](docs/screenshots/v0.11.0/README.md) - desktop UI screenshot gallery (visual system unchanged; v0.13 adds the Tool database page)
+- [docs/screenshots/v1.0.0/README.md](docs/screenshots/v1.0.0/README.md) - v1.0.0 desktop UI gallery (five captures; Setup/Overview show the environment-validation state)
+- [docs/release-notes/v1.0.0.md](docs/release-notes/v1.0.0.md) - v1.0.0 first stable release, breaking changes and validation checklist
 - [docs/release-notes/v0.12.0.md](docs/release-notes/v0.12.0.md) - v0.12.0 release notes
 - [docs/release-notes/v0.13.0.md](docs/release-notes/v0.13.0.md) - v0.13.0 optional Maestro, tool database and MCP surface
 - [docs/release-notes/v0.12.1.md](docs/release-notes/v0.12.1.md) - v0.12.1 dependency/security patch
@@ -691,6 +729,7 @@ that was not exercised is not claimed as verified.
 - [VERIFICATION.md](VERIFICATION.md) — exactly what was run, including limitations
 - [ACCEPTANCE.md](ACCEPTANCE.md) and [PORTFOLIO.md](PORTFOLIO.md) — acceptance flows and app coverage
 - [CHANGELOG.md](CHANGELOG.md) - release history
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) - Android robot and Lucide attribution
 - [COMPATIBILITY.md](COMPATIBILITY.md) - stable surfaces, deprecation process and MCP compatibility policy
 - [SECURITY.md](SECURITY.md) — trust boundaries and private reporting
 

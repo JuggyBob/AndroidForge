@@ -250,6 +250,7 @@ async fn conformance_run(ctx: &CliContext, args: &ConformanceRunArgs) -> Result<
     }
     let session = ctx.require_session()?;
     let device = ctx.resolve_device(Some(&session)).await?;
+    ctx.ensure_physical_mutation_allowed(&device, "running a conformance flow")?;
     let flow = args.flow.clone();
     execute_in_run!(
         ctx,
@@ -297,6 +298,7 @@ pub async fn test(ctx: &CliContext, command: &TestCommand) -> Result<CommandSucc
         TestCommand::Maestro { flow, timeout } => {
             let session = ctx.require_session()?;
             let device = ctx.resolve_device(Some(&session)).await?;
+            ctx.ensure_physical_mutation_allowed(&device, "running a Maestro flow")?;
             let flow = if flow.is_absolute() {
                 flow.clone()
             } else {
@@ -342,6 +344,7 @@ pub async fn test(ctx: &CliContext, command: &TestCommand) -> Result<CommandSucc
         } => {
             let session = ctx.require_session()?;
             let device = ctx.resolve_device(Some(&session)).await?;
+            ctx.ensure_physical_mutation_allowed(&device, "running an instrumentation test")?;
             let package = package.clone();
             let runner = runner
                 .clone()

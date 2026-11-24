@@ -99,14 +99,21 @@ pub async fn inspect_installed(
     serial: &str,
     package: &str,
 ) -> Result<Option<InstalledApkIdentity>> {
-    let paths = adb
+    // Some vendor builds (observed on MIUI) exit non-zero for
+    // `pm path <missing-package>`. Treat any failed lookup as "not installed"
+    // so callers can report a clean PackageNotFound instead of an opaque ADB
+    // failure. `installed_package` already uses the same policy.
+    let Ok(paths) = adb
         .shell_args(
             serial,
             &["pm".to_string(), "path".to_string(), package.to_string()],
             Some(Duration::from_secs(15)),
             None,
         )
-        .await?;
+        .await
+    else {
+        return Ok(None);
+    };
     let remote_paths = paths
         .stdout_text()
         .lines()

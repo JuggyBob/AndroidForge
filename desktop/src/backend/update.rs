@@ -177,6 +177,7 @@ fn safe_release_url(url: &str) -> Result<&str> {
 fn download(url: &str, limit: u64) -> Result<Vec<u8>> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(60)))
+        .https_only(true)
         .build()
         .into();
     let mut response = agent

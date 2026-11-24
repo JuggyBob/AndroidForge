@@ -521,7 +521,7 @@ async fn handle_connection(
     let target = parts.next().unwrap_or("/");
     let (path, query) = target
         .split_once('?')
-        .map(|(path, query)| (path.to_string(), Some(query.to_string())))
+        .map(|(path, query)| (path.to_string(), Some(redactor.redact(query))))
         .unwrap_or_else(|| (target.to_string(), None));
     let mut headers = BTreeMap::new();
     for line in lines {

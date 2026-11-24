@@ -128,7 +128,7 @@ pub async fn collect_diagnostics(
 
     match collect_logcat_tail(adb, serial, package, Some(log_lines), Some(max_log_bytes)).await {
         Ok(logcat) => {
-            logcat_preview = Some(logcat.preview.clone());
+            logcat_preview = Some(run.redactor().redact(&logcat.preview));
             let redacted_raw = run.redactor().redact(&logcat.raw);
             let relative = format!("logs/logcat-{stamp}.txt");
             match run.write_text_artifact(

@@ -300,6 +300,8 @@ async fn prepare(ctx: &CliContext, args: &PrepareArgs) -> Result<CommandSuccess>
         .with_session(session.id)
         .with_device(serial));
     }
+    let device = ctx.resolve_device(Some(&session)).await?;
+    ctx.ensure_physical_mutation_allowed(&device, "preparing a device")?;
     let preparer = DevicePreparer::new(adb);
     let result = preparer
         .prepare(&serial, &options, &mut session, &ctx.paths)
@@ -333,6 +335,8 @@ async fn restore(ctx: &CliContext) -> Result<CommandSuccess> {
         .with_session(session.id)
         .with_device(serial));
     }
+    let device = ctx.resolve_device(Some(&session)).await?;
+    ctx.ensure_physical_mutation_allowed(&device, "restoring device settings")?;
     let preparer = DevicePreparer::new(ctx.adb()?);
     let result = preparer.restore(&serial, &mut session, &ctx.paths).await?;
     Ok(success(

@@ -1,10 +1,12 @@
 # Compatibility and deprecation policy
 
-This policy applies to the **stable 0.13.x line** and to future releases until this document is
+This policy applies to the **stable 1.0.x line** and to future releases until this document is
 replaced. It answers one question: what may an agent or script rely on, and how will AndroidForge tell
 them when that changes?
 
-AndroidForge is pre-1.0. The policy below is deliberately stricter than the version number requires.
+AndroidForge is at 1.0. The stable tiers below are the compatibility promise for the supported host
+matrix; the 1.0 release also ships documented breaking safety and schema changes (see the
+`BREAKING CHANGES` section of `CHANGELOG.md` and [v1.0.0 release notes](docs/release-notes/v1.0.0.md)).
 
 ## 1. Stability tiers
 
@@ -24,18 +26,20 @@ AndroidForge is pre-1.0. The policy below is deliberately stricter than the vers
 `CAPABILITIES.md` is the authority for whether a capability is supported, best-effort or unsupported in
 a given build.
 
-## 2. Semantic versioning in the 0.x line
+## 2. Semantic versioning from 1.0
 
-- **Patch (0.13.x):** bug fixes, security/dependency fixes, documentation and additive fields that do
+- **Patch (1.0.x):** bug fixes, security/dependency fixes, documentation and additive fields that do
   not change documented behavior.
-- **Minor (0.x.0):** new commands/features, additive schema fields, new MCP tools, or a deprecation
+- **Minor (1.x.0):** new commands/features, additive schema fields, new MCP tools, or a deprecation
   that is announced in the release notes.
-- **Major (x.0.0):** reserved for incompatible contract changes. A 1.0 release will make the stable
-  tiers above the compatibility promise for the supported host matrix.
+- **Major (x.0.0):** reserved for incompatible contract changes. The 1.0 release makes the stable
+  tiers above the compatibility promise for the supported host matrix. Breaking changes that were
+  required to close safety gaps before 1.0 are listed once in `CHANGELOG.md`; later major releases
+  follow the deprecation process in section 3.
 
 The version is reported by `androidforge --version`, `androidforge capabilities --json` and every run
-report. The desktop and CLI on the same machine must be on the same version line; the desktop refuses a
-mismatched CLI rather than guessing.
+report. The desktop and CLI on the same machine must be the same version, including the patch version;
+the desktop refuses a mismatched CLI rather than guessing.
 
 ## 3. Deprecation process
 
@@ -93,6 +97,8 @@ Run reports use `schema_version: 1` in `report.json`, `metadata.json` and `manif
 - A removed or incompatible field requires a new report schema version and a documented migration.
 - Readers must tolerate unknown fields and preserve raw JSON when forwarding evidence.
 - The `androidforge report` commands remain able to read older reports on the same schema.
+- The 1.0 release deliberately keeps both the envelope and report schema at `1`; existing readers do
+  not need a migration.
 
 ## 6. Exit codes and error codes
 
@@ -128,9 +134,10 @@ The MCP server shells out to the same CLI. Its tool catalog has two layers:
 
 ## 8. Supported platforms
 
-For the 0.13.x stable line, **Windows 10/11 x86_64 is the tested host**. Linux and macOS are not
-validated for v1.0. The CLI is written without Windows-only logic where practical, but no compatibility
-promise is made for untested hosts.
+For the 1.0.x stable line, **Windows 10/11 x86_64 is the tested host**. Linux and macOS are not
+validated for the 1.0 line. The CLI is written without Windows-only logic where practical, but no
+compatibility promise is made for untested hosts. Release binaries are unsigned; SmartScreen warnings
+are expected and are not a compatibility defect.
 
 Android support is validated on API 36 emulators and a Xiaomi HyperOS physical device for read-only and
 approved mutation paths. Vendor ROM behavior remains best-effort.
