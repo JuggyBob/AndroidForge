@@ -622,9 +622,11 @@ fn context_surfaces_stale_and_expired_advisories_without_a_device() {
     write_synthetic_session(temp.path(), &session);
     select_synthetic_session(temp.path(), &session.id);
 
+    let adb = fake_empty_adb(temp.path());
     let output = binary()
         .current_dir(temp.path())
         .env("ANDROIDFORGE_HOME", temp.path())
+        .env("ANDROIDFORGE_ADB", &adb)
         .args(["context", "--no-screen", "--json"])
         .output()
         .expect("context");
