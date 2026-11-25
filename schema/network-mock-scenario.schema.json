@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/network-mock-scenario.schema.json",
+  "title": "AndroidForge network mock scenario catalog entry or resolved configuration",
+  "description": "Named, loopback-only, bounded and redacted scenario definitions backed by fixture JSON. No third-party host semantics are encoded here.",
+  "type": "object",
+  "required": ["mode"],
+  "anyOf": [
+    { "required": ["name"] },
+    { "required": ["scenario"] }
+  ],
+  "properties": {
+    "name": { "enum": ["newer-release", "offline", "bad-digest", "no-APK"] },
+    "scenario": { "enum": ["newer-release", "offline", "bad-digest", "no-APK"] },
+    "description": { "type": "string" },
+    "mode": { "enum": ["serve", "offline"] },
+    "fixture_file": { "type": "string", "minLength": 1 },
+    "fixture": { "type": ["string", "null"] },
+    "bind": { "type": "string", "minLength": 1 },
+    "max_response_bytes": { "type": "integer", "minimum": 1 },
+    "max_requests": { "type": "integer", "minimum": 1 },
+    "duration_ms": { "type": "integer", "minimum": 1 },
+    "redact": { "type": "boolean" },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/route" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "route": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "pattern": "^/" },
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "type": "string" },
+        "delay_ms": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

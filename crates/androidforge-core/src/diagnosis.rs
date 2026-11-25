@@ -33,6 +33,9 @@ pub enum DiagnosisCategory {
     Timeout,
     Assertion,
     Permission,
+    Performance,
+    Build,
+    Artifact,
     Configuration,
     Cancelled,
     Interrupted,
@@ -40,6 +43,33 @@ pub enum DiagnosisCategory {
 }
 
 impl DiagnosisCategory {
+    pub const ALL: &'static [DiagnosisCategory] = &[
+        Self::Environment,
+        Self::Device,
+        Self::Emulator,
+        Self::Install,
+        Self::Signature,
+        Self::Application,
+        Self::Process,
+        Self::Task,
+        Self::Anr,
+        Self::Selector,
+        Self::SelectorAmbiguous,
+        Self::ElementReference,
+        Self::Observation,
+        Self::UiAutomation,
+        Self::Timeout,
+        Self::Assertion,
+        Self::Permission,
+        Self::Performance,
+        Self::Build,
+        Self::Artifact,
+        Self::Configuration,
+        Self::Cancelled,
+        Self::Interrupted,
+        Self::Unknown,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Environment => "environment",
@@ -59,6 +89,9 @@ impl DiagnosisCategory {
             Self::Timeout => "timeout",
             Self::Assertion => "assertion",
             Self::Permission => "permission",
+            Self::Performance => "performance",
+            Self::Build => "build",
+            Self::Artifact => "artifact",
             Self::Configuration => "configuration",
             Self::Cancelled => "cancelled",
             Self::Interrupted => "interrupted",
@@ -264,13 +297,21 @@ fn category_for_code(code: ErrorCode) -> Option<DiagnosisCategory> {
         ErrorCode::UiAutomatorUnavailable | ErrorCode::ImeVisible => Some(C::UiAutomation),
         ErrorCode::CommandTimeout => Some(C::Timeout),
         ErrorCode::PermissionDenied => Some(C::Permission),
+        ErrorCode::ScreenOff | ErrorCode::PerformanceRegression => Some(C::Performance),
+        ErrorCode::BuildFailed | ErrorCode::BuildTimeout | ErrorCode::BuildOutputTooLarge => {
+            Some(C::Build)
+        }
+        ErrorCode::BuildArtifactNotFound
+        | ErrorCode::BuildArtifactAmbiguous
+        | ErrorCode::BuildIdentityMismatch => Some(C::Artifact),
         ErrorCode::ConfigInvalid
         | ErrorCode::AdapterInvalid
         | ErrorCode::FixtureInvalid
         | ErrorCode::JunitInvalid
         | ErrorCode::SessionProjectMismatch
         | ErrorCode::InvalidArgument
-        | ErrorCode::InvalidCommand => Some(C::Configuration),
+        | ErrorCode::InvalidCommand
+        | ErrorCode::BuildCommandNotConfigured => Some(C::Configuration),
         ErrorCode::Interrupted => Some(C::Interrupted),
         ErrorCode::PostconditionTimeout => Some(C::Assertion),
         _ => None,
@@ -899,6 +940,69 @@ fn next_actions(
                 ["androidforge", "diagnostics", "collect", "--json"],
             ));
         }
+        DiagnosisCategory::Performance => {
+            actions.push(action(
+                "Inspect connected devices and wake the screen before retrying the capture or measurement.",
+                "high",
+                ["androidforge", "devices", "list", "--json"],
+            ));
+            actions.push(action(
+                "Inspect the stored performance evidence before changing a threshold.",
+                "normal",
+                [
+                    "androidforge",
+                    "report",
+                    "show",
+                    report.run_id.as_str(),
+                    "--json",
+                ],
+            ));
+        }
+        DiagnosisCategory::Build => {
+            actions.push(action(
+                "Validate the project adapter and configured build commands.",
+                "high",
+                [
+                    "androidforge",
+                    "config",
+                    "validate",
+                    "--project",
+                    project,
+                    "--json",
+                ],
+            ));
+            actions.push(action(
+                "Inspect the stored build command output and exit code.",
+                "normal",
+                [
+                    "androidforge",
+                    "report",
+                    "show",
+                    report.run_id.as_str(),
+                    "--json",
+                ],
+            ));
+        }
+        DiagnosisCategory::Artifact => {
+            actions.push(action(
+                "Inspect the stored build artifacts and APK patterns.",
+                "high",
+                [
+                    "androidforge",
+                    "report",
+                    "show",
+                    report.run_id.as_str(),
+                    "--json",
+                ],
+            ));
+            if let Some(apk) = apk_path {
+                actions.push(action(
+                    "Inspect the recorded APK identity before selecting it explicitly.",
+                    "normal",
+                    ["androidforge", "apk", "inspect", apk, "--json"],
+                ));
+            }
+        }
         DiagnosisCategory::Configuration => {
             actions.push(action(
                 "Validate the project adapter and merged configuration.",
@@ -1239,6 +1343,82 @@ mod tests {
                     .any(|action| { action.command.argv.iter().any(|arg| arg == "config") })
             );
         }
+    }
+
+    #[test]
+    fn screen_off_and_performance_regression_are_performance_failures() {
+        for (code, message) in [
+            (ErrorCode::ScreenOff, "the screen is off"),
+            (
+                ErrorCode::PerformanceRegression,
+                "frame time exceeded the configured threshold",
+            ),
+        ] {
+            let explanation = explain_report(&report_with(code, message));
+            assert_eq!(
+                explanation.diagnosis.category,
+                DiagnosisCategory::Performance,
+                "{code:?}"
+            );
+            assert_eq!(
+                explanation.diagnosis.confidence,
+                Confidence::High,
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_runtime_failures_are_not_misclassified_as_configuration() {
+        for (code, expected) in [
+            (ErrorCode::BuildFailed, DiagnosisCategory::Build),
+            (ErrorCode::BuildTimeout, DiagnosisCategory::Build),
+            (ErrorCode::BuildOutputTooLarge, DiagnosisCategory::Build),
+            (
+                ErrorCode::BuildArtifactNotFound,
+                DiagnosisCategory::Artifact,
+            ),
+            (
+                ErrorCode::BuildArtifactAmbiguous,
+                DiagnosisCategory::Artifact,
+            ),
+            (
+                ErrorCode::BuildIdentityMismatch,
+                DiagnosisCategory::Artifact,
+            ),
+        ] {
+            let explanation = explain_report(&report_with(code, "build step failed"));
+            assert_eq!(explanation.diagnosis.category, expected, "{code:?}");
+            assert_eq!(
+                explanation.diagnosis.confidence,
+                Confidence::High,
+                "{code:?}"
+            );
+            assert_ne!(
+                explanation.diagnosis.category,
+                DiagnosisCategory::Configuration,
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_build_command_is_a_configuration_failure() {
+        let explanation = explain_report(&report_with(
+            ErrorCode::BuildCommandNotConfigured,
+            "no build command is configured for this project",
+        ));
+        assert_eq!(
+            explanation.diagnosis.category,
+            DiagnosisCategory::Configuration
+        );
+        assert_eq!(explanation.diagnosis.confidence, Confidence::High);
+        assert!(
+            explanation
+                .next_actions
+                .iter()
+                .any(|action| { action.command.argv.iter().any(|arg| arg == "config") })
+        );
     }
 
     #[test]

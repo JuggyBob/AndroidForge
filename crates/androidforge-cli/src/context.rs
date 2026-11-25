@@ -17,6 +17,101 @@ use androidforge_ui::UiManager;
 
 use crate::cli::Cli;
 
+/// Independent opt-ins for each physical-device capability. Granting one risk
+/// never grants another; `--allow-physical-mutation` is tracked separately as
+/// the superset.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScopedPhysicalFlags {
+    pub app_control: bool,
+    pub data: bool,
+    pub network: bool,
+    pub install: bool,
+    pub input: bool,
+}
+
+impl ScopedPhysicalFlags {
+    fn from_cli(cli: &Cli) -> Self {
+        Self {
+            app_control: cli.allow_physical_app_control,
+            data: cli.allow_physical_data,
+            network: cli.allow_physical_network,
+            install: cli.allow_physical_install,
+            input: cli.allow_physical_input,
+        }
+    }
+
+    pub fn allows(self, risk: Risk) -> bool {
+        match risk {
+            Risk::AppControl => self.app_control,
+            Risk::Data => self.data,
+            Risk::Network => self.network,
+            Risk::Install => self.install,
+            Risk::Input => self.input,
+        }
+    }
+}
+
+/// Capability category used to gate operations on physical devices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Risk {
+    AppControl,
+    Data,
+    Network,
+    Install,
+    Input,
+}
+
+impl Risk {
+    /// The narrowest CLI flag that grants this risk.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::AppControl => "--allow-physical-app-control",
+            Self::Data => "--allow-physical-data",
+            Self::Network => "--allow-physical-network",
+            Self::Install => "--allow-physical-install",
+            Self::Input => "--allow-physical-input",
+        }
+    }
+
+    /// Classify the existing human-readable operation descriptions so callers
+    /// that still use `ensure_physical_mutation_allowed` get scoped gating.
+    /// Unmapped operations stay on the master flag only: no default loosening.
+    pub fn for_operation(operation: &str) -> Option<Self> {
+        match operation {
+            "launching an app or intent"
+            | "force-stopping an app"
+            | "broadcasting an intent"
+            | "starting or stopping a service"
+            | "killing an app process"
+            | "triggering a JobScheduler job"
+            | "cancelling a JobScheduler job" => Some(Self::AppControl),
+            "pushing files into an app"
+            | "importing app data"
+            | "resetting app data"
+            | "seeding app data"
+            | "clearing app data"
+            | "clearing notifications"
+            | "running an agent pipeline"
+            | "running a conformance flow"
+            | "running a Maestro flow"
+            | "running an instrumentation test" => Some(Self::Data),
+            "changing airplane mode"
+            | "changing Wi-Fi state"
+            | "changing mobile data"
+            | "changing the device proxy"
+            | "applying a network profile"
+            | "restoring network state" => Some(Self::Network),
+            "installing an app" | "uninstalling an app" => Some(Self::Install),
+            "dismissing system overlays" | "tapping a notification" => Some(Self::Input),
+            _ => None,
+        }
+    }
+}
+
+fn physical_consent_allows(master: bool, scoped: ScopedPhysicalFlags, risk: Risk) -> bool {
+    master || scoped.allows(risk)
+}
+
 #[derive(Debug, Clone)]
 pub struct CliContext {
     pub paths: ForgePaths,
@@ -28,6 +123,7 @@ pub struct CliContext {
     pub dry_run: bool,
     pub yes: bool,
     pub allow_physical_mutation: bool,
+    pub scoped_physical: ScopedPhysicalFlags,
     pub no_failure_capture: bool,
     pub session_arg: Option<String>,
     pub serial_arg: Option<String>,
@@ -66,6 +162,7 @@ impl CliContext {
             dry_run: cli.dry_run,
             yes: cli.yes,
             allow_physical_mutation: cli.allow_physical_mutation,
+            scoped_physical: ScopedPhysicalFlags::from_cli(cli),
             no_failure_capture: cli.no_failure_capture,
             session_arg: cli.session.clone(),
             serial_arg: cli.serial.clone(),
@@ -310,11 +407,33 @@ impl CliContext {
         Ok(device)
     }
 
-    /// Refuse data-changing operations on physical devices unless the caller
-    /// explicitly opts in. Emulators and unknown targets keep their old
-    /// behavior; physical devices are the irreversible case.
+    /// True when this risk is permitted, either by its narrow scoped flag or
+    /// by the `--allow-physical-mutation` superset.
+    pub fn risk_allowed(&self, risk: Risk) -> bool {
+        physical_consent_allows(self.allow_physical_mutation, self.scoped_physical, risk)
+    }
+
+    /// Refuse a physical-device operation unless its own capability flag or
+    /// the `--allow-physical-mutation` superset was passed. Emulators are
+    /// always allowed. All decisions funnel through `check_physical_mutation`.
+    pub fn ensure_risk_allowed(&self, device: &Device, risk: Risk, operation: &str) -> Result<()> {
+        check_physical_risk(
+            device,
+            self.allow_physical_mutation,
+            self.scoped_physical.allows(risk),
+            risk,
+            operation,
+        )
+    }
+
+    /// Legacy entry point for callers that describe the operation but do not
+    /// pass a risk explicitly. Known operations inherit their scoped risk;
+    /// anything unmapped keeps the old master-flag-only behavior.
     pub fn ensure_physical_mutation_allowed(&self, device: &Device, operation: &str) -> Result<()> {
-        check_physical_mutation(device, self.allow_physical_mutation, operation)
+        match Risk::for_operation(operation) {
+            Some(risk) => self.ensure_risk_allowed(device, risk, operation),
+            None => check_physical_mutation(device, self.allow_physical_mutation, operation),
+        }
     }
 
     pub fn owner_for_serial(&self, serial: &str) -> Result<Option<Session>> {
@@ -351,6 +470,21 @@ impl CliContext {
     }
 }
 
+fn check_physical_risk(
+    device: &Device,
+    master_allowed: bool,
+    scoped_allowed: bool,
+    risk: Risk,
+    operation: &str,
+) -> Result<()> {
+    check_physical_mutation(device, master_allowed || scoped_allowed, operation).map_err(|error| {
+        error.with_suggestion(format!(
+            "This operation is gated by {}; use --allow-physical-mutation only when every physical-device risk is intended.",
+            risk.flag()
+        ))
+    })
+}
+
 fn check_physical_mutation(device: &Device, allowed: bool, operation: &str) -> Result<()> {
     if device.kind == DeviceKind::Emulator || allowed {
         return Ok(());
@@ -374,23 +508,201 @@ fn check_physical_mutation(device: &Device, allowed: bool, operation: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{check_physical_mutation, same_project_root};
-    use androidforge_core::error::ErrorCode;
+    use clap::Parser;
+
+    use super::{
+        Risk, ScopedPhysicalFlags, check_physical_mutation, check_physical_risk,
+        physical_consent_allows, same_project_root,
+    };
+    use crate::cli::Cli;
+    use androidforge_core::error::{ErrorCode, ForgeError};
     use androidforge_core::model::{Device, DeviceKind, DeviceState};
 
-    #[test]
-    fn physical_mutations_require_an_explicit_flag() {
+    fn physical_device() -> Device {
         let mut device = Device::basic("R58M123456A", DeviceState::Device);
         device.kind = DeviceKind::Physical;
         device.model = Some("POCO X4 GT".to_string());
+        device
+    }
+
+    fn error_mentions(error: &ForgeError, text: &str) -> bool {
+        error.message().contains(text)
+            || error
+                .body()
+                .suggestions
+                .iter()
+                .any(|suggestion| suggestion.contains(text))
+    }
+
+    #[test]
+    fn physical_mutations_require_an_explicit_flag() {
+        let device = physical_device();
 
         let error = check_physical_mutation(&device, false, "uninstalling an app").unwrap_err();
         assert_eq!(error.code(), ErrorCode::PhysicalDeviceMutationBlocked);
         assert!(error.message().contains("--allow-physical-mutation"));
         assert!(check_physical_mutation(&device, true, "uninstalling an app").is_ok());
 
-        device.kind = DeviceKind::Emulator;
-        assert!(check_physical_mutation(&device, false, "uninstalling an app").is_ok());
+        let mut emulator = device;
+        emulator.kind = DeviceKind::Emulator;
+        assert!(check_physical_mutation(&emulator, false, "uninstalling an app").is_ok());
+    }
+
+    #[test]
+    fn scoped_flag_allows_only_its_own_risk() {
+        let device = physical_device();
+        let flags = ScopedPhysicalFlags {
+            input: true,
+            ..ScopedPhysicalFlags::default()
+        };
+
+        assert!(physical_consent_allows(false, flags, Risk::Input));
+        assert!(!physical_consent_allows(false, flags, Risk::AppControl));
+        assert!(!physical_consent_allows(false, flags, Risk::Data));
+        assert!(!physical_consent_allows(false, flags, Risk::Network));
+        assert!(!physical_consent_allows(false, flags, Risk::Install));
+
+        assert!(
+            check_physical_risk(
+                &device,
+                false,
+                flags.allows(Risk::Input),
+                Risk::Input,
+                "injecting input"
+            )
+            .is_ok()
+        );
+        let error = check_physical_risk(
+            &device,
+            false,
+            flags.allows(Risk::Data),
+            Risk::Data,
+            "clearing app data",
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PhysicalDeviceMutationBlocked);
+        assert!(error_mentions(&error, "--allow-physical-data"));
+    }
+
+    #[test]
+    fn master_flag_allows_every_risk_and_unrelated_scoped_flags_still_block() {
+        let device = physical_device();
+        for risk in [
+            Risk::AppControl,
+            Risk::Data,
+            Risk::Network,
+            Risk::Install,
+            Risk::Input,
+        ] {
+            assert!(physical_consent_allows(
+                true,
+                ScopedPhysicalFlags::default(),
+                risk
+            ));
+            assert!(
+                check_physical_risk(&device, true, false, risk, "physical operation").is_ok(),
+                "master flag must allow {risk:?}"
+            );
+        }
+
+        let data_only = ScopedPhysicalFlags {
+            data: true,
+            ..ScopedPhysicalFlags::default()
+        };
+        let error = check_physical_risk(
+            &device,
+            false,
+            data_only.allows(Risk::AppControl),
+            Risk::AppControl,
+            "force-stopping an app",
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PhysicalDeviceMutationBlocked);
+        assert!(error_mentions(&error, "--allow-physical-app-control"));
+    }
+
+    #[test]
+    fn cli_scoped_flags_map_to_independent_risks() {
+        let cli = Cli::try_parse_from([
+            "androidforge",
+            "config",
+            "show",
+            "--allow-physical-app-control",
+            "--allow-physical-data",
+            "--allow-physical-network",
+            "--allow-physical-install",
+            "--allow-physical-input",
+        ])
+        .expect("parse scoped flags");
+        let flags = ScopedPhysicalFlags::from_cli(&cli);
+        assert!(flags.allows(Risk::AppControl));
+        assert!(flags.allows(Risk::Data));
+        assert!(flags.allows(Risk::Network));
+        assert!(flags.allows(Risk::Install));
+        assert!(flags.allows(Risk::Input));
+
+        let partial =
+            Cli::try_parse_from(["androidforge", "config", "show", "--allow-physical-input"])
+                .expect("parse one scoped flag");
+        let flags = ScopedPhysicalFlags::from_cli(&partial);
+        assert_eq!(
+            flags,
+            ScopedPhysicalFlags {
+                input: true,
+                ..ScopedPhysicalFlags::default()
+            }
+        );
+    }
+
+    #[test]
+    fn operation_risk_mapping_covers_all_scoped_groups() {
+        assert_eq!(
+            Risk::for_operation("launching an app or intent"),
+            Some(Risk::AppControl)
+        );
+        assert_eq!(
+            Risk::for_operation("force-stopping an app"),
+            Some(Risk::AppControl)
+        );
+        assert_eq!(
+            Risk::for_operation("broadcasting an intent"),
+            Some(Risk::AppControl)
+        );
+        assert_eq!(
+            Risk::for_operation("starting or stopping a service"),
+            Some(Risk::AppControl)
+        );
+        assert_eq!(
+            Risk::for_operation("killing an app process"),
+            Some(Risk::AppControl)
+        );
+        assert_eq!(
+            Risk::for_operation("pushing files into an app"),
+            Some(Risk::Data)
+        );
+        assert_eq!(Risk::for_operation("seeding app data"), Some(Risk::Data));
+        assert_eq!(
+            Risk::for_operation("installing an app"),
+            Some(Risk::Install)
+        );
+        assert_eq!(
+            Risk::for_operation("uninstalling an app"),
+            Some(Risk::Install)
+        );
+        assert_eq!(
+            Risk::for_operation("changing airplane mode"),
+            Some(Risk::Network)
+        );
+        assert_eq!(
+            Risk::for_operation("changing the device proxy"),
+            Some(Risk::Network)
+        );
+        assert_eq!(
+            Risk::for_operation("dismissing system overlays"),
+            Some(Risk::Input)
+        );
+        // Unmapped operations deliberately stay on the master flag only.
+        assert_eq!(Risk::for_operation("changing device time"), None);
     }
 
     #[test]

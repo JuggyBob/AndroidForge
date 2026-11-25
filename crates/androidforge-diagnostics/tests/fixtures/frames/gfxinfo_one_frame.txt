@@ -1,0 +1,11 @@
+Applications Graphics Acceleration Info:
+Uptime: 123456 Realtime: 123456
+
+** Graphics info for pid 1234 [com.example] **
+
+Total frames rendered: 1
+Janky frames: 1 (100.00%)
+50th percentile: 16ms
+90th percentile: 16ms
+99th percentile: 16ms
+Number Missed Vsync: 1

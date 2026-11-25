@@ -12,7 +12,7 @@ use androidforge_core::session::{Session, StateLock};
 use androidforge_core::util::{
     ensure_dir, now_rfc3339, read_json, short_id, write_atomic, write_json_atomic,
 };
-use androidforge_ui::{Rect, UiHierarchy, UiNode};
+use androidforge_ui::{Rect, UiHierarchy, UiNode, observation_ref_with_length};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{UiDiffArgs, UiObserveArgs};
@@ -63,6 +63,11 @@ pub struct ObservationNode {
     pub hint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
+    /// Compose test tag exposed as a resource id. A test tag is any resource
+    /// id without the Android `:id/` namespace separator. The original
+    /// `resource_id` is kept unchanged so selectors keep working.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,6 +99,10 @@ pub struct ObservationNode {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 fn role_for(node: &UiNode) -> String {
@@ -129,6 +138,13 @@ fn non_empty(value: &Option<String>) -> Option<String> {
 impl ObservationNode {
     fn from_node(node: &UiNode) -> Self {
         let password = node.password;
+        let resource_id = non_empty(&node.resource_id);
+        // Compose exposes `Modifier.testTag` through testTagsAsResourceId as a
+        // plain id, while Android framework ids always carry `:id/`.
+        let test_tag = resource_id
+            .as_ref()
+            .filter(|id| !id.contains(":id/"))
+            .cloned();
         Self {
             reference: None,
             actionable_via: None,
@@ -142,7 +158,8 @@ impl ObservationNode {
             },
             content_desc: non_empty(&node.content_desc),
             hint: non_empty(&node.hint),
-            resource_id: non_empty(&node.resource_id),
+            resource_id,
+            test_tag,
             class: non_empty(&node.class),
             package: non_empty(&node.package),
             bounds: node.bounds.into(),
@@ -262,6 +279,13 @@ pub struct Observation {
     pub context_total: usize,
     #[serde(default, skip_serializing_if = "is_false")]
     pub context_truncated: bool,
+    /// Bounded semantic view from the full hierarchy (`ui observe --semantics`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantics: Vec<ObservationNode>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub semantics_total: usize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub semantics_truncated: bool,
     #[serde(default)]
     pub scrollable: Vec<ObservationNode>,
     #[serde(default)]
@@ -537,25 +561,48 @@ fn display_orientation(rotation: Option<i32>) -> String {
     }
 }
 
+/// Rebuild the hierarchy identity the UI helper hashes.
+///
+/// Observation nodes already carry the masked `text` and the derived `role`
+/// produced by [`ObservationNode::from_node`], so the helper's own password
+/// masking and `semantic_role` resolve to the same values. The observation
+/// token is deliberately not part of the ref material: unchanged nodes keep
+/// the same ref across repeated observations.
+fn ui_node_for_reference(node: &ObservationNode) -> UiNode {
+    UiNode {
+        id: 0,
+        parent: None,
+        children: Vec::new(),
+        depth: node.depth,
+        text: node.text.clone(),
+        content_desc: node.content_desc.clone(),
+        hint: node.hint.clone(),
+        resource_id: node.resource_id.clone(),
+        class: node.class.clone(),
+        package: node.package.clone(),
+        bounds: Rect {
+            left: node.bounds.left,
+            top: node.bounds.top,
+            right: node.bounds.right,
+            bottom: node.bounds.bottom,
+        },
+        bounds_raw: String::new(),
+        clickable: node.clickable,
+        long_clickable: node.long_clickable,
+        enabled: node.enabled,
+        focused: node.focused,
+        selected: node.selected,
+        scrollable: node.scrollable,
+        checked: node.checked,
+        password: node.password,
+        displayed: node.displayed,
+        index_attr: None,
+        path: node.path.clone(),
+    }
+}
+
 fn reference_for(node: &ObservationNode, length: usize) -> String {
-    let bounds = format!(
-        "{},{},{},{}",
-        node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom
-    );
-    // The observation token is deliberately not part of the ref material:
-    // unchanged nodes must keep the same ref across repeated observations.
-    let material = format!(
-        "v2|{}|{}|{}|{}|{}|{}|{bounds}|{}",
-        node.path,
-        node.class.as_deref().unwrap_or(""),
-        node.package.as_deref().unwrap_or(""),
-        node.resource_id.as_deref().unwrap_or(""),
-        node.text.as_deref().unwrap_or(""),
-        node.content_desc.as_deref().unwrap_or(""),
-        node.role.as_deref().unwrap_or("")
-    );
-    let hash = androidforge_core::util::sha256_hex(material.as_bytes());
-    format!("el-{}", &hash[..length.min(hash.len())])
+    observation_ref_with_length(&ui_node_for_reference(node), length)
 }
 
 fn assign_references(observation: &mut Observation) {
@@ -579,6 +626,7 @@ fn assign_references(observation: &mut Observation) {
         .chain(observation.context.iter())
         .chain(observation.scrollable.iter())
         .chain(observation.focused.iter())
+        .chain(observation.semantics.iter())
         .chain(observation.nodes.iter().flatten())
     {
         if references.contains_key(&node.path) {
@@ -611,6 +659,12 @@ fn assign_references(observation: &mut Observation) {
     for node in &mut observation.scrollable {
         assign(node);
     }
+    for node in &mut observation.semantics {
+        assign(node);
+        if let Some(via) = actionable_via.get(&node.path) {
+            node.actionable_via = Some(via.clone());
+        }
+    }
     if let Some(node) = &mut observation.focused {
         assign(node);
         if let Some(via) = actionable_via.get(&node.path) {
@@ -638,6 +692,7 @@ pub fn find_reference<'a>(
         .chain(observation.scrollable.iter())
         .chain(observation.context.iter())
         .chain(observation.focused.iter())
+        .chain(observation.semantics.iter())
         .chain(observation.nodes.iter().flatten())
         .find(|node| node.reference.as_deref() == Some(reference))
 }
@@ -958,6 +1013,47 @@ fn compact_nodes(
     (actionable, context, scrollable, focused)
 }
 
+/// Maximum number of semantic nodes returned by `ui observe --semantics`.
+pub const SEMANTICS_LIMIT: usize = 64;
+
+/// Build the bounded semantic view from the complete parsed hierarchy, not
+/// just the compact actionable/context lists. Nodes are deduplicated by path
+/// and retained when they carry a resource id (including Compose test tags)
+/// or a derived role more specific than `other`.
+fn semantics_nodes(
+    hierarchy: &UiHierarchy,
+    package_filter: Option<&str>,
+) -> (Vec<ObservationNode>, usize, bool) {
+    let mut seen = BTreeSet::new();
+    let mut nodes = Vec::new();
+    for source in &hierarchy.nodes {
+        let compact = ObservationNode::from_node(source);
+        if let Some(package) = package_filter
+            && compact.package.as_deref() != Some(package)
+            && !compact
+                .resource_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with(package))
+        {
+            continue;
+        }
+        let meaningful_role = compact.role.as_deref().is_some_and(|role| role != "other");
+        if compact.resource_id.is_none() && !meaningful_role {
+            continue;
+        }
+        if !seen.insert(compact.path.clone()) {
+            continue;
+        }
+        nodes.push(compact);
+    }
+    let total = nodes.len();
+    let truncated = total > SEMANTICS_LIMIT;
+    if truncated {
+        nodes.truncate(SEMANTICS_LIMIT);
+    }
+    (nodes, total, truncated)
+}
+
 pub async fn collect_observation(
     ctx: &CliContext,
     session: &Session,
@@ -972,6 +1068,30 @@ pub async fn collect_observation(
         package_filter,
         include_nodes,
         include_nodes,
+        false,
+    )
+    .await
+}
+
+/// Same as [`collect_observation`] with the additive semantic view controlled
+/// by the caller. Only `ui observe --semantics` opts in; every other caller
+/// keeps the original observation shape.
+pub async fn collect_observation_with_semantics(
+    ctx: &CliContext,
+    session: &Session,
+    device: &Device,
+    package_filter: Option<&str>,
+    include_nodes: bool,
+    include_semantics: bool,
+) -> Result<Observation> {
+    collect_observation_scoped(
+        ctx,
+        session,
+        device,
+        package_filter,
+        include_nodes,
+        include_nodes,
+        include_semantics,
     )
     .await
 }
@@ -985,7 +1105,7 @@ pub async fn collect_receipt_observation(
     device: &Device,
     package_filter: Option<&str>,
 ) -> Result<Observation> {
-    collect_observation_scoped(ctx, session, device, package_filter, false, true).await
+    collect_observation_scoped(ctx, session, device, package_filter, false, true, false).await
 }
 
 async fn collect_observation_scoped(
@@ -995,6 +1115,7 @@ async fn collect_observation_scoped(
     package_filter: Option<&str>,
     include_nodes: bool,
     include_all_nodes: bool,
+    include_semantics: bool,
 ) -> Result<Observation> {
     let serial = device.serial.clone();
     let ui = ctx.ui_manager()?;
@@ -1040,6 +1161,11 @@ async fn collect_observation_scoped(
     if context_truncated {
         context.truncate(16);
     }
+    let (semantics, semantics_total, semantics_truncated) = if include_semantics {
+        semantics_nodes(&hierarchy, package_filter)
+    } else {
+        (Vec::new(), 0, false)
+    };
 
     let raw_dir = observations_dir(&ctx.paths, &session.id);
     ensure_dir(&raw_dir)?;
@@ -1081,6 +1207,9 @@ async fn collect_observation_scoped(
         context,
         context_total,
         context_truncated,
+        semantics,
+        semantics_total,
+        semantics_truncated,
         scrollable,
         visible_text,
         nodes: include_nodes.then(|| {
@@ -1488,6 +1617,7 @@ pub async fn observe_command(
                 "package": args.package,
                 "since": args.since,
                 "full": args.full,
+                "semantics": args.semantics,
                 "would_capture": "UI hierarchy, foreground focus, display size and boot id",
                 "would_write": "a compact observation token and raw hierarchy artifact",
             }),
@@ -1501,7 +1631,14 @@ pub async fn observe_command(
     }
     let (observation, retry_report) =
         common::retry_read_only(ReadOnlyOperation::UiObserve, args.retries, || {
-            collect_observation(ctx, session, device, args.package.as_deref(), args.full)
+            collect_observation_with_semantics(
+                ctx,
+                session,
+                device,
+                args.package.as_deref(),
+                args.full,
+                args.semantics,
+            )
         })
         .await?;
     let since = match &args.since {
@@ -1670,6 +1807,7 @@ mod tests {
             content_desc: None,
             hint: None,
             resource_id: Some("com.example:id/button".to_string()),
+            test_tag: None,
             class: Some("android.widget.Button".to_string()),
             package: Some("com.example".to_string()),
             bounds: rect,
@@ -1715,6 +1853,9 @@ mod tests {
             context: Vec::new(),
             context_total: 0,
             context_truncated: false,
+            semantics: Vec::new(),
+            semantics_total: 0,
+            semantics_truncated: false,
             scrollable: Vec::new(),
             visible_text: Vec::new(),
             nodes: None,
@@ -1895,6 +2036,75 @@ mod tests {
         assert!(compact.password);
         let serialized = serde_json::to_string(&compact).unwrap();
         assert!(!serialized.contains("hunter2"));
+    }
+
+    #[test]
+    fn observation_ref_matches_ui_helper_for_normal_and_password_nodes() {
+        fn ui_node(text: &str, password: bool) -> UiNode {
+            UiNode {
+                id: 1,
+                parent: None,
+                children: Vec::new(),
+                depth: 2,
+                text: Some(text.to_string()),
+                content_desc: None,
+                hint: None,
+                resource_id: Some("com.example:id/field".to_string()),
+                class: Some("android.widget.EditText".to_string()),
+                package: Some("com.example".to_string()),
+                bounds: Rect {
+                    left: 10,
+                    top: 20,
+                    right: 110,
+                    bottom: 70,
+                },
+                bounds_raw: "[10,20][110,70]".to_string(),
+                clickable: true,
+                long_clickable: false,
+                enabled: true,
+                focused: false,
+                selected: false,
+                scrollable: false,
+                checked: false,
+                password,
+                displayed: Some(true),
+                index_attr: None,
+                path: "root/0".to_string(),
+            }
+        }
+
+        fn assigned_ref(source: &UiNode) -> String {
+            let mut observation =
+                observation("obs-parity", vec![ObservationNode::from_node(source)]);
+            assign_references(&mut observation);
+            observation.actionable[0]
+                .reference
+                .clone()
+                .expect("assigned reference")
+        }
+
+        for source in [ui_node("Save", false), ui_node("hunter2", true)] {
+            let expected = androidforge_ui::observation_ref(&source);
+            let actual = assigned_ref(&source);
+            assert_eq!(
+                actual, expected,
+                "observation ref must match the UI helper for password={}",
+                source.password
+            );
+            assert!(actual.starts_with("el-"));
+            assert_eq!(actual.len(), 15);
+        }
+
+        // A password node hashes the masked label, never the secret, and stays
+        // byte-identical with the helper's own masking rule.
+        assert_eq!(
+            assigned_ref(&ui_node("hunter2", true)),
+            assigned_ref(&ui_node("s3cr3t", true))
+        );
+        assert_eq!(
+            assigned_ref(&ui_node("hunter2", true)),
+            assigned_ref(&ui_node("[password]", false))
+        );
     }
 
     #[test]
@@ -2092,5 +2302,122 @@ mod tests {
         let found = find_reference(&observation, &reference).expect("found");
         assert_eq!(found.path, "root/0");
         assert_eq!(found.text.as_deref(), Some("Save"));
+    }
+
+    fn ui_node(path: &str, resource_id: Option<&str>, class: &str) -> UiNode {
+        UiNode {
+            id: 1,
+            parent: None,
+            children: Vec::new(),
+            depth: 2,
+            text: None,
+            content_desc: None,
+            hint: None,
+            resource_id: resource_id.map(str::to_string),
+            class: Some(class.to_string()),
+            package: Some("com.example".to_string()),
+            bounds: Rect {
+                left: 0,
+                top: 0,
+                right: 100,
+                bottom: 50,
+            },
+            bounds_raw: "[0,0][100,50]".to_string(),
+            clickable: false,
+            long_clickable: false,
+            enabled: true,
+            focused: false,
+            selected: false,
+            scrollable: false,
+            checked: false,
+            password: false,
+            displayed: Some(true),
+            index_attr: None,
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn semantics_view_keeps_compose_tags_and_android_ids_distinct() {
+        let hierarchy = UiHierarchy {
+            xml: "<hierarchy/>".to_string(),
+            rotation: Some(0),
+            nodes: vec![
+                ui_node(
+                    "root/0",
+                    Some("com.example:id/save"),
+                    "android.widget.Button",
+                ),
+                ui_node("root/1", Some("checkout_button"), "android.view.View"),
+                ui_node("root/2", None, "android.widget.FrameLayout"),
+            ],
+            root: None,
+            package_name: Some("com.example".to_string()),
+        };
+        let (semantics, total, truncated) = semantics_nodes(&hierarchy, None);
+        assert_eq!(total, 2);
+        assert!(!truncated);
+        assert_eq!(semantics.len(), 2);
+        assert_eq!(
+            semantics[0].resource_id.as_deref(),
+            Some("com.example:id/save")
+        );
+        assert!(semantics[0].test_tag.is_none());
+        assert_eq!(semantics[1].resource_id.as_deref(), Some("checkout_button"));
+        assert_eq!(semantics[1].test_tag.as_deref(), Some("checkout_button"));
+
+        let mut observation = observation("obs-semantics", Vec::new());
+        observation.semantics = semantics;
+        observation.semantics_total = total;
+        observation.semantics_truncated = truncated;
+        assign_references(&mut observation);
+        for node in &observation.semantics {
+            let reference = node.reference.as_deref().expect("semantic ref");
+            assert!(reference.starts_with("el-"));
+            assert_eq!(
+                find_reference(&observation, reference).map(|found| &found.path),
+                Some(&node.path)
+            );
+        }
+    }
+
+    #[test]
+    fn semantics_view_deduplicates_paths_and_stops_at_the_cap() {
+        let mut nodes = Vec::new();
+        for index in 0..70 {
+            nodes.push(ui_node(
+                &format!("root/{index}"),
+                Some(&format!("tag-{index}")),
+                "android.view.View",
+            ));
+        }
+        // A duplicate path must not consume one of the 64 slots.
+        nodes.push(ui_node(
+            "root/0",
+            Some("duplicate-tag"),
+            "android.view.View",
+        ));
+        let hierarchy = UiHierarchy {
+            xml: "<hierarchy/>".to_string(),
+            rotation: None,
+            nodes,
+            root: None,
+            package_name: None,
+        };
+        let (semantics, total, truncated) = semantics_nodes(&hierarchy, None);
+        assert_eq!(total, 70);
+        assert!(truncated);
+        assert_eq!(semantics.len(), SEMANTICS_LIMIT);
+        assert_eq!(semantics[0].test_tag.as_deref(), Some("tag-0"));
+        assert!(semantics.iter().all(|node| node.test_tag.is_some()));
+    }
+
+    #[test]
+    fn absent_semantics_flag_omits_all_semantics_fields() {
+        let observation = observation("obs-plain", Vec::new());
+        let value = serde_json::to_value(&observation).unwrap();
+        assert!(value.get("semantics").is_none());
+        assert!(value.get("semantics_total").is_none());
+        assert!(value.get("semantics_truncated").is_none());
     }
 }

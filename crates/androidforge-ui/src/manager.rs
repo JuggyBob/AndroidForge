@@ -113,6 +113,126 @@ pub struct KeyResult {
     pub keycode: String,
 }
 
+/// A device-independent snapshot of a UI element's bounds.
+///
+/// Produced by exactly one read-only selector resolution. All values are
+/// integer device pixels in the current display orientation; `width`,
+/// `height`, `center_x` and `center_y` are derived from `Rect` so every caller
+/// sees the same numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bounds {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub width: i32,
+    pub height: i32,
+    pub center_x: i32,
+    pub center_y: i32,
+}
+
+impl Bounds {
+    /// The bottom edge coordinate asserted by `ui assert-bounds`.
+    pub fn bottom_y(&self) -> i32 {
+        self.bottom
+    }
+}
+
+impl From<Rect> for Bounds {
+    fn from(rect: Rect) -> Self {
+        let (center_x, center_y) = rect.center();
+        Self {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            width: rect.width(),
+            height: rect.height(),
+            center_x,
+            center_y,
+        }
+    }
+}
+
+/// The relation evaluated by a bounds comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoundsRelation {
+    #[serde(rename = "eq")]
+    Equal,
+    #[serde(rename = "gt")]
+    GreaterThan,
+    #[serde(rename = "lt")]
+    LessThan,
+}
+
+impl BoundsRelation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Equal => "eq",
+            Self::GreaterThan => "gt",
+            Self::LessThan => "lt",
+        }
+    }
+}
+
+/// Structured result of a `bottom_y` assertion.
+///
+/// `eq` passes when `abs(actual - expected) <= tolerance`. `gt` passes when
+/// `actual > expected + tolerance`, and `lt` passes when
+/// `actual < expected - tolerance`; the tolerance therefore widens the dead
+/// band that must be exceeded before a strict comparison passes. Negative
+/// tolerances are clamped to zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundsComparison {
+    pub relation: BoundsRelation,
+    pub expected: i32,
+    pub actual: i32,
+    pub tolerance: i32,
+    pub passed: bool,
+}
+
+impl BoundsComparison {
+    /// Turn a comparison into an assertion result.
+    ///
+    /// A passing comparison is returned unchanged. A failing comparison
+    /// becomes `E_UI_ASSERTION_FAILED` and carries the structured comparison
+    /// in its error context, so callers never have to reinterpret raw numbers.
+    pub fn require_passed(self) -> Result<Self> {
+        if self.passed {
+            return Ok(self);
+        }
+        Err(ForgeError::new(
+            ErrorCode::UiAssertionFailed,
+            format!(
+                "bottom_y {} failed: expected {} (tolerance {}), actual {}",
+                self.relation.as_str(),
+                self.expected,
+                self.tolerance,
+                self.actual
+            ),
+        )
+        .with_context(
+            "comparison",
+            serde_json::to_value(self).unwrap_or(Value::Null),
+        )
+        .with_context("relation", self.relation.as_str())
+        .with_context("expected", self.expected)
+        .with_context("actual", self.actual)
+        .with_context("tolerance", self.tolerance)
+        .with_context("passed", self.passed))
+    }
+}
+
+/// Result of [`UiManager::wait_for_bounds_stable`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoundsStabilityResult {
+    pub stable: bool,
+    pub bounds: Bounds,
+    pub attempts: u32,
+    pub duration_ms: u64,
+    pub stable_for_ms: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct UiManager {
     pub adb: AdbClient,
@@ -294,6 +414,100 @@ impl UiManager {
     pub async fn select(&self, serial: &str, selector: &Selector) -> Result<Selection> {
         let hierarchy = self.dump(serial).await?;
         select(hierarchy, selector)
+    }
+
+    /// Resolve `selector` once and return a stable bounds snapshot.
+    ///
+    /// This is read-only: one hierarchy dump, one [`select`] call and no
+    /// coordinate or tap fallback. Ambiguous selectors fail closed with
+    /// `E_SELECTOR_AMBIGUOUS` through the existing selector logic.
+    pub async fn bounds(&self, serial: &str, selector: &Selector) -> Result<Bounds> {
+        let hierarchy = self.dump(serial).await?;
+        bounds_from_hierarchy(&hierarchy, selector)
+    }
+
+    /// Compare the resolved element's `bottom_y` without asserting the result.
+    pub async fn check_bottom_y(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        expected: i32,
+        tolerance: i32,
+    ) -> Result<BoundsComparison> {
+        let bounds = self.bounds(serial, selector).await?;
+        Ok(compare_bottom_y(bounds.bottom_y(), expected, tolerance))
+    }
+
+    /// Assert equality of `bottom_y` within `tolerance`.
+    pub async fn assert_bottom_y(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        expected: i32,
+        tolerance: i32,
+    ) -> Result<BoundsComparison> {
+        let comparison = self
+            .check_bottom_y(serial, selector, expected, tolerance)
+            .await?;
+        comparison
+            .require_passed()
+            .map_err(|error| error.device(serial.to_string()))
+    }
+
+    /// Compare whether `bottom_y` exceeds `expected` by more than `tolerance`.
+    pub async fn check_bottom_y_gt(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        expected: i32,
+        tolerance: i32,
+    ) -> Result<BoundsComparison> {
+        let bounds = self.bounds(serial, selector).await?;
+        Ok(compare_bottom_y_gt(bounds.bottom_y(), expected, tolerance))
+    }
+
+    /// Assert that `bottom_y` is greater than `expected + tolerance`.
+    pub async fn assert_bottom_y_gt(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        expected: i32,
+        tolerance: i32,
+    ) -> Result<BoundsComparison> {
+        let comparison = self
+            .check_bottom_y_gt(serial, selector, expected, tolerance)
+            .await?;
+        comparison
+            .require_passed()
+            .map_err(|error| error.device(serial.to_string()))
+    }
+
+    /// Compare whether `bottom_y` falls below `expected` by more than `tolerance`.
+    pub async fn check_bottom_y_lt(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        expected: i32,
+        tolerance: i32,
+    ) -> Result<BoundsComparison> {
+        let bounds = self.bounds(serial, selector).await?;
+        Ok(compare_bottom_y_lt(bounds.bottom_y(), expected, tolerance))
+    }
+
+    /// Assert that `bottom_y` is less than `expected - tolerance`.
+    pub async fn assert_bottom_y_lt(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        expected: i32,
+        tolerance: i32,
+    ) -> Result<BoundsComparison> {
+        let comparison = self
+            .check_bottom_y_lt(serial, selector, expected, tolerance)
+            .await?;
+        comparison
+            .require_passed()
+            .map_err(|error| error.device(serial.to_string()))
     }
 
     pub async fn tap(&self, serial: &str, selector: &Selector) -> Result<TapResult> {
@@ -1049,6 +1263,65 @@ impl UiManager {
         }
     }
 
+    /// Wait until the same selector resolves to identical bounds for
+    /// `stable_for` within `timeout`.
+    ///
+    /// Every poll re-resolves the selector through [`Self::bounds`], so a lost
+    /// element (`E_SELECTOR_NOT_FOUND`) or an ambiguous one
+    /// (`E_SELECTOR_AMBIGUOUS`) fails closed instead of being treated as
+    /// stable. A change in bounds restarts the stability window. This method
+    /// only reads the hierarchy; no input is dispatched.
+    pub async fn wait_for_bounds_stable(
+        &self,
+        serial: &str,
+        selector: &Selector,
+        stable_for: Duration,
+        timeout: Duration,
+    ) -> Result<BoundsStabilityResult> {
+        selector.validate()?;
+        let started = Instant::now();
+        let mut tracker = BoundsStabilityTracker::new();
+        loop {
+            let bounds = self.bounds(serial, selector).await?;
+            let now = Instant::now();
+            match bounds_stability_step(&mut tracker, bounds, now, started, stable_for, timeout) {
+                StabilityStep::Stable => {
+                    return Ok(BoundsStabilityResult {
+                        stable: true,
+                        bounds,
+                        attempts: tracker.attempts,
+                        duration_ms: elapsed_ms(started),
+                        stable_for_ms: stable_for.as_millis().min(u128::from(u64::MAX)) as u64,
+                    });
+                }
+                StabilityStep::TimedOut => {
+                    return Err(ForgeError::new(
+                        ErrorCode::UiAssertionFailed,
+                        "UI element bounds did not remain stable before the timeout",
+                    )
+                    .with_context("selector", selector.describe())
+                    .with_context(
+                        "last_bounds",
+                        serde_json::to_value(bounds).unwrap_or(Value::Null),
+                    )
+                    .with_context(
+                        "stable_for_ms",
+                        serde_json::json!(stable_for.as_millis().min(u128::from(u64::MAX)) as u64),
+                    )
+                    .with_context(
+                        "timeout_ms",
+                        serde_json::json!(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
+                    )
+                    .with_context("attempts", serde_json::json!(tracker.attempts))
+                    .with_suggestion("Increase the timeout or wait for animations to finish.")
+                    .device(serial.to_string()));
+                }
+                StabilityStep::Continue => {}
+            }
+            tokio::time::sleep(self.poll_interval).await;
+        }
+    }
+
     pub async fn focused(&self, serial: &str) -> Result<Vec<UiMatch>> {
         let hierarchy = self.dump(serial).await?;
         Ok(hierarchy
@@ -1562,6 +1835,111 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+/// Resolve a selector against an already captured hierarchy in one step.
+///
+/// Delegates to [`select`] so ambiguity, `index` and not-found handling stay
+/// identical to every other UI surface; only the selected node's `Rect` is
+/// converted into the shared [`Bounds`] shape.
+fn bounds_from_hierarchy(hierarchy: &UiHierarchy, selector: &Selector) -> Result<Bounds> {
+    let selection = select(hierarchy.clone(), selector)?;
+    Ok(Bounds::from(selection.selected_node().bounds))
+}
+
+/// Compare `bottom_y` to `expected` with an absolute tolerance.
+pub fn compare_bottom_y(actual: i32, expected: i32, tolerance: i32) -> BoundsComparison {
+    let tolerance = tolerance.max(0);
+    let delta = (i64::from(actual) - i64::from(expected)).abs();
+    BoundsComparison {
+        relation: BoundsRelation::Equal,
+        expected,
+        actual,
+        tolerance,
+        passed: delta <= i64::from(tolerance),
+    }
+}
+
+/// Compare `bottom_y > expected + tolerance` (strictly beyond the dead band).
+pub fn compare_bottom_y_gt(actual: i32, expected: i32, tolerance: i32) -> BoundsComparison {
+    let tolerance = tolerance.max(0);
+    BoundsComparison {
+        relation: BoundsRelation::GreaterThan,
+        expected,
+        actual,
+        tolerance,
+        passed: i64::from(actual) > i64::from(expected) + i64::from(tolerance),
+    }
+}
+
+/// Compare `bottom_y < expected - tolerance` (strictly beyond the dead band).
+pub fn compare_bottom_y_lt(actual: i32, expected: i32, tolerance: i32) -> BoundsComparison {
+    let tolerance = tolerance.max(0);
+    BoundsComparison {
+        relation: BoundsRelation::LessThan,
+        expected,
+        actual,
+        tolerance,
+        passed: i64::from(actual) < i64::from(expected) - i64::from(tolerance),
+    }
+}
+
+/// Tracks whether one bounds value has been observed continuously.
+#[derive(Debug, Clone)]
+struct BoundsStabilityTracker {
+    bounds: Option<Bounds>,
+    stable_since: Option<Instant>,
+    attempts: u32,
+}
+
+impl BoundsStabilityTracker {
+    fn new() -> Self {
+        Self {
+            bounds: None,
+            stable_since: None,
+            attempts: 0,
+        }
+    }
+
+    /// Record one observation. Returns true only when the bounds have stayed
+    /// identical for at least `stable_for` as of `now`.
+    fn observe(&mut self, bounds: Bounds, now: Instant, stable_for: Duration) -> bool {
+        self.attempts += 1;
+        if self.bounds != Some(bounds) {
+            self.bounds = Some(bounds);
+            self.stable_since = Some(now);
+            return false;
+        }
+        self.stable_since
+            .is_some_and(|since| now.duration_since(since) >= stable_for)
+    }
+}
+
+/// Outcome of one poll of the bounds-stability loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StabilityStep {
+    Stable,
+    Continue,
+    TimedOut,
+}
+
+/// Pure policy for one bounds-stability poll, kept separate from ADB polling
+/// so success and timeout behaviour can be tested without a device.
+fn bounds_stability_step(
+    tracker: &mut BoundsStabilityTracker,
+    bounds: Bounds,
+    now: Instant,
+    started: Instant,
+    stable_for: Duration,
+    timeout: Duration,
+) -> StabilityStep {
+    if tracker.observe(bounds, now, stable_for) {
+        return StabilityStep::Stable;
+    }
+    if now.duration_since(started) >= timeout {
+        return StabilityStep::TimedOut;
+    }
+    StabilityStep::Continue
+}
+
 fn text_verification_matches(actual: &str, requested: &str, expected: &str) -> bool {
     actual == expected || (!requested.is_empty() && actual == requested)
 }
@@ -1693,5 +2071,208 @@ mod tests {
         ));
         assert!(!text_verification_matches("other", "query", "Searchquery"));
         assert!(!text_verification_matches("", "", "Search"));
+    }
+
+    const BOUNDS_XML: &str = r#"<hierarchy rotation="0">
+   <node index="0" text="Save" resource-id="com.example:id/save" class="android.widget.Button" package="com.example" content-desc="Save changes" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[100,200][300,300]" />
+   <node index="1" text="Save" resource-id="com.example:id/save2" class="android.widget.Button" package="com.example" content-desc="Save draft" clickable="true" enabled="true" focused="false" scrollable="false" bounds="[100,400][300,500]" />
+ </hierarchy>"#;
+
+    #[test]
+    fn bounds_snapshot_derives_edges_size_and_center() {
+        let bounds = Bounds::from(Rect {
+            left: 100,
+            top: 200,
+            right: 300,
+            bottom: 340,
+        });
+        assert_eq!(bounds.left, 100);
+        assert_eq!(bounds.top, 200);
+        assert_eq!(bounds.right, 300);
+        assert_eq!(bounds.bottom, 340);
+        assert_eq!(bounds.width, 200);
+        assert_eq!(bounds.height, 140);
+        assert_eq!(bounds.center_x, 200);
+        assert_eq!(bounds.center_y, 270);
+        assert_eq!(bounds.bottom_y(), 340);
+    }
+
+    #[test]
+    fn bounds_resolution_reuses_selectors_and_fails_closed_on_ambiguity() {
+        let hierarchy = UiHierarchy::parse(BOUNDS_XML).unwrap();
+        let ambiguous = Selector {
+            text: Some("Save".to_string()),
+            ..Selector::default()
+        };
+        let error = bounds_from_hierarchy(&hierarchy, &ambiguous).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SelectorAmbiguous);
+
+        let missing = Selector {
+            text: Some("Nope".to_string()),
+            ..Selector::default()
+        };
+        let error = bounds_from_hierarchy(&hierarchy, &missing).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SelectorNotFound);
+
+        let exact = Selector {
+            resource_id: Some("com.example:id/save".to_string()),
+            ..Selector::default()
+        };
+        let bounds = bounds_from_hierarchy(&hierarchy, &exact).unwrap();
+        assert_eq!(bounds.bottom_y(), 300);
+        assert_eq!(bounds.center_y, 250);
+    }
+
+    #[test]
+    fn bottom_y_comparison_covers_exact_tolerance_gt_and_lt() {
+        let exact = compare_bottom_y(300, 300, 0);
+        assert_eq!(exact.relation, BoundsRelation::Equal);
+        assert_eq!(exact.expected, 300);
+        assert_eq!(exact.actual, 300);
+        assert_eq!(exact.tolerance, 0);
+        assert!(exact.passed);
+        assert!(!compare_bottom_y(301, 300, 0).passed);
+        assert!(compare_bottom_y(304, 300, 5).passed);
+        assert!(!compare_bottom_y(306, 300, 5).passed);
+        // Negative tolerances are clamped, never inverted.
+        assert!(!compare_bottom_y(301, 300, -5).passed);
+
+        let gt = compare_bottom_y_gt(306, 300, 5);
+        assert_eq!(gt.relation, BoundsRelation::GreaterThan);
+        assert!(gt.passed);
+        assert!(!compare_bottom_y_gt(305, 300, 5).passed);
+        assert!(!compare_bottom_y_gt(300, 300, 5).passed);
+
+        let lt = compare_bottom_y_lt(294, 300, 5);
+        assert_eq!(lt.relation, BoundsRelation::LessThan);
+        assert!(lt.passed);
+        assert!(!compare_bottom_y_lt(295, 300, 5).passed);
+        assert!(!compare_bottom_y_lt(306, 300, 5).passed);
+    }
+
+    #[test]
+    fn failed_bottom_y_comparison_uses_ui_assertion_failed_with_context() {
+        let error = compare_bottom_y(320, 300, 2).require_passed().unwrap_err();
+        assert_eq!(error.code(), ErrorCode::UiAssertionFailed);
+        assert_eq!(error.body().context["expected"], serde_json::json!(300));
+        assert_eq!(error.body().context["actual"], serde_json::json!(320));
+        assert_eq!(error.body().context["tolerance"], serde_json::json!(2));
+        assert_eq!(error.body().context["passed"], serde_json::json!(false));
+        assert_eq!(
+            error.body().context["comparison"]["relation"],
+            serde_json::json!("eq")
+        );
+        assert!(compare_bottom_y(301, 300, 2).require_passed().is_ok());
+    }
+
+    fn stability_bounds(bottom: i32) -> Bounds {
+        Bounds::from(Rect {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom,
+        })
+    }
+
+    #[test]
+    fn bounds_stability_succeeds_only_after_holding_the_same_bounds() {
+        let base = Instant::now();
+        let mut tracker = BoundsStabilityTracker::new();
+        let stable_for = Duration::from_millis(1000);
+        let timeout = Duration::from_secs(5);
+        let first = stability_bounds(200);
+        let moved = stability_bounds(240);
+
+        assert_eq!(
+            bounds_stability_step(&mut tracker, first, base, base, stable_for, timeout),
+            StabilityStep::Continue
+        );
+        assert_eq!(
+            bounds_stability_step(
+                &mut tracker,
+                moved,
+                base + Duration::from_millis(200),
+                base,
+                stable_for,
+                timeout
+            ),
+            StabilityStep::Continue
+        );
+        assert_eq!(
+            bounds_stability_step(
+                &mut tracker,
+                moved,
+                base + Duration::from_millis(900),
+                base,
+                stable_for,
+                timeout
+            ),
+            StabilityStep::Continue
+        );
+        assert_eq!(
+            bounds_stability_step(
+                &mut tracker,
+                moved,
+                base + Duration::from_millis(1300),
+                base,
+                stable_for,
+                timeout
+            ),
+            StabilityStep::Stable
+        );
+        assert_eq!(tracker.attempts, 4);
+    }
+
+    #[test]
+    fn bounds_stability_times_out_while_bounds_keep_changing() {
+        let base = Instant::now();
+        let mut tracker = BoundsStabilityTracker::new();
+        let stable_for = Duration::from_millis(1000);
+        let timeout = Duration::from_millis(700);
+
+        assert_eq!(
+            bounds_stability_step(
+                &mut tracker,
+                stability_bounds(200),
+                base,
+                base,
+                stable_for,
+                timeout
+            ),
+            StabilityStep::Continue
+        );
+        assert_eq!(
+            bounds_stability_step(
+                &mut tracker,
+                stability_bounds(240),
+                base + Duration::from_millis(250),
+                base,
+                stable_for,
+                timeout
+            ),
+            StabilityStep::Continue
+        );
+        assert_eq!(
+            bounds_stability_step(
+                &mut tracker,
+                stability_bounds(200),
+                base + Duration::from_millis(500),
+                base,
+                stable_for,
+                timeout
+            ),
+            StabilityStep::Continue
+        );
+        assert_eq!(
+            bounds_stability_step(
+                &mut tracker,
+                stability_bounds(240),
+                base + Duration::from_millis(750),
+                base,
+                stable_for,
+                timeout
+            ),
+            StabilityStep::TimedOut
+        );
     }
 }

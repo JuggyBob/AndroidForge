@@ -6,7 +6,118 @@ the 1.0 line is the supported stable contract. Historical pre-1.0 entries are pr
 
 ## [Unreleased]
 
-No unreleased changes. See [1.0.0](#100---2026-11-24) for the current release.
+No unreleased changes. See [1.1.0](#110---2026-11-25) for the current release.
+
+## [1.1.0] - 2026-11-25
+
+**Verification primitives and safer agent evidence.** This is an additive release on the 1.x stable
+line: the envelope and run report schema stay at `1`, existing 1.0.0 commands keep their behaviour when
+new flags are absent, and the `device` alias for `devices` is retained. The 1.1.0 release gate is
+complete for the supported scope: host gates, delegated physical campaigns and packaged assets are
+recorded below. See [v1.1.0 release notes](docs/release-notes/v1.1.0.md) and
+[VERIFICATION.md](VERIFICATION.md).
+
+### Added
+
+- `build` — top-level argv-array build variants with bounded/redacted logs, APK identity verification,
+  `--install`/`--launch`/`--cold` and a no-op `--dry-run`.
+- Evidence primitives: `diagnostics frames` (jank percentiles and stored-baseline regression gate),
+  `capture launch` (first app frame and splash colours), `ui bounds`/`ui assert-bounds`,
+  `ui wait --for-bounds-stable`, `capture assert-color`, `capture contrast`, `ui audit a11y`,
+  `ui observe --semantics` and named `capture baseline save/update/compare`.
+- Deterministic state: declarative fixture `prefs`/`history`/`installed_version`, network mock
+  scenarios (`newer-release`, `offline`, `bad-digest`, `no-APK`), device night/locale/font/network
+  scenarios, AVD `images`/`create`, `doctor --capacity`, `ports list` and host device tags.
+- `scenario run/validate` for JSON or TOML scenario files with `--repeat`, per-step error policy,
+  pass rate and duration variance (YAML is intentionally unsupported).
+- `artifacts scan-secrets`, `diagnostics logcat --redact-patterns` and `report bundle --redact-secrets`
+  with forced refusal when a suspected secret remains; binary media is disclosed as not pixel-redacted.
+- Scoped physical capability flags (`Risk::{AppControl,Data,Network,Install,Input}`),
+  `devices shell --read-only` with allow/deny prefixes and the narrow `Risk::Input` gate on
+  `devices input tap`.
+- Run tags/metadata, `--session`/`--tag`/`--since` report selectors, report budgets, retention
+  `--keep-tag`, scoped `app data export`, `--jsonl`, `--fields` and `--stats`.
+- Registered schemas for frames, capture launch, visual baselines, scenarios, network mock scenarios,
+  accessibility and reports. Measured surface: 219 catalog commands, 221 MCP tools, 38/38 schemas.
+
+### Changed
+
+- Workspace, CLI, desktop, installer, Scoop manifest and version metadata move to `1.1.0`; the desktop
+  still requires an exact CLI version match.
+- New report/result fields are additive and defaulted; unavailable numeric metrics are `null`, never
+  `0.0`. No state-file or report migration is required.
+- `scenario run --repeat` is the supported flake-reporting path; a generic repeater is deliberately not
+  part of this release.
+
+### Fixed
+
+- `app launch --force-stop` no longer silently skips the force-stop path.
+- `report explain latest-failure` resolves session/device scope consistently with other report
+  commands; session release messages name the correct owner.
+- Failed sessions are cleaned up through `session gc`; lock/heartbeat warnings are surfaced instead of
+  failing silently.
+- Performance guards: screen preflight (`E_SCREEN_OFF`/`--wake`), nullable jank/CPU sample quality and
+  PID/window validation; selector ambiguity now reports extra ref/role detail.
+- Read-only device shell rejects `date` and `wm size`/`wm density` argument bypasses; MCP report/app
+  tool schemas were reconciled with the CLI.
+
+### Security
+
+- Physical-device data mutation remains fail-closed: scoped flags OR the superset
+  `--allow-physical-mutation` are required, with `check_physical_mutation()` as the single choke point.
+  Physical mutation is still excluded from MCP self-service.
+- Artifact secret scanning never prints matched values; forced bundle redaction refuses to write an
+  unredacted bundle. `logcat start --redact-patterns` applies caller prefixes at `logcat stop` before
+  artifact registration.
+- Build logs are bounded and redacted; dependency advisories, bans, licenses and sources were checked
+  with cargo-deny.
+
+### Compatibility
+
+- No breaking changes: envelope and report schema stay at `1`; v1.0.0 reports and 0.x artifacts remain
+  readable. The 1.0.0 `device` alias for `devices` remains valid.
+- Supported host: Windows 10/11 x86_64. Linux and macOS are not validated. Release binaries remain
+  unsigned; verify `SHA256SUMS.txt` and expect SmartScreen warnings.
+- `--jsonl` implies `--json` and emits one minified object per line; `--fields` trims only result keys
+  and never the required envelope fields; `--stats` writes its line to stderr.
+
+### Verification
+
+- Full workspace gate: `cargo fmt --all -- --check` clean, strict workspace clippy clean,
+  `cargo test --locked --workspace` **784 passed / 0 failed across 29 suites**, and
+  `cargo deny check advisories bans licenses sources` passed. Catalog 219, MCP 221, schemas 38/38;
+  `target\debug\androidforge.exe --version` reports `androidforge 1.1.0`.
+- Automated workstreams covered the build engine, errors/diagnosis, risk gates, performance guards,
+  frames, launch capture, bounds/colour/a11y, fixtures, network scenarios, scenarios, secret scanning,
+  reporting and output flags.
+- Final post-gate safety fixes: physical `diagnostics performance` now requires `Risk::AppControl`,
+  and `diagnostics performance` is catalog/MCP `device-mutation` with MCP `confirm=true` unless
+  `dry_run=true`. The post-fix CLI gate reported **375 passed / 0 failed** (bin 244, cli 91, frames 3,
+  safety 22, schema 15), with clean CLI clippy and passing cargo-deny; this is authoritative for the
+  final code.
+- Delegated physical campaigns on the approved POCO X4 GT / Android 14 (API 34): a read-only campaign
+  passed **12/12 steps** with no mutations and no NOT RUN (CalcSuite 3.1.0 foreground PID 32318,
+  111 UI nodes, `ui bounds` all eight fields, `ui assert-bounds --bottom-y 2295 --tolerance 2` passed,
+  screenshot SHA-256 `b0fbed00b7098f97d23e16b58b4947a637b9c204a2fd0b9c2631a9d358e3a7d9`,
+  `ui audit a11y` 42 missing-content-description errors and no other findings), and an approved
+  mutation campaign passed `app launch com.calcsuite --force-stop --allow-physical-app-control`
+  (PID 32318, `com.calcsuite/.MainActivity`, run report exit 0 / passed), `devices input tap 279 2204
+  --allow-physical-input` and `ui back --allow-physical-input`. Both sessions were released. The
+  launch shell capture returned no stdout / exit 1, but the run report and UI inspection confirmed
+  success.
+- Packaged assets verified: CLI ZIP
+  `92bf048f0d0e022fbb947ba351314c5ff98ade4d45cc9d1a4b177133f8225a0b`, desktop ZIP
+  `7a8d2325aa416f701fbf27fc42cb3f926889a63359153a6c7174acf6a4157c90`, installer
+  `71dc973b084349d5c5676e96d3ca62971d566a166459bf3f627d287cc3b9ca5e` (`FileVersion` /
+  `ProductVersion` 1.1.0), CLI EXE
+  `6e49c9f995c35a2b5968fc2b5615677179b532663d590166b54742c5de852aa4` and desktop EXE
+  `977cf28495aacb14f381af747c96add619ad9ae8147f707365e4ab4f227d24ad`. `dist/SHA256SUMS.txt` matches
+  all five files and the Scoop hash tracks the desktop ZIP; no screenshot ZIP was produced.
+- **NOT RUN:** physical `diagnostics performance` and the night-mode device scenario (not approved),
+  silent install/uninstall (installed Desktop release directory untouched), standalone
+  `run repeat --count`, cross-device geometry/colour comparison, a v1.1.0 screenshot gallery and
+  macOS/Linux hosts. Interactive MCP checks and desktop binary `--version` verification are not
+  recorded.
 
 ## [1.0.0] - 2026-11-24
 
@@ -1319,7 +1430,8 @@ First public alpha of the local-first AndroidForge CLI.
 - Notification/job/alarm/Doze parsing is version-dependent and remains best-effort with raw evidence preserved.
 - No GUI, daemon, cloud, telemetry, HTML reports, visual diff, release publishing or signing automation.
 
-[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/AndroidForge/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v1.0.0
 [0.13.0]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.13.0
 [0.12.1]: https://github.com/JuggyBob/AndroidForge/releases/tag/v0.12.1

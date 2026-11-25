@@ -1,12 +1,14 @@
 # Compatibility and deprecation policy
 
-This policy applies to the **stable 1.0.x line** and to future releases until this document is
+This policy applies to the **stable 1.1.x line** and to future releases until this document is
 replaced. It answers one question: what may an agent or script rely on, and how will AndroidForge tell
 them when that changes?
 
-AndroidForge is at 1.0. The stable tiers below are the compatibility promise for the supported host
-matrix; the 1.0 release also ships documented breaking safety and schema changes (see the
-`BREAKING CHANGES` section of `CHANGELOG.md` and [v1.0.0 release notes](docs/release-notes/v1.0.0.md)).
+AndroidForge is at 1.1. The stable tiers below are the compatibility promise for the supported host
+matrix. The 1.0 release shipped documented breaking safety and schema changes, preserved as history
+in the `BREAKING CHANGES` section of `CHANGELOG.md` and the
+[v1.0.0 release notes](docs/release-notes/v1.0.0.md); 1.1 adds features without bumping the envelope
+or report schema.
 
 ## 1. Stability tiers
 
@@ -28,14 +30,15 @@ a given build.
 
 ## 2. Semantic versioning from 1.0
 
-- **Patch (1.0.x):** bug fixes, security/dependency fixes, documentation and additive fields that do
+- **Patch (1.1.x):** bug fixes, security/dependency fixes, documentation and additive fields that do
   not change documented behavior.
 - **Minor (1.x.0):** new commands/features, additive schema fields, new MCP tools, or a deprecation
-  that is announced in the release notes.
-- **Major (x.0.0):** reserved for incompatible contract changes. The 1.0 release makes the stable
-  tiers above the compatibility promise for the supported host matrix. Breaking changes that were
-  required to close safety gaps before 1.0 are listed once in `CHANGELOG.md`; later major releases
-  follow the deprecation process in section 3.
+  that is announced in the release notes. The 1.1 minor added the surfaces listed below while keeping
+  schema `1`.
+- **Major (x.0.0):** reserved for incompatible contract changes. The stable tiers above remain the
+  compatibility promise for the supported host matrix. Breaking changes that were required to close
+  safety gaps before 1.0 are listed once in `CHANGELOG.md`; later major releases follow the
+  deprecation process in section 3.
 
 The version is reported by `androidforge --version`, `androidforge capabilities --json` and every run
 report. The desktop and CLI on the same machine must be the same version, including the patch version;
@@ -58,6 +61,26 @@ When a stable command, flag, JSON field, error code, exit code or curated MCP to
 
 Experimental features, best-effort external integrations and internal state files are exempt. They may
 change at any time, but the change must still be documented.
+
+The `device` alias for `devices`, introduced in 1.0.0, is **retained in 1.1.x**. `devices` is the
+canonical command for every subcommand, including `devices shell` (read-only allowlist by default)
+and `devices input tap` (narrow `Risk::Input` gate). `androidforge device list`, `device wait`,
+`device shell` and `device input tap` keep working through the alias; JSON `command` names stay
+canonical (`devices.list`, `devices.shell`, `devices.input.tap`). No stable spelling was removed.
+
+Additive in 1.1.0: `build`, `scenario validate|run`, `artifacts scan-secrets`,
+`diagnostics frames`, `capture launch|baseline|contrast|assert-color`, `ui bounds|assert-bounds|audit a11y`,
+`observe --semantics`, `devices shell|input tap`, `avd images|create`, `doctor --capacity`,
+`ports list`, `devices tag ...`, `session gc --forget-terminal`, `app data export` scoping,
+`--redact-secrets`, `diagnostics logcat --redact-patterns`, `run start --tag/--meta`, report
+tag/since selectors, `report compare` budgets, `maintenance clean --keep-tag`, and the additive
+manifest fields `redact_secrets` / `secret_scan`. Omitting the new flags keeps the previous
+byte-for-byte behavior.
+
+Physical-device mutations in 1.1.x require the exact scoped `--allow-physical-*` flag for the risk
+(app control, data, network, install, input, shell) or the `--allow-physical-mutation` superset.
+`devices shell` without `--read-only` requires the superset only. Scoped flags and the superset are
+never MCP arguments.
 
 ## 4. JSON envelope
 
@@ -87,6 +110,12 @@ Rules:
   additive.
 - Human mode may change wording at any time. Scripts must use `--json`.
 - Diagnostics and progress go to stderr; stdout contains only the envelope in JSON mode.
+- `--jsonl`, `--fields` and `--stats` are additive CLI presentation flags. They never bump
+  `schema_version`, never change the result shape when absent, and are not MCP tool arguments.
+  `--jsonl` changes stdout framing only when requested; `--stats` writes only to stderr.
+- Observation `semantics`, `semantics_total`, `semantics_truncated` and node `test_tag` are additive
+  fields gated by `ui observe --semantics`. Older readers can ignore them; stored observation tokens
+  remain readable.
 
 ## 5. Report schema
 
@@ -104,9 +133,11 @@ Run reports use `schema_version: 1` in `report.json`, `metadata.json` and `manif
 
 `EXIT_CODES.md` is the authoritative list. Exit codes are part of the automation contract:
 
-- `0` success; `2` invalid argument/command; `3` toolchain/SDK; `4` device/session; `5` timeout;
-  `6` command/package/install failure; `7` UI assertion; `8` configuration/adapter/fixture; `9` internal
-  or artifact failure; `10` partial evidence; `130` interrupted.
+- `0` success; `2` invalid argument/command; `3` toolchain/SDK; `4` device/session (including
+  `E_SCREEN_OFF`); `5` timeout; `6` command/package/install failure; `7` UI assertion;
+  `8` configuration/adapter/fixture; `9` internal or artifact failure; `10` partial evidence;
+  `11` performance regression (`E_PERFORMANCE_REGRESSION`, from `report compare --fail-on-regression`
+  or a comparable `diagnostics frames` baseline delta); `130` interrupted.
 - Error codes are stable identifiers. New codes may be added. A code is never reused for a different
   meaning without a deprecation cycle.
 - Error `context` and `suggestions` are additive; consumers must not parse human messages for logic.
@@ -121,21 +152,25 @@ The MCP server shells out to the same CLI. Its tool catalog has two layers:
 - **Generated tools** (`androidforge_<command_path>`) cover every remaining bounded, non-unsafe CLI
   leaf command. They are additive and mirror CLI argument names. A generated tool is a convenience
   wrapper, not a second implementation; CLI behavior and safety rules win.
-- Destructive and device-mutating tools require `confirm=true`. `allow_physical_mutation` is not part
-  of any MCP tool schema and is never forwarded from an MCP call; physical mutation must be authorized
-  on the CLI, outside the MCP request.
+- Destructive and device-mutating tools require `confirm=true`. No physical consent flag is part of
+  any MCP tool schema: neither the scoped `--allow-physical-*` flags nor the
+  `--allow-physical-mutation` superset is forwarded from an MCP call. Physical mutation must be
+  authorized on the CLI, outside the MCP request.
 - Raw `adb` and `run exec` are classified `unsafe` and excluded from generated MCP tools, as are
   long-running catalog entries. They remain CLI-only escape hatches and are shown with an unsafe badge
   in the desktop tool database. The one server wrapper exposed through MCP is the curated
-  `androidforge_network_mock_serve`, which requires `max_requests` or `duration` and returns.
+  `androidforge_network_mock_serve`, which returns only when bounded. Raw `--routes` runs therefore
+  require `--max-requests` or `--duration`. Built-in named scenarios carry their own loopback bounds
+  (redacted, host-only) and reject `--reverse`, because that half remains a gated device-network
+  mutation.
 - Tool schema changes are additive. Removing a curated tool or required field follows the deprecation
   process. Adding a new CLI command may add a generated tool without a major release.
 - The server refuses unknown tools and malformed arguments. It never falls back to a shell string.
 
 ## 8. Supported platforms
 
-For the 1.0.x stable line, **Windows 10/11 x86_64 is the tested host**. Linux and macOS are not
-validated for the 1.0 line. The CLI is written without Windows-only logic where practical, but no
+For the 1.1.x stable line, **Windows 10/11 x86_64 is the tested host**. Linux and macOS are not
+validated for the stable line (this was also true for 1.0). The CLI is written without Windows-only logic where practical, but no
 compatibility promise is made for untested hosts. Release binaries are unsigned; SmartScreen warnings
 are expected and are not a compatibility defect.
 

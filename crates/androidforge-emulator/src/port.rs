@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::net::TcpListener;
 
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
+use serde::{Deserialize, Serialize};
 
 pub const MIN_CONSOLE_PORT: u16 = 5554;
 pub const MAX_CONSOLE_PORT: u16 = 5682;
@@ -109,6 +111,128 @@ fn reserve(port: u16) -> Result<PortReservation> {
     })
 }
 
+/// Lifecycle state reported by `ports list`.
+///
+/// `allocated` means an AndroidForge session claims the port but no listener
+/// was observed; `occupied` means a listener is present (and takes precedence
+/// when both pieces of information exist).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortState {
+    Free,
+    Allocated,
+    Occupied,
+}
+
+impl PortState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Allocated => "allocated",
+            Self::Occupied => "occupied",
+        }
+    }
+}
+
+/// Session metadata supplied by the caller (AndroidForge session files).
+/// The port module stays independent of session storage and never guesses an
+/// owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PortOwnerInfo {
+    pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub avd: Option<String>,
+}
+
+impl PortOwnerInfo {
+    pub fn has_metadata(&self) -> bool {
+        self.owner.is_some() || self.session_id.is_some() || self.avd.is_some()
+    }
+}
+
+/// Result of a bounded bind probe for one console port and its paired ports.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PortProbe {
+    pub console: bool,
+    pub adb: bool,
+    pub grpc: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortEntry {
+    pub console_port: u16,
+    pub adb_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_port: Option<u16>,
+    pub serial: String,
+    pub state: PortState,
+    pub console_occupied: bool,
+    pub adb_occupied: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_occupied: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avd: Option<String>,
+}
+
+/// Probe a single port with a short-lived bind, the same primitive used by
+/// `allocate_port`. A failed bind is reported as occupied; no process is killed
+/// and no port is retained.
+pub fn is_port_occupied(port: u16) -> bool {
+    TcpListener::bind(("0.0.0.0", port)).is_err()
+}
+
+pub fn probe_port(console_port: u16) -> PortProbe {
+    let grpc = console_port.checked_add(GRPC_PORT_OFFSET);
+    PortProbe {
+        console: is_port_occupied(console_port),
+        adb: console_port.checked_add(1).is_some_and(is_port_occupied),
+        grpc: grpc.is_some_and(is_port_occupied),
+    }
+}
+
+/// Pure mapping from probe results and optional session metadata to a report
+/// row. Keeping this separate from socket probing makes owner/state mapping
+/// testable without a device or a particular host network state.
+pub fn port_entry(console_port: u16, probe: PortProbe, owner: Option<&PortOwnerInfo>) -> PortEntry {
+    let allocated = owner.is_some_and(PortOwnerInfo::has_metadata);
+    let occupied = probe.console || probe.adb || probe.grpc;
+    let state = if occupied {
+        PortState::Occupied
+    } else if allocated {
+        PortState::Allocated
+    } else {
+        PortState::Free
+    };
+    PortEntry {
+        console_port,
+        adb_port: console_port.saturating_add(1),
+        grpc_port: console_port.checked_add(GRPC_PORT_OFFSET),
+        serial: format!("emulator-{console_port}"),
+        state,
+        console_occupied: probe.console,
+        adb_occupied: probe.adb,
+        grpc_occupied: console_port
+            .checked_add(GRPC_PORT_OFFSET)
+            .map(|_| probe.grpc),
+        owner: owner.and_then(|info| info.owner.clone()),
+        session_id: owner.and_then(|info| info.session_id.clone()),
+        avd: owner.and_then(|info| info.avd.clone()),
+    }
+}
+
+/// List console ports in the conventional automatic-allocation range.
+/// Owner metadata is keyed by console port; callers build it from sessions.
+pub fn list_ports(owners: &BTreeMap<u16, PortOwnerInfo>) -> Vec<PortEntry> {
+    (MIN_CONSOLE_PORT..=MAX_CONSOLE_PORT)
+        .step_by(2)
+        .map(|port| port_entry(port, probe_port(port), owners.get(&port)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +252,58 @@ mod tests {
         assert_eq!(reservation.serial(), "emulator-5556");
         assert_eq!(reservation.adb_port(), 5557);
         reservation.release();
+    }
+
+    #[test]
+    fn port_entry_maps_free_allocated_and_occupied_states() {
+        let free = port_entry(5554, PortProbe::default(), None);
+        assert_eq!(free.state, PortState::Free);
+        assert_eq!(free.serial, "emulator-5554");
+        assert_eq!(free.adb_port, 5555);
+        assert_eq!(free.grpc_port, Some(8554));
+        assert_eq!(free.grpc_occupied, Some(false));
+
+        let owner = PortOwnerInfo {
+            owner: Some("agent-a".to_string()),
+            session_id: Some("ses-1".to_string()),
+            avd: Some("Pixel_7".to_string()),
+        };
+        let allocated = port_entry(5556, PortProbe::default(), Some(&owner));
+        assert_eq!(allocated.state, PortState::Allocated);
+        assert_eq!(allocated.owner.as_deref(), Some("agent-a"));
+        assert_eq!(allocated.session_id.as_deref(), Some("ses-1"));
+        assert_eq!(allocated.avd.as_deref(), Some("Pixel_7"));
+
+        let occupied = port_entry(
+            5558,
+            PortProbe {
+                console: false,
+                adb: true,
+                grpc: false,
+            },
+            Some(&owner),
+        );
+        assert_eq!(occupied.state, PortState::Occupied);
+        assert!(occupied.adb_occupied);
+        assert_eq!(occupied.owner.as_deref(), Some("agent-a"));
+    }
+
+    #[test]
+    fn port_entry_handles_grpc_overflow_without_fabricating_values() {
+        let entry = port_entry(65532, PortProbe::default(), None);
+        assert_eq!(entry.adb_port, 65533);
+        assert_eq!(entry.grpc_port, None);
+        assert_eq!(entry.grpc_occupied, None);
+    }
+
+    #[test]
+    fn port_state_has_stable_serialized_names() {
+        assert_eq!(PortState::Free.as_str(), "free");
+        assert_eq!(PortState::Allocated.as_str(), "allocated");
+        assert_eq!(PortState::Occupied.as_str(), "occupied");
+        assert_eq!(
+            serde_json::to_string(&PortState::Allocated).unwrap(),
+            "\"allocated\""
+        );
     }
 }

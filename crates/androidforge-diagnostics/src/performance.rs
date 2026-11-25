@@ -9,11 +9,24 @@ use std::time::{Duration, Instant};
 
 use androidforge_adb::AdbClient;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
-use androidforge_core::util::now_rfc3339;
+use androidforge_core::util::{elapsed_ms, now_rfc3339, now_unix_ms};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub const PERFORMANCE_SCHEMA_VERSION: u32 = 1;
+
+/// A jank percentage is only reported when at least this many frames were
+/// rendered. One or two frames are not a sample; reporting 100% jank from a
+/// single frame would be actively misleading.
+pub const DEFAULT_MIN_FRAMES: u64 = 30;
+
+/// Baseline 60 Hz frame budget. A device-provided refresh rate can replace
+/// this in a future, additive change; it is never inferred from jank counts.
+const FRAME_DEADLINE_MS: f64 = 16.67;
+
+/// A `dumpsys cpuinfo` window that ended longer ago than this is stale and is
+/// not evidence about the run being measured.
+const CPU_STALE_WINDOW_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceCommand {
@@ -46,7 +59,7 @@ pub struct StartupMeasurement {
     pub unknown_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JankMeasurement {
     pub reset_before_launch: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,6 +80,44 @@ pub struct JankMeasurement {
     pub missed_vsync: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unknown_reason: Option<String>,
+    /// `ok`, `insufficient`, `unavailable` or `unknown`.
+    #[serde(default)]
+    pub sample_status: String,
+    /// Whether this sample is suitable for cross-run comparison.
+    #[serde(default)]
+    pub comparable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison_reason: Option<String>,
+    /// Sample window, in milliseconds relative to the start of collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_start_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_end_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_deadline_ms: Option<f64>,
+}
+
+impl Default for JankMeasurement {
+    fn default() -> Self {
+        Self {
+            reset_before_launch: false,
+            total_frames: None,
+            janky_frames: None,
+            janky_percent: None,
+            percentile_50_ms: None,
+            percentile_90_ms: None,
+            percentile_95_ms: None,
+            percentile_99_ms: None,
+            missed_vsync: None,
+            unknown_reason: None,
+            sample_status: "unknown".to_string(),
+            comparable: false,
+            comparison_reason: None,
+            window_start_ms: None,
+            window_end_ms: None,
+            frame_deadline_ms: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -85,7 +136,7 @@ pub struct MemoryMeasurement {
     pub unknown_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuMeasurement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<String>,
@@ -97,6 +148,89 @@ pub struct CpuMeasurement {
     pub kernel_percent: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unknown_reason: Option<String>,
+    /// `ok`, `unavailable`, `stale` or `unknown`.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Sample window as Unix milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_start: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_end: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_pid: Option<u32>,
+}
+
+impl Default for CpuMeasurement {
+    fn default() -> Self {
+        Self {
+            process: None,
+            total_percent: None,
+            user_percent: None,
+            kernel_percent: None,
+            unknown_reason: None,
+            status: "unknown".to_string(),
+            reason: None,
+            window_start: None,
+            window_end: None,
+            sample_pid: None,
+        }
+    }
+}
+
+/// A single metric's usability, surfaced at the top level so agents do not
+/// have to interpret individual null fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetricQuality {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Default for MetricQuality {
+    fn default() -> Self {
+        Self {
+            status: "unknown".to_string(),
+            reason: None,
+        }
+    }
+}
+
+/// Top-level sample quality verdict for the two numeric sample-based metrics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SampleQuality {
+    #[serde(default)]
+    pub jank: MetricQuality,
+    #[serde(default)]
+    pub cpu: MetricQuality,
+}
+
+/// Result of checking whether two samples can be compared. Kept here for the
+/// cross-run comparison surface; re-exporting is an integration-workstream
+/// change, so it is not referenced by the collection path yet.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SampleComparison {
+    #[serde(default)]
+    pub comparable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// A `dumpsys cpuinfo` sample window in Unix milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuSampleWindow {
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+/// Preflight outcome. Waking is only ever an explicit opt-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenAction {
+    Continue,
+    Wake,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,12 +241,16 @@ pub struct PerformanceReport {
     pub collected_at: String,
     pub cold_start_requested: bool,
     pub settle_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen_on: Option<bool>,
     pub foreground: Option<bool>,
     pub activity: Option<String>,
     pub startup: StartupMeasurement,
     pub jank: JankMeasurement,
     pub memory: MemoryMeasurement,
     pub cpu: CpuMeasurement,
+    #[serde(default)]
+    pub sample_quality: SampleQuality,
     pub commands: Vec<PerformanceCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -125,6 +263,31 @@ pub struct PerformanceOptions<'a> {
     pub cold: bool,
     pub settle: Duration,
     pub timeout: Duration,
+    /// Fail fast when the screen is off. Performance samples taken against a
+    /// sleeping display are not meaningful.
+    pub require_screen_on: bool,
+    /// Explicit opt-in only; never wake implicitly.
+    pub wake: bool,
+    pub min_frames: u64,
+    pub frame_window: Option<Duration>,
+    pub warmup: Option<Duration>,
+}
+
+impl Default for PerformanceOptions<'_> {
+    fn default() -> Self {
+        Self {
+            package: "",
+            activity: None,
+            cold: false,
+            settle: Duration::ZERO,
+            timeout: Duration::from_secs(30),
+            require_screen_on: true,
+            wake: false,
+            min_frames: DEFAULT_MIN_FRAMES,
+            frame_window: None,
+            warmup: None,
+        }
+    }
 }
 
 pub async fn collect_performance(
@@ -135,6 +298,38 @@ pub async fn collect_performance(
     let package = options.package;
     let mut warnings = Vec::new();
     let mut commands = Vec::new();
+    let run_started = Instant::now();
+    let run_start_ms = now_unix_ms();
+
+    // Screen preflight happens before any other device interaction. An
+    // asleep display invalidates jank and startup evidence, and waking is
+    // never a side effect of measurement unless explicitly requested.
+    let mut screen_on = adb.screen_on(serial).await;
+    match screen_preflight(screen_on, options.require_screen_on, options.wake) {
+        Ok(ScreenAction::Continue) => {}
+        Ok(ScreenAction::Wake) => match adb.wake(serial).await {
+            Ok(result) => {
+                screen_on = result.screen_on.or(screen_on);
+                commands.push(PerformanceCommand {
+                    name: "wake".to_string(),
+                    command: "input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard".to_string(),
+                    status: "ok".to_string(),
+                    excerpt: Some(format!("screen_on={:?}", screen_on)),
+                    reason: None,
+                });
+                if screen_on == Some(false) {
+                    return Err(screen_off_error(serial));
+                }
+            }
+            Err(error) => {
+                let message = error.message().to_string();
+                return Err(screen_off_error(serial)
+                    .with_cause(error)
+                    .with_context_string("wake", message));
+            }
+        },
+        Err(error) => return Err(error.device(serial.to_string())),
+    }
 
     let install_path = shell(
         adb,
@@ -231,6 +426,7 @@ pub async fn collect_performance(
     }
 
     let mut jank = JankMeasurement::default();
+    let mut reset_ms: Option<u64> = None;
     match shell(
         adb,
         serial,
@@ -246,6 +442,7 @@ pub async fn collect_performance(
     {
         Ok(output) => {
             jank.reset_before_launch = true;
+            reset_ms = Some(elapsed_ms(run_started));
             commands.push(command(
                 "gfxinfo_reset",
                 &format!("dumpsys gfxinfo {package} reset"),
@@ -303,6 +500,19 @@ pub async fn collect_performance(
     if !options.settle.is_zero() {
         tokio::time::sleep(options.settle).await;
     }
+    if let Some(warmup) = options.warmup
+        && !warmup.is_zero()
+    {
+        tokio::time::sleep(warmup).await;
+    }
+    if let Some(frame_window) = options.frame_window
+        && !frame_window.is_zero()
+    {
+        let remaining = frame_window.saturating_sub(run_started.elapsed());
+        if !remaining.is_zero() {
+            tokio::time::sleep(remaining).await;
+        }
+    }
 
     let foreground = adb.current_focus(serial).await;
     let foreground_matches = foreground
@@ -332,10 +542,16 @@ pub async fn collect_performance(
     .await
     {
         Ok(output) => {
-            let parsed = parse_gfxinfo(&output.text);
+            let parsed = parse_gfxinfo_with(&output.text, options.min_frames);
             let reset = jank.reset_before_launch;
             jank = parsed;
             jank.reset_before_launch = reset;
+            finalize_jank_sample(
+                &mut jank,
+                reset_ms,
+                Some(elapsed_ms(run_started)),
+                options.frame_window,
+            );
             commands.push(command(
                 "gfxinfo",
                 &format!("dumpsys gfxinfo {package}"),
@@ -345,9 +561,23 @@ pub async fn collect_performance(
             if let Some(reason) = &jank.unknown_reason {
                 warnings.push(format!("jank metrics are unknown: {reason}"));
             }
+            if jank.sample_status == "insufficient" {
+                warnings.push(format!(
+                    "jank sample is insufficient ({} frame(s)); at least {} are required",
+                    jank.total_frames.unwrap_or(0),
+                    options.min_frames
+                ));
+            }
         }
         Err(error) => {
             jank.unknown_reason = Some(error.message().to_string());
+            jank.sample_status = "unavailable".to_string();
+            finalize_jank_sample(
+                &mut jank,
+                reset_ms,
+                Some(elapsed_ms(run_started)),
+                options.frame_window,
+            );
             warnings.push(format!("could not read gfxinfo: {}", error.message()));
             commands.push(PerformanceCommand {
                 name: "gfxinfo".to_string(),
@@ -400,21 +630,18 @@ pub async fn collect_performance(
         }
     };
 
-    let mut cpu = match shell(
+    let cpuinfo = shell(
         adb,
         serial,
         &["dumpsys".to_string(), "cpuinfo".to_string()],
         options.timeout,
     )
-    .await
-    {
+    .await;
+    let mut cpuinfo_text: Option<String> = None;
+    match &cpuinfo {
         Ok(output) => {
-            commands.push(command("cpuinfo", "dumpsys cpuinfo", &output, 2500));
-            let parsed = parse_cpuinfo(&output.text, package);
-            if let Some(reason) = &parsed.unknown_reason {
-                warnings.push(format!("CPU metrics are unknown: {reason}"));
-            }
-            parsed
+            commands.push(command("cpuinfo", "dumpsys cpuinfo", output, 2500));
+            cpuinfo_text = Some(output.text.clone());
         }
         Err(error) => {
             warnings.push(format!("could not read cpuinfo: {}", error.message()));
@@ -425,40 +652,64 @@ pub async fn collect_performance(
                 excerpt: None,
                 reason: Some(error.message().to_string()),
             });
-            CpuMeasurement {
-                unknown_reason: Some(error.message().to_string()),
-                ..CpuMeasurement::default()
-            }
         }
-    };
+    }
 
-    if cpu.total_percent.is_none()
-        && let Some(pid) = memory.pid
-    {
+    let mut cpu = CpuMeasurement::default();
+    let mut proc_error: Option<String> = None;
+    // Prefer PID-specific /proc deltas: they are sampled during this run and
+    // cannot be confused with another process or a stale system-wide window.
+    if let Some(pid) = memory.pid {
         match sample_proc_cpu(adb, serial, pid, options.timeout).await {
             Ok((sample, ticks, first, second)) => {
                 cpu = sample;
                 commands.push(PerformanceCommand {
-                        name: "proc_cpu".to_string(),
-                        command: format!("cat /proc/{pid}/stat (two samples)"),
-                        status: "ok".to_string(),
-                        excerpt: Some(format!(
-                            "utime+stime samples {first} -> {second} over a 500 ms window; CLK_TCK={ticks}"
-                        )),
-                        reason: None,
-                    });
-                warnings.retain(|warning| !warning.starts_with("CPU metrics are unknown"));
+                    name: "proc_cpu".to_string(),
+                    command: format!("cat /proc/{pid}/stat (two samples)"),
+                    status: "ok".to_string(),
+                    excerpt: Some(format!(
+                        "utime+stime samples {first} -> {second} over a 500 ms window; CLK_TCK={ticks}"
+                    )),
+                    reason: None,
+                });
             }
-            Err(error) => {
-                cpu.unknown_reason = Some(format!(
-                    "{}; /proc/{pid}/stat sampling failed: {}",
-                    cpu.unknown_reason
-                        .as_deref()
-                        .unwrap_or("dumpsys cpuinfo did not report the package"),
-                    error.message()
-                ));
-            }
+            Err(error) => proc_error = Some(error.message().to_string()),
         }
+    }
+
+    if cpu.status != "ok" {
+        let collected_ms = now_unix_ms();
+        let window = cpuinfo_text
+            .as_deref()
+            .and_then(|text| parse_cpuinfo_window(text, collected_ms));
+        cpu = if let Some(text) = cpuinfo_text.as_deref() {
+            let mut parsed = validate_cpuinfo_sample(
+                text,
+                package,
+                memory.pid,
+                window,
+                run_start_ms,
+                collected_ms,
+            );
+            if let (Some(error), Some(reason)) = (proc_error.as_deref(), parsed.reason.as_mut()) {
+                *reason = format!("{reason}; /proc sampling failed: {error}");
+            }
+            parsed
+        } else {
+            CpuMeasurement {
+                status: "unavailable".to_string(),
+                reason: Some("dumpsys cpuinfo was not readable".to_string()),
+                ..CpuMeasurement::default()
+            }
+        };
+        if let Some(reason) = cpu.reason.as_deref().or(cpu.unknown_reason.as_deref()) {
+            warnings.push(format!("CPU metrics are {}: {reason}", cpu.status));
+        }
+    }
+
+    let (sample_quality, quality_warning) = evaluate_sample_quality(&jank, &cpu);
+    if let Some(warning) = quality_warning {
+        warnings.push(warning);
     }
     Ok(PerformanceReport {
         schema_version: PERFORMANCE_SCHEMA_VERSION,
@@ -467,15 +718,81 @@ pub async fn collect_performance(
         collected_at: now_rfc3339(),
         cold_start_requested: options.cold,
         settle_ms: options.settle.as_millis() as u64,
+        screen_on,
         foreground: foreground.map(|_| foreground_matches),
         activity: component,
         startup,
         jank,
         memory,
         cpu,
+        sample_quality,
         commands,
         warnings,
     })
+}
+
+fn evaluate_sample_quality(
+    jank: &JankMeasurement,
+    cpu: &CpuMeasurement,
+) -> (SampleQuality, Option<String>) {
+    let quality = SampleQuality {
+        jank: MetricQuality {
+            status: jank.sample_status.clone(),
+            reason: jank
+                .comparison_reason
+                .clone()
+                .or_else(|| jank.unknown_reason.clone()),
+        },
+        cpu: MetricQuality {
+            status: cpu.status.clone(),
+            reason: cpu.reason.clone().or_else(|| cpu.unknown_reason.clone()),
+        },
+    };
+    let warning = (quality.jank.status != "ok" && quality.cpu.status != "ok").then(|| {
+        format!(
+            "all performance samples are unusable (jank: {}, cpu: {}); do not draw conclusions from this report",
+            quality.jank.status, quality.cpu.status
+        )
+    });
+    (quality, warning)
+}
+
+/// Decide whether measurement may proceed against the current display state.
+///
+/// This is deliberately a pure function so the screen-off contract can be
+/// tested without touching a device. `wake` is an explicit opt-in; the default
+/// path never mutates device state.
+pub fn screen_preflight(
+    screen_on: Option<bool>,
+    require_screen_on: bool,
+    wake: bool,
+) -> Result<ScreenAction> {
+    if !require_screen_on {
+        return Ok(ScreenAction::Continue);
+    }
+    if screen_on == Some(false) {
+        return if wake {
+            Ok(ScreenAction::Wake)
+        } else {
+            Err(ForgeError::new(
+                ErrorCode::ScreenOff,
+                "the device screen is off; performance evidence would not be valid",
+            )
+            .with_suggestion(
+                "Wake the screen and retry the measurement (wake is opt-in, never implicit).",
+            ))
+        };
+    }
+    Ok(ScreenAction::Continue)
+}
+
+fn screen_off_error(serial: &str) -> ForgeError {
+    ForgeError::new(
+        ErrorCode::ScreenOff,
+        format!("the screen is still off on {serial}; performance measurement was not started"),
+    )
+    .with_suggestion("Wake the device screen manually and retry the measurement.")
+    .device(serial.to_string())
 }
 
 pub fn parse_am_start(text: &str) -> StartupMeasurement {
@@ -495,6 +812,12 @@ pub fn parse_am_start(text: &str) -> StartupMeasurement {
     measurement
 }
 pub fn parse_gfxinfo(text: &str) -> JankMeasurement {
+    parse_gfxinfo_with(text, DEFAULT_MIN_FRAMES)
+}
+
+/// Parse gfxinfo and apply the sample-quality floor. A small sample never
+/// yields a jank percentage, even when gfxinfo printed one.
+pub fn parse_gfxinfo_with(text: &str, min_frames: u64) -> JankMeasurement {
     let total_frames = capture_u64(r"(?m)^\s*Total frames rendered:\s*(\d+)", text);
     let (janky_frames, janky_percent) = if let Some(caps) =
         Regex::new(r"(?m)^\s*Janky frames:\s*(\d+)\s*\(([\d.]+)%\)")
@@ -519,16 +842,103 @@ pub fn parse_gfxinfo(text: &str) -> JankMeasurement {
         missed_vsync: capture_u64(r"(?m)^\s*Number Missed Vsync:\s*(\d+)", text),
         ..JankMeasurement::default()
     };
-    if measurement.total_frames.is_none() {
-        measurement.unknown_reason = Some(if text.contains("No process") {
-            "gfxinfo reported no process for the package".to_string()
-        } else if text.trim().is_empty() {
-            "gfxinfo produced no output".to_string()
-        } else {
-            "gfxinfo did not report frame statistics".to_string()
-        });
+    match measurement.total_frames {
+        None => {
+            measurement.sample_status = "unavailable".to_string();
+            measurement.unknown_reason = Some(if text.contains("No process") {
+                "gfxinfo reported no process for the package".to_string()
+            } else if text.trim().is_empty() {
+                "gfxinfo produced no output".to_string()
+            } else {
+                "gfxinfo did not report frame statistics".to_string()
+            });
+            measurement.comparison_reason = measurement.unknown_reason.clone();
+        }
+        Some(frames) if frames < min_frames => {
+            measurement.sample_status = "insufficient".to_string();
+            measurement.janky_percent = None;
+            measurement.comparison_reason = Some(format!(
+                "insufficient sample ({frames} frame(s)); at least {min_frames} are required"
+            ));
+        }
+        _ => measurement.sample_status = "ok".to_string(),
     }
     measurement
+}
+
+/// Attach the actual observation window and compute cross-run comparability.
+pub fn finalize_jank_sample(
+    jank: &mut JankMeasurement,
+    window_start_ms: Option<u64>,
+    window_end_ms: Option<u64>,
+    frame_window: Option<Duration>,
+) {
+    jank.window_start_ms = match (window_end_ms, frame_window) {
+        (Some(end), Some(window)) if !window.is_zero() => {
+            Some(end.saturating_sub(window.as_millis() as u64))
+        }
+        _ => window_start_ms,
+    };
+    jank.window_end_ms = window_end_ms;
+    jank.frame_deadline_ms = Some(FRAME_DEADLINE_MS);
+    jank.comparable = jank.sample_status == "ok"
+        && jank.janky_percent.is_some()
+        && jank.window_start_ms.is_some()
+        && jank.window_end_ms.is_some();
+    if !jank.comparable && jank.comparison_reason.is_none() {
+        jank.comparison_reason = Some(format!(
+            "jank sample is not comparable (status: {})",
+            jank.sample_status
+        ));
+    }
+}
+
+/// Two jank samples are comparable only when both are usable and describe the
+/// same amount of work under the same frame budget and window length.
+#[allow(dead_code)]
+pub fn compare_jank_samples(first: &JankMeasurement, second: &JankMeasurement) -> SampleComparison {
+    let mut comparison = SampleComparison {
+        comparable: false,
+        reason: None,
+    };
+    for sample in [first, second] {
+        if sample.sample_status != "ok" || !sample.comparable {
+            comparison.reason = Some(format!(
+                "sample is not comparable (status: {})",
+                sample.sample_status
+            ));
+            return comparison;
+        }
+    }
+    if first.total_frames != second.total_frames {
+        comparison.reason = Some(format!(
+            "frame counts differ ({} vs {} frame(s))",
+            first.total_frames.unwrap_or(0),
+            second.total_frames.unwrap_or(0)
+        ));
+        return comparison;
+    }
+    if first.frame_deadline_ms != second.frame_deadline_ms {
+        comparison.reason = Some("frame deadlines differ".to_string());
+        return comparison;
+    }
+    if let (Some(first_start), Some(first_end), Some(second_start), Some(second_end)) = (
+        first.window_start_ms,
+        first.window_end_ms,
+        second.window_start_ms,
+        second.window_end_ms,
+    ) {
+        let first_window = first_end.saturating_sub(first_start);
+        let second_window = second_end.saturating_sub(second_start);
+        if first_window.abs_diff(second_window) > 1 {
+            comparison.reason = Some(format!(
+                "sample windows differ ({first_window}ms vs {second_window}ms)"
+            ));
+            return comparison;
+        }
+    }
+    comparison.comparable = true;
+    comparison
 }
 pub fn parse_meminfo(text: &str) -> MemoryMeasurement {
     let mut measurement = MemoryMeasurement {
@@ -555,7 +965,102 @@ pub fn parse_meminfo(text: &str) -> MemoryMeasurement {
     measurement
 }
 pub fn parse_cpuinfo(text: &str, package: &str) -> CpuMeasurement {
-    let mut measurement = CpuMeasurement::default();
+    parse_cpuinfo_candidate(text, package, None).unwrap_or_else(|| CpuMeasurement {
+        status: "unavailable".to_string(),
+        reason: Some("the package process was not present in dumpsys cpuinfo".to_string()),
+        unknown_reason: Some("the package process was not present in dumpsys cpuinfo".to_string()),
+        ..CpuMeasurement::default()
+    })
+}
+
+/// Convert the relative `CPU usage from Xms to Yms ago` header into an
+/// absolute sample window. Without this header a cpuinfo line has no evidence
+/// that it covers the run being measured.
+pub fn parse_cpuinfo_window(text: &str, collected_ms: u64) -> Option<CpuSampleWindow> {
+    let caps = Regex::new(r"(?m)^\s*CPU usage from (\d+)ms to (\d+)ms ago:")
+        .expect("cpuinfo window regex")
+        .captures(text)?;
+    let from = caps.get(1)?.as_str().parse::<u64>().ok()?;
+    let to = caps.get(2)?.as_str().parse::<u64>().ok()?;
+    if to > from {
+        return None;
+    }
+    Some(CpuSampleWindow {
+        start_ms: collected_ms.saturating_sub(from),
+        end_ms: collected_ms.saturating_sub(to),
+    })
+}
+
+/// Accept a cpuinfo line only when its PID matches the measured process, its
+/// window overlaps the run, and it is not stale.
+pub fn validate_cpuinfo_sample(
+    text: &str,
+    package: &str,
+    expected_pid: Option<u32>,
+    window: Option<CpuSampleWindow>,
+    run_start_ms: u64,
+    collected_ms: u64,
+) -> CpuMeasurement {
+    let Some(window) = window else {
+        let reason = "dumpsys cpuinfo did not report a sample window".to_string();
+        return CpuMeasurement {
+            status: "unavailable".to_string(),
+            reason: Some(reason.clone()),
+            unknown_reason: Some(reason),
+            ..CpuMeasurement::default()
+        };
+    };
+    if window.end_ms < window.start_ms
+        || collected_ms.saturating_sub(window.end_ms) > CPU_STALE_WINDOW_MS
+    {
+        let reason = format!(
+            "dumpsys cpuinfo window is stale (ended {}ms before collection)",
+            collected_ms.saturating_sub(window.end_ms)
+        );
+        return CpuMeasurement {
+            status: "stale".to_string(),
+            reason: Some(reason.clone()),
+            unknown_reason: Some(reason),
+            ..CpuMeasurement::default()
+        };
+    }
+    if window.end_ms < run_start_ms || window.start_ms > collected_ms {
+        let reason = "dumpsys cpuinfo window does not overlap this run".to_string();
+        return CpuMeasurement {
+            status: "stale".to_string(),
+            reason: Some(reason.clone()),
+            unknown_reason: Some(reason),
+            ..CpuMeasurement::default()
+        };
+    }
+    let Some(expected_pid) = expected_pid else {
+        let reason = "memory PID is unavailable; cpuinfo PID cannot be validated".to_string();
+        return CpuMeasurement {
+            status: "unavailable".to_string(),
+            reason: Some(reason.clone()),
+            unknown_reason: Some(reason),
+            ..CpuMeasurement::default()
+        };
+    };
+    let Some(mut parsed) = parse_cpuinfo_candidate(text, package, Some(expected_pid)) else {
+        let reason = format!("PID {expected_pid} for {package} was not present in dumpsys cpuinfo");
+        return CpuMeasurement {
+            status: "unavailable".to_string(),
+            reason: Some(reason.clone()),
+            unknown_reason: Some(reason),
+            ..CpuMeasurement::default()
+        };
+    };
+    parsed.window_start = Some(window.start_ms);
+    parsed.window_end = Some(window.end_ms);
+    parsed
+}
+
+fn parse_cpuinfo_candidate(
+    text: &str,
+    package: &str,
+    expected_pid: Option<u32>,
+) -> Option<CpuMeasurement> {
     let regex = Regex::new(
         r"(?m)^\s*([\d.]+)%\s+(\d+)/(\S+):\s+([\d.]+)%\s+user\s+\+\s+([\d.]+)%\s+kernel",
     )
@@ -566,6 +1071,15 @@ pub fn parse_cpuinfo(text: &str, package: &str) -> CpuMeasurement {
         let Some(process) = caps.get(3).map(|value| value.as_str().to_string()) else {
             continue;
         };
+        let Some(pid) = caps
+            .get(2)
+            .and_then(|value| value.as_str().parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if expected_pid.is_some_and(|expected| expected != pid) {
+            continue;
+        }
         let total = caps
             .get(1)
             .and_then(|value| value.as_str().parse::<f64>().ok());
@@ -581,9 +1095,13 @@ pub fn parse_cpuinfo(text: &str, package: &str) -> CpuMeasurement {
             user_percent: user,
             kernel_percent: kernel,
             unknown_reason: None,
+            status: "ok".to_string(),
+            reason: None,
+            sample_pid: Some(pid),
+            ..CpuMeasurement::default()
         };
         if process == package {
-            exact = Some(candidate.clone());
+            exact = Some(candidate);
             break;
         }
         if process.starts_with(&format!("{package}:")) {
@@ -593,15 +1111,7 @@ pub fn parse_cpuinfo(text: &str, package: &str) -> CpuMeasurement {
             }
         }
     }
-    if let Some(exact) = exact {
-        return exact;
-    }
-    if let Some((_, prefixed)) = prefixed {
-        return prefixed;
-    }
-    measurement.unknown_reason =
-        Some("the package process was not present in dumpsys cpuinfo".to_string());
-    measurement
+    exact.or_else(|| prefixed.map(|(_, candidate)| candidate))
 }
 
 async fn sample_proc_cpu(
@@ -622,9 +1132,11 @@ async fn sample_proc_cpu(
     .filter(|ticks| *ticks > 0.0)
     .unwrap_or(100.0);
     let first = proc_cpu_ticks(adb, serial, pid, timeout).await?;
+    let window_start = now_unix_ms();
     let started = Instant::now();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let second = proc_cpu_ticks(adb, serial, pid, timeout).await?;
+    let window_end = now_unix_ms();
     let elapsed = started.elapsed().as_secs_f64().max(0.001);
     let user = (second.0.saturating_sub(first.0)) as f64 / ticks / elapsed * 100.0;
     let kernel = (second.1.saturating_sub(first.1)) as f64 / ticks / elapsed * 100.0;
@@ -635,6 +1147,11 @@ async fn sample_proc_cpu(
             user_percent: Some(user),
             kernel_percent: Some(kernel),
             unknown_reason: None,
+            status: "ok".to_string(),
+            reason: None,
+            window_start: Some(window_start),
+            window_end: Some(window_end),
+            sample_pid: Some(pid),
         },
         ticks,
         first.0.saturating_add(first.1),
@@ -808,6 +1325,34 @@ CPU usage from 1000ms to 0ms ago:
    1.0% 999/system_server: 0.5% user + 0.5% kernel
 ";
 
+    const GFXINFO_ONE_FRAME: &str = "\
+Applications Graphics Acceleration Info:
+Uptime: 123456 Realtime: 123456
+** Graphics info for pid 1234 [com.example] **
+Total frames rendered: 1
+Janky frames: 1 (100.00%)
+50th percentile: 16ms
+90th percentile: 16ms
+Number Missed Vsync: 1
+";
+
+    const GFXINFO_SIXTY_FRAMES: &str = "\
+Applications Graphics Acceleration Info:
+Uptime: 123456 Realtime: 123456
+** Graphics info for pid 1234 [com.example] **
+Total frames rendered: 60
+Janky frames: 6 (10.00%)
+50th percentile: 8ms
+90th percentile: 16ms
+Number Missed Vsync: 2
+";
+
+    const CPUINFO_STALE: &str = "\
+Load: 1.2 / 1.1 / 1.0
+CPU usage from 9000ms to 8000ms ago:
+  12.5% 1234/com.example: 8.0% user + 4.5% kernel + 0.0% iowait
+";
+
     #[test]
     fn parses_am_start_timings() {
         let startup = parse_am_start(AM_START);
@@ -883,5 +1428,123 @@ CPU usage from 1000ms to 0ms ago:
         let cpu = parse_cpuinfo(CPUINFO, "com.other");
         assert_eq!(cpu.total_percent, None);
         assert!(cpu.unknown_reason.is_some());
+    }
+
+    // Fixture 1: one frame must never be reported as 100% jank.
+    #[test]
+    fn one_frame_gfxinfo_is_insufficient_and_percent_is_null() {
+        let jank = parse_gfxinfo_with(GFXINFO_ONE_FRAME, DEFAULT_MIN_FRAMES);
+        assert_eq!(jank.total_frames, Some(1));
+        assert_eq!(jank.janky_frames, Some(1));
+        assert_eq!(jank.sample_status, "insufficient");
+        assert_eq!(jank.janky_percent, None);
+        assert!(!jank.comparable);
+        assert_eq!(
+            jank.comparison_reason.as_deref(),
+            Some("insufficient sample (1 frame(s)); at least 30 are required")
+        );
+    }
+
+    // Fixture 2a: a valid window with a different PID is not our sample.
+    #[test]
+    fn cpuinfo_with_absent_pid_is_unavailable_and_percent_is_null() {
+        let collected_ms = 5_000;
+        let window = parse_cpuinfo_window(CPUINFO, collected_ms).expect("window");
+        let cpu = validate_cpuinfo_sample(
+            CPUINFO,
+            "com.example",
+            Some(9999),
+            Some(window),
+            0,
+            collected_ms,
+        );
+        assert_eq!(cpu.status, "unavailable");
+        assert_eq!(cpu.total_percent, None);
+        assert!(cpu.reason.as_deref().unwrap().contains("9999"));
+    }
+
+    // Fixture 2b: a window that ended long before collection is stale.
+    #[test]
+    fn stale_cpuinfo_window_is_rejected_and_percent_is_null() {
+        let collected_ms = 10_000;
+        let window = parse_cpuinfo_window(CPUINFO_STALE, collected_ms).expect("window");
+        let cpu = validate_cpuinfo_sample(
+            CPUINFO_STALE,
+            "com.example",
+            Some(1234),
+            Some(window),
+            0,
+            collected_ms,
+        );
+        assert_eq!(cpu.status, "stale");
+        assert_eq!(cpu.total_percent, None);
+        assert!(cpu.reason.as_deref().unwrap().contains("stale"));
+    }
+
+    // Fixture 3: screen-off is a hard, unit-level preflight failure; no device
+    // access is needed to verify the contract.
+    #[test]
+    fn screen_off_requires_explicit_wake_and_returns_screen_off() {
+        let error = screen_preflight(Some(false), true, false).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ScreenOff);
+        assert_eq!(error.exit_code(), 4);
+        assert!(
+            error
+                .body()
+                .suggestions
+                .iter()
+                .any(|suggestion| suggestion.to_ascii_lowercase().contains("wake"))
+        );
+        assert_eq!(
+            screen_preflight(Some(false), true, true).unwrap(),
+            ScreenAction::Wake
+        );
+        assert_eq!(
+            screen_preflight(Some(true), true, false).unwrap(),
+            ScreenAction::Continue
+        );
+    }
+
+    // Fixture 4: different frame counts describe different workloads.
+    #[test]
+    fn runs_with_different_frame_counts_are_not_comparable() {
+        let mut first = parse_gfxinfo_with(GFXINFO, DEFAULT_MIN_FRAMES);
+        let mut second = parse_gfxinfo_with(GFXINFO_SIXTY_FRAMES, DEFAULT_MIN_FRAMES);
+        finalize_jank_sample(&mut first, Some(100), Some(1_100), None);
+        finalize_jank_sample(&mut second, Some(100), Some(1_100), None);
+        let comparison = compare_jank_samples(&first, &second);
+        assert!(!comparison.comparable);
+        assert!(
+            comparison
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("frame counts differ")
+        );
+        assert!(compare_jank_samples(&first, &first).comparable);
+    }
+
+    #[test]
+    fn defaults_require_screen_on_and_thirty_frames_without_waking() {
+        let options = PerformanceOptions::default();
+        assert!(options.require_screen_on);
+        assert!(!options.wake);
+        assert_eq!(options.min_frames, DEFAULT_MIN_FRAMES);
+        assert!(options.frame_window.is_none());
+        assert!(options.warmup.is_none());
+    }
+
+    #[test]
+    fn all_unusable_samples_raise_a_quality_warning() {
+        let jank = parse_gfxinfo("No process found for com.example\n");
+        let cpu = validate_cpuinfo_sample(CPUINFO, "com.example", Some(9999), None, 0, 1_000);
+        let (quality, warning) = evaluate_sample_quality(&jank, &cpu);
+        assert_eq!(quality.jank.status, "unavailable");
+        assert_eq!(quality.cpu.status, "unavailable");
+        assert!(
+            warning
+                .unwrap()
+                .contains("all performance samples are unusable")
+        );
     }
 }

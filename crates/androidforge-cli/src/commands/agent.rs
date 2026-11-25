@@ -22,7 +22,7 @@ use crate::cli::{
 };
 use crate::commands::common::success;
 use crate::commands::{apk, app, automation, session};
-use crate::context::CliContext;
+use crate::context::{CliContext, Risk};
 
 pub async fn agent(cli: &Cli, command: &AgentCommand) -> Result<CommandSuccess> {
     match command {
@@ -488,7 +488,16 @@ async fn brief(cli: &Cli) -> Result<CommandSuccess> {
         .map(str::to_string);
     let session = success.session_id.as_deref().unwrap_or("no session");
     let device = success.device_serial.as_deref().unwrap_or("no device");
-    success.human = format!("Agent brief: {session} · {device}\n");
+    let warning_count = success
+        .result
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    success.human = if warning_count == 0 {
+        format!("Agent brief: {session} · {device}\n")
+    } else {
+        format!("Agent brief: {session} · {device} · {warning_count} warning(s); see `warnings`.\n")
+    };
     Ok(success)
 }
 async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
@@ -767,7 +776,7 @@ async fn test(cli: &Cli, args: &AgentTestArgs) -> Result<CommandSuccess> {
         };
         if !ctx.dry_run
             && let Err(error) =
-                ctx.ensure_physical_mutation_allowed(&device, "running an agent pipeline")
+                ctx.ensure_risk_allowed(&device, Risk::Data, "running an agent pipeline")
         {
             state.fail(
                 "verify_device",

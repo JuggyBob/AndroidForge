@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/a11y.schema.json",
+  "title": "AndroidForge accessibility audit",
+  "description": "Result of `ui audit a11y`: a bounded, deterministic report of structural and optional screenshot-contrast findings.",
+  "$defs": {
+    "rect": {
+      "type": "object",
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": {"type": "integer"},
+        "top": {"type": "integer"},
+        "right": {"type": "integer"},
+        "bottom": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "measurement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {"kind": {"const": "missing_content_description"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "width_px", "height_px", "required_px"],
+          "properties": {
+            "kind": {"const": "tiny_touch_target"},
+            "width_px": {"type": "integer"},
+            "height_px": {"type": "integer"},
+            "required_px": {"type": "number", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "count"],
+          "properties": {
+            "kind": {"const": "duplicate_label"},
+            "count": {"type": "integer", "minimum": 2}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "ratio", "threshold", "foreground_hex", "background_hex"],
+          "properties": {
+            "kind": {"const": "low_contrast"},
+            "ratio": {"type": "number", "minimum": 0},
+            "threshold": {"type": "number", "minimum": 0},
+            "foreground_hex": {"type": "string", "pattern": "^#[0-9A-F]{6}$"},
+            "background_hex": {"type": "string", "pattern": "^#[0-9A-F]{6}$"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "required": ["rule", "severity", "node_path", "bounds", "measured", "message"],
+      "properties": {
+        "rule": {"enum": ["missing_content_description", "tiny_touch_target", "duplicate_label", "low_contrast"]},
+        "severity": {"enum": ["info", "warning", "error"]},
+        "node_path": {"type": "string"},
+        "node_class": {"type": ["string", "null"]},
+        "bounds": {"$ref": "#/$defs/rect"},
+        "label": {"type": ["string", "null"]},
+        "measured": {"$ref": "#/$defs/measurement"},
+        "message": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "options": {
+      "type": "object",
+      "required": [
+        "min_touch_target_dp",
+        "density",
+        "min_contrast_ratio",
+        "large_text_contrast_ratio",
+        "large_text_min_sp",
+        "check_content_descriptions",
+        "check_touch_targets",
+        "check_duplicate_labels",
+        "max_findings",
+        "max_nodes"
+      ],
+      "properties": {
+        "min_touch_target_dp": {"type": "number", "minimum": 0},
+        "density": {"type": "number", "minimum": 0},
+        "min_contrast_ratio": {"type": "number", "minimum": 0},
+        "large_text_contrast_ratio": {"type": "number", "minimum": 0},
+        "large_text_min_sp": {"type": "number", "minimum": 0},
+        "check_content_descriptions": {"type": "boolean"},
+        "check_touch_targets": {"type": "boolean"},
+        "check_duplicate_labels": {"type": "boolean"},
+        "max_findings": {"type": "integer", "minimum": 0},
+        "max_nodes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "report": {
+      "type": "object",
+      "required": ["findings", "nodes_examined", "options", "truncated"],
+      "properties": {
+        "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+        "nodes_examined": {"type": "integer", "minimum": 0},
+        "options": {"$ref": "#/$defs/options"},
+        "truncated": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schema_version", "report", "findings", "counts", "contrast", "serial"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "report": {"$ref": "#/$defs/report"},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "counts": {
+      "type": "object",
+      "required": [
+        "error",
+        "warning",
+        "info",
+        "missing_content_description",
+        "tiny_touch_target",
+        "duplicate_label",
+        "low_contrast"
+      ],
+      "properties": {
+        "error": {"type": "integer", "minimum": 0},
+        "warning": {"type": "integer", "minimum": 0},
+        "info": {"type": "integer", "minimum": 0},
+        "missing_content_description": {"type": "integer", "minimum": 0},
+        "tiny_touch_target": {"type": "integer", "minimum": 0},
+        "duplicate_label": {"type": "integer", "minimum": 0},
+        "low_contrast": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "contrast": {
+      "type": ["object", "null"],
+      "properties": {
+        "text_rgb": {"type": "string", "pattern": "^#[0-9A-F]{6}$"},
+        "threshold": {"type": "number", "minimum": 0},
+        "large_text": {"type": "boolean"},
+        "nodes_sampled": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 0},
+        "height": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "serial": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

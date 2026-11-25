@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/scenario.schema.json",
+  "title": "AndroidForge scenario manifest",
+  "description": "An ergonomic, allowlisted wrapper over audited app/UI/fixture operations. No shell, adb or arbitrary command execution is permitted.",
+  "type": "object",
+  "required": ["version", "name", "steps"],
+  "properties": {
+    "version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "repeat": { "$ref": "#/$defs/repeat" },
+    "steps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "error_policy": {
+      "type": "string",
+      "enum": ["fail", "continue"],
+      "description": "What a step does when it fails: abort the iteration or record and continue."
+    },
+    "selector": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "resource_id": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1 },
+        "content_desc": { "type": "string", "minLength": 1 },
+        "class": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "assert": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "text_absent": { "type": "string", "minLength": 1 },
+        "activity": { "type": "string", "minLength": 1 },
+        "package": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "color": {
+      "type": "object",
+      "required": ["x", "y", "expected"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "expected": {
+          "type": "string",
+          "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+        },
+        "tolerance": { "type": "integer", "minimum": 0, "maximum": 255 }
+      },
+      "additionalProperties": false
+    },
+    "repeat": {
+      "type": "object",
+      "required": ["count"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "step": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "package"],
+          "properties": {
+            "type": { "const": "launch" },
+            "package": { "type": "string", "minLength": 1 },
+            "activity": { "type": "string" },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "selector"],
+          "properties": {
+            "type": { "const": "tap" },
+            "selector": { "$ref": "#/$defs/selector" },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "selector", "value"],
+          "properties": {
+            "type": { "const": "text" },
+            "selector": { "$ref": "#/$defs/selector" },
+            "value": { "type": "string", "minLength": 1 },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "selector"],
+          "properties": {
+            "type": { "const": "wait" },
+            "selector": { "$ref": "#/$defs/selector" },
+            "timeout_ms": { "type": "integer", "minimum": 1 },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "expect"],
+          "properties": {
+            "type": { "const": "assert" },
+            "expect": { "$ref": "#/$defs/assert" },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "selector", "relation", "expected"],
+          "properties": {
+            "type": { "const": "bounds" },
+            "selector": { "$ref": "#/$defs/selector" },
+            "relation": { "enum": ["bottom_y_eq", "bottom_y_gt", "bottom_y_lt"] },
+            "expected": { "type": "integer" },
+            "tolerance": { "type": "integer", "minimum": 0 },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "expect"],
+          "properties": {
+            "type": { "const": "color" },
+            "expect": { "$ref": "#/$defs/color" },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "name"],
+          "properties": {
+            "type": { "const": "screenshot" },
+            "name": { "type": "string", "minLength": 1 },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "name"],
+          "properties": {
+            "type": { "const": "fixture_apply" },
+            "name": { "type": "string", "minLength": 1 },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "name"],
+          "properties": {
+            "type": { "const": "fixture_reset" },
+            "name": { "type": "string", "minLength": 1 },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "apk"],
+          "properties": {
+            "type": { "const": "install" },
+            "apk": { "type": "string", "minLength": 1 },
+            "on_error": { "$ref": "#/$defs/error_policy" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

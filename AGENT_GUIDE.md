@@ -2,7 +2,7 @@
 
 This is the front door for an autonomous coding agent. Read this before issuing commands.
 
-## 0. The v0.10 agent loop
+## 0. The 1.1.0 agent loop
 
 The shortest reliable loop is:
 
@@ -64,8 +64,9 @@ Potentially destructive commands (require `--yes` or an explicit confirmation fl
 - `app clear-data`, `app uninstall` (now `--yes`-guarded), `app data-restore`, `snapshot load`,
   `session prune`, `session gc --reclaim --stop`, and `maintenance clean`.
 - On a physical device, data-changing commands are refused by default with
-  `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` unless `--allow-physical-mutation` is passed. Use an emulator
-  for destructive tests.
+  `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` unless the exact scoped `--allow-physical-*` flag for that risk
+  (app control, data, network, install, input, shell) or the `--allow-physical-mutation` superset is
+  passed. Use an emulator for destructive tests.
 - `agent test` never passes `--fresh`, never clears data and never uninstalls. It installs only when
   `--install` is supplied and only with a normal, data-preserving install.
 
@@ -122,6 +123,14 @@ Defaults can come from `[agent] profile` in `.androidforge/project.toml` or
 `ANDROIDFORGE_PROFILE=full|compact|brief`. `--max-items` and `--max-text-chars` bound compact output.
 Full detail remains available by re-running without the profile or with `--output-profile full`.
 
+For streaming consumers, `--jsonl` (implies `--json`) emits minified NDJSON: one envelope per
+command, plus one compact iteration line before the envelope for `scenario run`. `--fields a,b,c`
+trims only top-level keys of `result`; envelope fields are never removed, unknown keys return
+`E_INVALID_ARGUMENT` with the available keys, and non-object results fail with a suggestion. Use
+`--output-profile compact|brief` to trim the envelope itself. `--stats` appends one stderr stats line
+with exact stdout bytes, lines and `ceil(bytes/4)` estimated tokens; stdout and JSON parseability are
+unchanged, including with `--quiet`. These are presentation flags, not MCP arguments.
+
 Common aliases: `ui o/d/t/w` (observe/diff/tap/wait), `app i/l` (install/launch), `diagnostics perf`,
 `report why` (explain), `agent b` (brief), `context ctx`. Selector aliases include `--id`
 (`--resource-id`), `--desc` (`--content-desc`) and `--token` (`--expect-token`).
@@ -156,6 +165,8 @@ androidforge ui observe --session ses-... --json
 androidforge ui observe --session ses-... --package com.example.app --json
 androidforge ui observe --session ses-... --since obs-... --json
 androidforge ui observe --session ses-... --full --json
+androidforge ui observe --session ses-... --semantics --json
+androidforge ui observe --session ses-... --semantics --full --json
 androidforge ui diff --session ses-... --from obs-... --json
 androidforge ui diff --session ses-... --from obs-... --to obs-... --json
 androidforge ui diff --session ses-... --from obs-... --full --json
@@ -167,6 +178,13 @@ preferred `token` (with `id` retained as an alias). Every node includes `clickab
 `editable` is present when true. Default output is intentionally filtered and capped;
 `actionable_total`/`actionable_truncated` and `context_total`/`context_truncated` tell you whether more
 nodes exist. `--full` returns the complete parsed hierarchy.
+
+`--semantics` adds an additive, bounded (64) view of the full hierarchy with Compose test tags
+(`test_tag`) and derived roles. Android ids keep their `:id/` form and never get a `test_tag`; a
+Compose test tag is a resource id without `:id/` and is also selectable with `--test-tag` on
+`ui tap`/`ui assert`. Semantic nodes receive the same stable `ref` values, so pair a ref with its
+observation `--expect-token` for later actions. `semantics_total`/`semantics_truncated` report the
+uncapped count. Without the flag none of these fields appear.
 
 Tokens are scoped to one session and one device boot. They expire after 24 hours, after the per-session
 retention limit, or when the device reboots. Cross-session use returns
@@ -384,7 +402,7 @@ stdout/stderr goes to per-target files, and a child that exceeds `--timeout` is 
 health, run ids, failures, child logs/reports and cleanup state. Only sessions created by this matrix
 with the matrix owner are released; pre-existing sessions and emulators are not stopped.
 
-### 0.14 v0.10 agent surfaces
+### 0.14 1.1.0 agent surfaces
 
 MCP and tool export:
 
@@ -396,7 +414,7 @@ androidforge tools schema --format openai --json
 
 `mcp serve` speaks newline-delimited JSON-RPC on stdin/stdout. Only JSON-RPC lines go to stdout;
 diagnostics go to stderr. Destructive tools require `confirm=true`, and uninstall/fresh-install are
-guarded. `tools schema` exports the same 192-tool catalog.
+guarded. `tools schema` exports the same 221-tool catalog.
 
 Selector v2 and OCR:
 
@@ -498,7 +516,7 @@ androidforge tools catalog --json
 verifies SHA-256 `54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7` and installs under
 the AndroidForge state directory. It requires Java 17+ and `--yes`. `tools status` reports the active
 path, source (`androidforge-managed` or `external`), managed version and Java. `tools catalog` emits the
-complete 191-command catalog used by the desktop **Tool database** and generated MCP tools. Maestro
+complete 219-command catalog used by the desktop **Tool database** and generated MCP tools. Maestro
 remains optional; native UI commands do not require it.
 
 Device waiting:
@@ -553,6 +571,51 @@ This is an explicit measurement, not a passive status command. It launches the a
 usage. `--cold` is the only way to request a force-stop first; without it the running process is
 measured as-is. Every unavailable metric is `null` with an `unknown_reason`, the command exits 10 when
 the report is partial, and no value is estimated. The default post-launch settle is 2 seconds.
+
+### 0.15 1.1.0 surfaces worth reaching for
+
+```powershell
+androidforge build --variant debug --json
+androidforge build --variant debug --install --only-if-changed --session ses-... --json
+androidforge scenario validate .\smoke.toml --json
+androidforge scenario run .\smoke.toml --dry-run --json
+androidforge devices shell --read-only --session ses-... --json -- dumpsys gfxinfo com.example.app
+androidforge devices input tap 540 1200 --session ses-... --json
+androidforge ui audit a11y --session ses-... --json
+androidforge artifacts scan-secrets --project . --json
+androidforge report bundle latest --redact-secrets --output .\evidence.zip --json
+androidforge diagnostics logcat peek --session ses-... --redact-patterns AIza,sk- --json
+androidforge doctor --capacity --json
+androidforge ports list --json
+androidforge avd images --json
+androidforge devices tag add --serial emulator-5554 --tag nightly --json
+androidforge agent matrix --device tag:nightly --flow conformance --dry-run --json
+androidforge maintenance clean --runs --keep-tag release --json
+```
+
+- `build` runs the configured `[build.commands.<variant>]` argv and resolves the APK; `--install`,
+  `--launch` and `--cold` reuse the audited, gated paths. It never infers a command or interprets a
+  shell string; global `--dry-run` touches no device.
+- `scenario validate` is read-only; `scenario run --dry-run` plans every step with no device or consent.
+  A real run needs `--yes` for mutating steps plus the exact scoped physical flag per risk. Arbitrary
+  shell/adb steps are rejected, and no physical flag is exposed over MCP.
+- `devices shell --read-only` is an allowlisted, bounded, redacted diagnostic path; without it the
+  master `--allow-physical-mutation` is required. `devices input tap X Y` uses the gated `Risk::Input`
+  path. The retained `device` alias works for both.
+- `ui audit a11y` is a read-only hierarchy audit; optional `--contrast` takes one host-only screenshot.
+  Host-side `doctor --capacity`, `ports list`, `avd images/create`, `devices tag ...` and
+  `agent matrix --device tag:<name>` need no device mutation.
+- `maintenance clean --keep-tag` protects tagged runs and forces a dry run without `--yes`. `app data
+  export` resolves its destination before any device call and refuses in-project paths without
+  `--allow-in-project` (or overwriting without `--overwrite`).
+- Secret hygiene: `--redact-patterns` takes literal token prefixes, not regex. `artifacts scan-secrets`
+  is host-only; `report bundle --redact-secrets` refuses the ZIP if a suspected secret survives.
+  Included media is not pixel-redacted.
+- Performance defaults: a sleeping display fails with `E_SCREEN_OFF` (exit 4); wake only with the
+  explicit `--wake`. A jank percentage needs at least `--min-frames 30` (default 30); a short sample is
+  `sample_quality`/`sample_status` `insufficient`, never zero. A comparable baseline regression is
+  `E_PERFORMANCE_REGRESSION` (exit 11).
+
 ## 1. The operating model
 
 Every meaningful test is a **run** with a **session** and a **device**.
@@ -838,7 +901,8 @@ started emulator. Never assume these are safe because a JSON envelope came back.
 - `E_COMMAND_TIMEOUT` — inspect device state and retry with a larger explicit timeout; do not loop forever.
 - `E_DEVICE_OFFLINE` / `E_DEVICE_DISCONNECTED` - reconnect or restart only an emulator you own.
 - `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` - a data-changing command targeted a physical device; use an
-  emulator or pass `--allow-physical-mutation` only after confirming the device is disposable.
+  emulator or pass the exact scoped `--allow-physical-*` flag for that risk (or the
+  `--allow-physical-mutation` superset) only after confirming the device is disposable.
 - `E_INSTALL_SIGNATURE_MISMATCH` — read the diagnosis; do not auto-uninstall.
 - `E_SESSION_EXPIRED` — start/attach a new session.
 - `E_UNSUPPORTED_OPERATION` — read the capability matrix; use the suggested alternative.

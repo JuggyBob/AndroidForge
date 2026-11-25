@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/capture-launch.schema.json",
+  "title": "AndroidForge capture launch first-frame evidence",
+  "description": "Bounded repeated-screencap launch sample: first app frame, centre/dominant colour, white/black counts and optional assertion outcome. No video decoder is involved.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "package",
+    "serial",
+    "collected_at",
+    "status",
+    "fps",
+    "requested_duration_ms",
+    "sample_window_ms",
+    "sampled_duration_ms",
+    "frames_captured",
+    "frames_analyzed",
+    "dropped_frames",
+    "white_threshold",
+    "black_threshold",
+    "white_frames",
+    "black_frames",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "package": { "type": "string" },
+    "serial": { "type": "string" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "first_frame_found",
+        "timeout",
+        "cancelled",
+        "frame_limit",
+        "artifact_limit",
+        "source_exhausted"
+      ]
+    },
+    "fps": { "type": "integer", "minimum": 0 },
+    "requested_duration_ms": { "type": "integer", "minimum": 0 },
+    "sample_window_ms": { "type": "integer", "minimum": 0 },
+    "sampled_duration_ms": { "type": "integer", "minimum": 0 },
+    "frames_captured": { "type": "integer", "minimum": 0 },
+    "frames_analyzed": { "type": "integer", "minimum": 0 },
+    "dropped_frames": { "type": "integer", "minimum": 0 },
+    "white_threshold": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "black_threshold": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "white_frames": { "type": "integer", "minimum": 0 },
+    "black_frames": { "type": "integer", "minimum": 0 },
+    "first_app_frame_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "first_frame_png": { "type": ["string", "null"] },
+    "first_frame_rgb": { "oneOf": [{ "$ref": "#/$defs/color" }, { "type": "null" }] },
+    "dominant_color": { "oneOf": [{ "$ref": "#/$defs/color" }, { "type": "null" }] },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "no_frame_reason": { "type": ["string", "null"] },
+    "assertion": { "$ref": "#/$defs/assertion" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "color": {
+      "type": "object",
+      "required": ["hex", "r", "g", "b"],
+      "properties": {
+        "hex": { "type": "string", "pattern": "^#[0-9A-F]{6}$" },
+        "r": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "g": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "b": { "type": "integer", "minimum": 0, "maximum": 255 }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "index",
+        "frame_index",
+        "path",
+        "sha256",
+        "bytes",
+        "elapsed_ms",
+        "is_first_app_frame"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "frame_index": { "type": "integer", "minimum": 0 },
+        "path": { "type": "string" },
+        "sha256": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "elapsed_ms": { "type": "integer", "minimum": 0 },
+        "is_first_app_frame": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "assertion": {
+      "type": "object",
+      "required": ["passed", "expect_first_frame", "no_splash", "tolerance"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "expect_first_frame": { "type": "boolean" },
+        "no_splash": { "type": "boolean" },
+        "expected_color": { "type": ["string", "null"] },
+        "expected_color_sample": { "type": ["string", "null"], "enum": ["centre", "dominant", null] },
+        "checked_color": { "$ref": "#/$defs/color" },
+        "first_app_frame_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "tolerance": { "type": "integer", "minimum": 0, "maximum": 255 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

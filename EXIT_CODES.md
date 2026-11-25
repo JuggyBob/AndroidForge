@@ -8,6 +8,7 @@ Agents must branch on the process exit code and on `error.code` in JSON. Do not 
 | --- | --- |
 | `0` | The command completed and its assertions/expectations passed. |
 | `10` | Partial success: some independent steps completed, others failed. Inspect `error.context` and the run report. |
+| `11` | Performance threshold regression: a measured metric exceeded its configured limit. |
 
 ## Failure ranges
 
@@ -81,7 +82,8 @@ Pipeline-style commands may return a successful HTTP-style envelope with `status
 | `E_WIRELESS_PAIRING_FAILED` | 4 | yes | ADB rejected or could not complete pairing. Pairing codes are never logged. |
 | `E_WIRELESS_CONNECT_FAILED` | 4 | yes | ADB could not connect to or disconnect the wireless endpoint. |
 | `E_DEVICE_HEALTH_UNAVAILABLE` | 4 | yes | Health could not be collected for the target device. |
-| `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` | 4 | yes | A data-changing operation targeted a physical device without `--allow-physical-mutation`. |
+| `E_PHYSICAL_DEVICE_MUTATION_BLOCKED` | 4 | yes | A data-changing operation targeted a physical device without the matching scoped `--allow-physical-*` flag or the `--allow-physical-mutation` superset. |
+| `E_SCREEN_OFF` | 4 | yes | The screen is off; wake the device before capture or performance measurement. |
 | `E_RETRY_NOT_ALLOWED` | 2 | yes | Retries were requested for a non-read-only operation. |
 | `E_MATRIX_TARGET_INVALID` | 2 | yes | A matrix AVD/serial is unknown or not connected. |
 | `E_MATRIX_DUPLICATE_TARGET` | 2 | yes | The same matrix target was requested more than once. |
@@ -94,8 +96,16 @@ Pipeline-style commands may return a successful HTTP-style envelope with `status
 | `E_HOOK_NOT_FOUND` | 3 | yes | The named hook is not defined or is incomplete. |
 | `E_HOOK_VERIFICATION_FAILED` | 7 | yes | The hook ran but its declared app-state postcondition was not met. |
 | `E_JUNIT_INVALID` | 8 | no | JUnit XML could not be parsed. |
+| `E_BUILD_COMMAND_NOT_CONFIGURED` | 8 | no | No `[build.commands]` entry matches the requested build. |
+| `E_BUILD_TIMEOUT` | 5 | yes | The configured build command exceeded its timeout. |
+| `E_BUILD_FAILED` | 6 | yes | The configured build command exited non-zero. |
+| `E_BUILD_ARTIFACT_NOT_FOUND` | 6 | yes | No APK matched the configured artifact patterns. |
+| `E_BUILD_ARTIFACT_AMBIGUOUS` | 6 | yes | Multiple APK candidates matched; narrow the artifact patterns. |
+| `E_BUILD_IDENTITY_MISMATCH` | 6 | no | The built APK identity did not match the expected package/version. |
+| `E_BUILD_OUTPUT_TOO_LARGE` | 6 | no | The build log exceeded the capture limit and was truncated. |
 | `E_UNSUPPORTED_OPERATION` | 3 | yes | The operation is deliberately not implemented. Read the reason and alternatives. |
 | `E_PARTIAL_FAILURE` | 10 | yes | Independent work partially completed; inspect the report. |
+| `E_PERFORMANCE_REGRESSION` | 11 | no | A measured performance metric exceeded its threshold; inspect the report evidence. |
 | `E_INTERRUPTED` | 130 | yes | The operation was interrupted. |
 | `E_INTERNAL` | 9 | no | An unexpected internal invariant failed. Include the command and trace in a report. |
 

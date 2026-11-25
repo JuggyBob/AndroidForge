@@ -327,6 +327,91 @@ impl Session {
         })
     }
 
+    /// Non-destructively forget a terminal session tombstone (`Released`,
+    /// `Failed` or `Abandoned`).
+    ///
+    /// Unlike `prune_sessions`, the session directory and all recorded history
+    /// (build identity, snapshots, notes, settings, last error) are preserved.
+    /// Only a device lock that still belongs to this session is released, and
+    /// the session is marked `Released`.
+    ///
+    /// - `caller_owner` must match the recorded owner, unless `force` is set.
+    /// - Live sessions (`Starting`, `Ready`, `Stopping`) are refused.
+    /// - A device lock belonging to a different session is never removed; the
+    ///   call is refused even with `force` so a live lock can never be stolen.
+    /// - Unreadable locks fail closed, matching `owner_of_serial`.
+    pub fn release_terminal(
+        &mut self,
+        paths: &ForgePaths,
+        caller_owner: Option<&str>,
+        force: bool,
+    ) -> Result<()> {
+        let id = self.id.clone();
+        with_global_lock(paths, || {
+            let mut disk = Session::load(paths, &id)?;
+            if !force && caller_owner != Some(disk.owner.as_str()) {
+                return Err(ForgeError::new(
+                    ErrorCode::SessionOwnershipMismatch,
+                    format!(
+                        "session {} is owned by '{}', not '{}'",
+                        disk.id,
+                        disk.owner,
+                        caller_owner.unwrap_or("<none>")
+                    ),
+                )
+                .with_context_string("session_owner", disk.owner.clone())
+                .with_context_string(
+                    "caller_owner",
+                    caller_owner.unwrap_or_default().to_string(),
+                )
+                .with_suggestion(
+                    "Pass the recorded owner, or use --force to release a session owned by someone else.",
+                )
+                .session(disk.id.clone()));
+            }
+            if !matches!(
+                disk.state,
+                SessionState::Released | SessionState::Failed | SessionState::Abandoned
+            ) {
+                return Err(ForgeError::new(
+                    ErrorCode::InvalidArgument,
+                    format!(
+                        "session {} is {:?}, not a terminal session",
+                        disk.id, disk.state
+                    ),
+                )
+                .with_suggestion("Only Released, Failed or Abandoned sessions can be forgotten.")
+                .with_suggestion("Run `androidforge session release` for a live session.")
+                .session(disk.id.clone()));
+            }
+
+            if let Some(serial) = disk.serial.as_deref()
+                && let Some(foreign_id) = foreign_lock_owner(paths, &disk.id, serial)?
+            {
+                return Err(ForgeError::new(
+                    ErrorCode::DeviceBusy,
+                    format!(
+                        "device {serial} is owned by session {foreign_id}; refusing to release tombstone {}",
+                        disk.id
+                    ),
+                )
+                .with_suggestion("Release or stop the owning session first.")
+                .device(serial.to_string())
+                .session(foreign_id));
+            }
+
+            // `release_device_lock_unlocked` removes only locks whose session
+            // id and serial both match this session, so no foreign lock is
+            // touched. It also covers legacy `_` filenames for the same serial.
+            release_device_lock_unlocked(paths, &disk.id, disk.serial.as_deref())?;
+            disk.state = SessionState::Released;
+            disk.operation = None;
+            disk.touch(paths)?;
+            *self = disk;
+            Ok(())
+        })
+    }
+
     pub fn acquire_device(&mut self, paths: &ForgePaths, serial: &str) -> Result<()> {
         let id = self.id.clone();
         let serial = serial.to_string();
@@ -989,6 +1074,46 @@ fn release_device_lock_unlocked(
     Ok(())
 }
 
+/// Return the id of a session other than `session_id` that currently holds a
+/// readable lock for `serial`, if any. Unreadable locks fail closed so cleanup
+/// never destroys an unknown owner's lock. A colliding legacy filename whose
+/// `serial` field names a different device is ignored, matching
+/// `release_device_lock_unlocked` and `owner_of_serial`.
+fn foreign_lock_owner(
+    paths: &ForgePaths,
+    session_id: &str,
+    serial: &str,
+) -> Result<Option<String>> {
+    for lock_path in device_lock_paths(paths, serial)? {
+        if !lock_path.is_file() {
+            continue;
+        }
+        let lock = read_json::<DeviceLock>(&lock_path).map_err(|error| {
+            ForgeError::new(
+                ErrorCode::DeviceBusy,
+                format!(
+                    "device lock {} for {serial} is unreadable: {error}",
+                    lock_path.display()
+                ),
+            )
+            .with_cause(error)
+            .with_suggestion(format!(
+                "Inspect {} and remove it manually only if no session owns the device.",
+                lock_path.display()
+            ))
+            .with_suggestion("Run `androidforge session list` to inspect ownership.")
+            .device(serial.to_string())
+        })?;
+        if lock.serial != serial {
+            continue;
+        }
+        if lock.session_id != session_id {
+            return Ok(Some(lock.session_id));
+        }
+    }
+    Ok(None)
+}
+
 fn session_dir(paths: &ForgePaths, session_id: &str) -> Result<PathBuf> {
     if session_id.is_empty()
         || !session_id
@@ -1598,5 +1723,313 @@ mod tests {
         let loaded = Session::load(&paths, &session.id).unwrap();
         assert_eq!(loaded.project_root.as_deref(), Some("C:\\work\\app"));
         assert_eq!(loaded.owner, "AgentA");
+    }
+
+    #[test]
+    fn release_terminal_removes_owned_lock_and_tombstones_failed_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "emulator-5554";
+        let mut session = Session::new(
+            "FailedOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        session.acquire_device(&paths, serial).unwrap();
+        session.mark_ready(&paths).unwrap();
+        session.add_note(&paths, "observed failure").unwrap();
+        let lock = paths
+            .locks_dir()
+            .join("devices")
+            .join(format!("{serial}.json"));
+        assert!(lock.is_file());
+
+        // Simulate a process that failed but died before lock cleanup.
+        let mut disk = Session::load(&paths, &session.id).unwrap();
+        disk.state = SessionState::Failed;
+        disk.last_error = Some("boom".to_string());
+        disk.operation = Some(OperationLock {
+            pid: 999_999,
+            operation: "app.install".to_string(),
+            started_at: now_rfc3339(),
+        });
+        disk.save(&paths).unwrap();
+
+        session
+            .release_terminal(&paths, Some("FailedOwner"), false)
+            .unwrap();
+
+        assert!(!lock.is_file(), "the session's own lock must be removed");
+        assert!(owner_of_serial(&paths, serial).unwrap().is_none());
+        let disk = Session::load(&paths, &session.id).unwrap();
+        assert_eq!(disk.state, SessionState::Released);
+        assert_eq!(disk.owner, "FailedOwner");
+        assert_eq!(disk.last_error.as_deref(), Some("boom"));
+        assert!(disk.notes.iter().any(|note| note == "observed failure"));
+        assert!(disk.operation.is_none());
+        assert!(
+            session_dir(&paths, &session.id)
+                .unwrap()
+                .join("session.json")
+                .is_file(),
+            "cleanup must not delete session history"
+        );
+    }
+
+    #[test]
+    fn release_terminal_refuses_another_sessions_live_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "emulator-5554";
+
+        let mut failed = Session::new(
+            "Doomed",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        failed.create(&paths).unwrap();
+        failed.acquire_device(&paths, serial).unwrap();
+        failed.mark_ready(&paths).unwrap();
+        let mut disk = Session::load(&paths, &failed.id).unwrap();
+        disk.state = SessionState::Failed;
+        disk.save(&paths).unwrap();
+        failed = disk;
+
+        // A live session legitimately takes over the failed session's device.
+        let mut live = Session::new(
+            "LiveOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        live.create(&paths).unwrap();
+        live.acquire_device(&paths, serial).unwrap();
+        live.mark_ready(&paths).unwrap();
+        let lock = paths
+            .locks_dir()
+            .join("devices")
+            .join(format!("{serial}.json"));
+        assert!(lock.is_file());
+        assert_eq!(
+            owner_of_serial(&paths, serial).unwrap().unwrap().id,
+            live.id
+        );
+
+        let error = failed
+            .release_terminal(&paths, Some("Doomed"), false)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        // Force must never steal a live lock owned by another session.
+        let error = failed
+            .release_terminal(&paths, Some("Doomed"), true)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+
+        assert!(lock.is_file(), "the other session's live lock must survive");
+        assert_eq!(
+            Session::load(&paths, &failed.id).unwrap().state,
+            SessionState::Failed,
+            "a refused cleanup must not tombstone the session"
+        );
+        assert_eq!(
+            owner_of_serial(&paths, serial).unwrap().unwrap().id,
+            live.id
+        );
+    }
+
+    #[test]
+    fn release_terminal_is_idempotent_and_clears_stale_legacy_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+        let mut session = Session::new(
+            "ReleasedOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        session.acquire_device(&paths, serial).unwrap();
+        session.mark_ready(&paths).unwrap();
+        session.release(&paths).unwrap();
+        assert_eq!(session.state, SessionState::Released);
+
+        // A partial cleanup can leave a legacy `_` lock behind; it is ours.
+        let legacy = write_legacy_lock(&paths, &session, serial);
+        assert!(legacy.is_file());
+
+        session
+            .release_terminal(&paths, Some("ReleasedOwner"), false)
+            .unwrap();
+        assert!(!legacy.is_file(), "a stale legacy lock must be removed");
+        assert_eq!(
+            Session::load(&paths, &session.id).unwrap().state,
+            SessionState::Released
+        );
+
+        session
+            .release_terminal(&paths, Some("ReleasedOwner"), false)
+            .unwrap();
+        assert_eq!(
+            Session::load(&paths, &session.id).unwrap().state,
+            SessionState::Released
+        );
+        assert!(owner_of_serial(&paths, serial).unwrap().is_none());
+        assert!(
+            !paths
+                .locks_dir()
+                .join("devices")
+                .join("192.168.1.2%3A5555.json")
+                .is_file(),
+            "idempotent cleanup must not write a new lock"
+        );
+    }
+
+    #[test]
+    fn release_terminal_refuses_live_session_without_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "emulator-5554";
+        let mut session = Session::new(
+            "LiveOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        session.acquire_device(&paths, serial).unwrap();
+        session.mark_ready(&paths).unwrap();
+        let lock = paths
+            .locks_dir()
+            .join("devices")
+            .join(format!("{serial}.json"));
+
+        let error = session
+            .release_terminal(&paths, Some("LiveOwner"), false)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+        assert!(lock.is_file(), "a live session's lock must not be removed");
+        assert_eq!(
+            Session::load(&paths, &session.id).unwrap().state,
+            SessionState::Ready
+        );
+        assert_eq!(
+            owner_of_serial(&paths, serial).unwrap().unwrap().id,
+            session.id
+        );
+    }
+
+    #[test]
+    fn release_terminal_verifies_owner_and_honors_force() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "emulator-5554";
+        let mut session = Session::new(
+            "RealOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        session.acquire_device(&paths, serial).unwrap();
+        let lock = paths
+            .locks_dir()
+            .join("devices")
+            .join(format!("{serial}.json"));
+        let mut disk = Session::load(&paths, &session.id).unwrap();
+        disk.state = SessionState::Failed;
+        disk.save(&paths).unwrap();
+
+        let error = session
+            .release_terminal(&paths, Some("Impostor"), false)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SessionOwnershipMismatch);
+        assert!(lock.is_file());
+        assert_eq!(
+            Session::load(&paths, &session.id).unwrap().state,
+            SessionState::Failed
+        );
+
+        // The explicit recorded owner path succeeds.
+        session
+            .release_terminal(&paths, Some("RealOwner"), false)
+            .unwrap();
+        assert_eq!(
+            Session::load(&paths, &session.id).unwrap().state,
+            SessionState::Released
+        );
+
+        // --force bypasses the owner check for a different failed session's
+        // own lock, but never another session's lock (covered above).
+        let mut forced = Session::new(
+            "ForcedOwner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        forced.create(&paths).unwrap();
+        forced.acquire_device(&paths, serial).unwrap();
+        let mut disk = Session::load(&paths, &forced.id).unwrap();
+        disk.state = SessionState::Abandoned;
+        disk.save(&paths).unwrap();
+        forced
+            .release_terminal(&paths, Some("Impostor"), true)
+            .unwrap();
+        assert!(!lock.is_file());
+        assert_eq!(
+            Session::load(&paths, &forced.id).unwrap().state,
+            SessionState::Released
+        );
+    }
+
+    #[test]
+    fn release_terminal_fails_closed_on_unreadable_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(&temp);
+        let serial = "192.168.1.2:5555";
+        let mut session = Session::new(
+            "Owner",
+            SessionKind::Attached,
+            Some(serial.to_string()),
+            None,
+            None,
+            true,
+        );
+        session.create(&paths).unwrap();
+        let mut disk = Session::load(&paths, &session.id).unwrap();
+        disk.state = SessionState::Failed;
+        disk.serial = Some(serial.to_string());
+        disk.save(&paths).unwrap();
+
+        let unreadable = write_unreadable_lock(&paths, "192.168.1.2%3A5555.json");
+        let error = session
+            .release_terminal(&paths, Some("Owner"), false)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DeviceBusy);
+        assert!(
+            unreadable.is_file(),
+            "unreadable lock must never be deleted"
+        );
+        assert_eq!(
+            Session::load(&paths, &session.id).unwrap().state,
+            SessionState::Failed
+        );
     }
 }

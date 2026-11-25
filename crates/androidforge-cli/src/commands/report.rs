@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use androidforge_core::analysis::{analyze_flaky, compare_reports};
+use androidforge_core::analysis::{
+    PerformanceBudget, analyze_flaky, compare_reports, compare_with_budget,
+};
 use androidforge_core::diagnosis::{DiagnosticExplanation, explain_report};
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::model::BuildIdentity;
@@ -15,6 +17,7 @@ use androidforge_core::run::{
     resolve_run_dir, set_active_run,
 };
 use androidforge_core::util::{parse_duration, read_json};
+use serde::Serialize;
 
 use crate::cli::{
     ReportCommand, ReportCompareArgs, ReportExplainArgs, ReportFlakyArgs, ReportHistoryArgs,
@@ -197,6 +200,206 @@ fn quote_powershell(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+/// Normalise and bound free-form report labels. Empty, oversized and control
+/// character tags are rejected so stored evidence cannot be corrupted by
+/// terminal control sequences.
+pub(crate) fn validate_report_tags(tags: &[String]) -> Result<Vec<String>> {
+    tags.iter()
+        .map(|tag| {
+            let tag = tag.trim();
+            if tag.is_empty() {
+                return Err(ForgeError::invalid_argument("--tag must not be empty"));
+            }
+            if tag.chars().count() > 64 {
+                return Err(ForgeError::invalid_argument(
+                    "--tag must be at most 64 characters",
+                ));
+            }
+            if tag.chars().any(char::is_control) {
+                return Err(ForgeError::invalid_argument(
+                    "--tag must not contain control characters",
+                ));
+            }
+            Ok(tag.to_string())
+        })
+        .collect()
+}
+
+/// `--since` accepts an absolute RFC3339 instant or a relative duration such
+/// as `30d`, `2h` or `500ms`. Relative values are resolved once, at parse time.
+pub(crate) fn parse_since_filter(value: Option<&str>) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(ForgeError::invalid_argument("--since must not be empty"));
+    }
+    if let Ok(instant) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(Some(instant.with_timezone(&chrono::Utc).to_rfc3339()));
+    }
+    let duration = parse_duration(value).map_err(ForgeError::invalid_argument)?;
+    let since = chrono::Utc::now()
+        - chrono::Duration::from_std(duration)
+            .map_err(|_| ForgeError::invalid_argument("--since is outside the supported range"))?;
+    Ok(Some(since.to_rfc3339()))
+}
+
+const MAX_META_KEY_LEN: usize = 64;
+const MAX_META_VALUE_LEN: usize = 1024;
+const SECRET_KEY_MARKERS: &[&str] = &[
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "api-key",
+    "credential",
+    "private_key",
+    "private-key",
+    "access_key",
+    "access-key",
+    "authorization",
+];
+
+/// Parse repeatable `--meta KEY=VALUE` pairs. Keys are restricted to a small
+/// identifier alphabet and checked against secret-looking names so metadata
+/// never becomes an invitation to record credentials in reports.
+pub(crate) fn parse_run_meta(pairs: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut meta = BTreeMap::new();
+    for pair in pairs {
+        let Some((key, value)) = pair.split_once('=') else {
+            return Err(ForgeError::invalid_argument(format!(
+                "--meta '{pair}' must use KEY=VALUE form"
+            ))
+            .with_suggestion("Example: --meta build=1.2.3 --meta branch=main"));
+        };
+        let key = key.trim();
+        if key.is_empty() || key.chars().count() > MAX_META_KEY_LEN {
+            return Err(ForgeError::invalid_argument(format!(
+                "--meta key must be between 1 and {MAX_META_KEY_LEN} characters"
+            )));
+        }
+        if !key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        {
+            return Err(ForgeError::invalid_argument(format!(
+                "--meta key '{key}' may contain only letters, digits, '_', '-' and '.'"
+            )));
+        }
+        let lowered = key.to_ascii_lowercase();
+        if SECRET_KEY_MARKERS
+            .iter()
+            .any(|marker| lowered.contains(marker))
+        {
+            return Err(ForgeError::invalid_argument(format!(
+                "--meta key '{key}' looks like a secret and is not allowed"
+            ))
+            .with_suggestion("Metadata is stored in reports; keep credentials out of it."));
+        }
+        let value = value.trim();
+        if value.is_empty() || value.chars().count() > MAX_META_VALUE_LEN {
+            return Err(ForgeError::invalid_argument(format!(
+                "--meta value for '{key}' must be between 1 and {MAX_META_VALUE_LEN} characters"
+            )));
+        }
+        if value.chars().any(char::is_control) {
+            return Err(ForgeError::invalid_argument(format!(
+                "--meta value for '{key}' must not contain control characters"
+            )));
+        }
+        meta.insert(key.to_string(), value.to_string());
+    }
+    Ok(meta)
+}
+
+fn budget_number(value: f64, label: &str, allow_negative: bool) -> Result<f64> {
+    if !value.is_finite() || (!allow_negative && value < 0.0) {
+        return Err(ForgeError::invalid_argument(format!(
+            "{label} must be a finite {}number",
+            if allow_negative { "" } else { "non-negative " }
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_budget(budget: &PerformanceBudget) -> Result<()> {
+    for (name, value) in [
+        ("startup_ms", budget.startup_ms),
+        ("jank_percent", budget.jank_percent),
+        ("janky_frames", budget.janky_frames),
+        ("max_frame_ms", budget.max_frame_ms),
+        ("apk_size_bytes", budget.apk_size_bytes),
+        ("failed_tests", budget.failed_tests),
+    ] {
+        if let Some(value) = value {
+            budget_number(value, &format!("budget field '{name}'"), false)?;
+        }
+    }
+    for (name, value) in [
+        ("startup_delta_ms", budget.startup_delta_ms),
+        ("jank_percent_delta", budget.jank_percent_delta),
+        ("max_frame_delta_ms", budget.max_frame_delta_ms),
+        ("apk_size_delta_bytes", budget.apk_size_delta_bytes),
+        ("failed_tests_delta", budget.failed_tests_delta),
+    ] {
+        if let Some(value) = value {
+            budget_number(value, &format!("budget field '{name}'"), true)?;
+        }
+    }
+    for (name, value) in &budget.metrics {
+        budget_number(*value, &format!("budget metric '{name}'"), false)?;
+    }
+    for (name, value) in &budget.metric_deltas {
+        budget_number(*value, &format!("budget metric delta '{name}'"), true)?;
+    }
+    Ok(())
+}
+
+/// Build the optional budget from `--budget` JSON plus convenience thresholds.
+/// Convenience flags override the corresponding JSON fields; no flags means
+/// the caller keeps the original no-budget comparison behavior.
+fn build_compare_budget(args: &ReportCompareArgs) -> Result<Option<PerformanceBudget>> {
+    let mut budget = match &args.budget {
+        Some(text) => serde_json::from_str::<PerformanceBudget>(text).map_err(|error| {
+            ForgeError::invalid_argument(format!("invalid --budget JSON: {error}"))
+        })?,
+        None => PerformanceBudget::default(),
+    };
+    if args.max_p99_ms.is_some() && args.max_frame_ms.is_some() {
+        return Err(ForgeError::invalid_argument(
+            "pass either --max-p99-ms or --max-frame-ms; use --budget for separate frame thresholds",
+        ));
+    }
+    if let Some(value) = args.max_startup_ms {
+        budget.startup_ms = Some(budget_number(value, "--max-startup-ms", false)?);
+    }
+    if let Some(value) = args.max_jank_percent {
+        budget.jank_percent = Some(budget_number(value, "--max-jank-percent", false)?);
+    }
+    if let Some(value) = args.max_p99_ms.or(args.max_frame_ms) {
+        let label = if args.max_p99_ms.is_some() {
+            "--max-p99-ms"
+        } else {
+            "--max-frame-ms"
+        };
+        budget.max_frame_ms = Some(budget_number(value, label, false)?);
+    }
+    if let Some(value) = args.max_apk_size_bytes {
+        budget.apk_size_bytes = Some(budget_number(value, "--max-apk-size-bytes", false)?);
+    }
+    if let Some(value) = args.max_failed_tests {
+        budget.failed_tests = Some(budget_number(value, "--max-failed-tests", false)?);
+    }
+    if budget.is_empty() {
+        return Ok(None);
+    }
+    validate_budget(&budget)?;
+    Ok(Some(budget))
+}
+
 fn target_run_id(ctx: &CliContext, explicit: Option<&str>) -> Result<String> {
     if let Some(run) = explicit.filter(|run| !run.trim().is_empty()) {
         return Ok(run.to_string());
@@ -219,10 +422,17 @@ fn target_run_id(ctx: &CliContext, explicit: Option<&str>) -> Result<String> {
 }
 
 async fn run_start(ctx: &CliContext, args: &RunStartArgs) -> Result<CommandSuccess> {
+    let tags = validate_report_tags(&args.tags)?;
+    let meta = parse_run_meta(&args.meta)?;
     if ctx.dry_run {
         return Ok(success(
             "run.start",
-            serde_json::json!({"dry_run": true, "name": args.name}),
+            serde_json::json!({
+                "dry_run": true,
+                "name": args.name,
+                "tags": tags,
+                "meta": meta,
+            }),
             format!("Would start run '{}'.\n", args.name),
         ));
     }
@@ -234,6 +444,8 @@ async fn run_start(ctx: &CliContext, args: &RunStartArgs) -> Result<CommandSucce
         "run.start",
     );
     options.name = Some(args.name.clone());
+    options.tags = tags.clone();
+    options.meta = meta.clone();
     options.project_config = ctx.paths.project_config_path.clone();
     options.session_id = session.as_ref().map(|session| session.id.clone());
     options.build = crate::run_scope::build_identity_for_run(ctx, session.as_ref()).await;
@@ -258,6 +470,8 @@ async fn run_start(ctx: &CliContext, args: &RunStartArgs) -> Result<CommandSucce
             "run_id": run.run_id,
             "report_path": run.report_path(),
             "artifact_directory": run.dir,
+            "tags": tags,
+            "meta": meta,
             "env": {"ANDROIDFORGE_RUN_ID": run.run_id},
         }),
         human,
@@ -455,54 +669,80 @@ async fn run_exec(ctx: &CliContext, args: &RunExecArgs) -> Result<CommandSuccess
 
 pub async fn report(ctx: &CliContext, command: &ReportCommand) -> Result<CommandSuccess> {
     match command {
-        ReportCommand::List { limit, all } => {
-            let mut runs = if *all {
-                let mut merged: BTreeMap<String, androidforge_core::run::RunSummary> =
+        ReportCommand::List {
+            limit,
+            all,
+            tags,
+            since,
+        } => {
+            let scope = resolve_report_scope(ctx, Some(tags), since.as_deref())?;
+            let mut runs: Vec<(androidforge_core::run::RunSummary, PathBuf)> = if *all {
+                let mut merged: BTreeMap<String, (androidforge_core::run::RunSummary, PathBuf)> =
                     BTreeMap::new();
                 for root in candidate_artifact_roots(ctx) {
                     for run in list_runs(&root).unwrap_or_default() {
-                        merged.entry(run.run_id.clone()).or_insert(run);
+                        let path = root.join(&run.path);
+                        merged.entry(run.run_id.clone()).or_insert((run, path));
                     }
                 }
-                let mut runs = merged.into_values().collect::<Vec<_>>();
-                runs.sort_by(|left, right| {
-                    right
-                        .started_at
-                        .cmp(&left.started_at)
-                        .then_with(|| right.run_id.cmp(&left.run_id))
-                });
-                runs
+                merged.into_values().collect()
             } else {
-                list_runs(&ctx.paths.artifacts_dir)?
+                let root = &ctx.paths.artifacts_dir;
+                list_runs(root)?
+                    .into_iter()
+                    .map(|run| {
+                        let path = root.join(&run.path);
+                        (run, path)
+                    })
+                    .collect()
             };
+            // RunSummary does not carry scope fields, so apply the same filter
+            // the latest-run resolver uses to the stored report itself.
+            runs.retain(|(_, path)| {
+                read_json::<RunReport>(&path.join("report.json"))
+                    .is_ok_and(|report| scope.matches(&report))
+            });
+            runs.sort_by(|(left, _), (right, _)| {
+                right
+                    .started_at
+                    .cmp(&left.started_at)
+                    .then_with(|| right.run_id.cmp(&left.run_id))
+            });
             let total = runs.len();
             let mut human = String::new();
-            if runs.is_empty() {
+            if total == 0 {
                 human.push_str("No runs found.\n");
             } else {
                 human.push_str(&format!(
-                    "{} run(s) in {}\n",
+                    "{} run(s) in {}{}\n",
                     total,
                     if *all {
                         "all discovered artifact stores".to_string()
                     } else {
                         ctx.paths.artifacts_dir.join("runs").display().to_string()
-                    }
+                    },
+                    scope.describe()
                 ));
-                for run in runs.iter().take(*limit) {
+                for (run, _) in runs.iter().take(*limit) {
                     human.push_str(&format!(
                         "  {}  {:?}  failed={}  {}\n",
                         run.run_id, run.status, run.failed_steps, run.command
                     ));
                 }
             }
-            runs.truncate(*limit);
+            let runs = runs
+                .into_iter()
+                .take(*limit)
+                .map(|(run, _)| run)
+                .collect::<Vec<_>>();
             Ok(success(
                 "report.list",
                 serde_json::json!({
                     "count": total,
                     "limit": limit,
                     "all": all,
+                    "tags": scope.tags,
+                    "since": scope.since_rfc3339,
                     "runs": runs,
                 }),
                 human,
@@ -881,45 +1121,63 @@ async fn reconcile(ctx: &CliContext, args: &ReportReconcileArgs) -> Result<Comma
 }
 
 async fn compare(ctx: &CliContext, args: &ReportCompareArgs) -> Result<CommandSuccess> {
+    let budget = build_compare_budget(args)?;
+    if args.fail_on_regression && budget.is_none() {
+        return Err(ForgeError::invalid_argument(
+            "--fail-on-regression requires a budget threshold; pass --budget or a --max-* flag",
+        ));
+    }
+    let scope = resolve_report_scope(ctx, Some(&args.tags), args.since.as_deref())?;
     let current_dir = resolve_report_dir(ctx, &args.run)?;
     let current = RunContext::open_dir(current_dir, ctx.redactor())?;
     let baseline_id = if let Some(baseline) = &args.baseline {
         baseline.clone()
     } else {
-        let summaries = list_runs(&ctx.paths.artifacts_dir)?;
-        summaries
+        let root = &ctx.paths.artifacts_dir;
+        let mut candidates = Vec::new();
+        for summary in list_runs(root)? {
+            if summary.run_id == current.run_id
+                || summary.status == RunStatus::Running
+                || summary.project != current.report.project
+                || summary.command != current.report.command
+            {
+                continue;
+            }
+            let path = root.join(&summary.path);
+            let Ok(report) = read_json::<RunReport>(&path.join("report.json")) else {
+                continue;
+            };
+            if scope.matches(&report) {
+                candidates.push(summary);
+            }
+        }
+        candidates
             .iter()
-            .filter(|run| {
-                run.run_id != current.run_id
-                    && run.project == current.report.project
-                    && run.command == current.report.command
-                    && run.status != RunStatus::Running
-            })
             .find(|run| run.status == RunStatus::Passed)
-            .or_else(|| {
-                summaries.iter().find(|run| {
-                    run.run_id != current.run_id
-                        && run.project == current.report.project
-                        && run.command == current.report.command
-                        && run.status != RunStatus::Running
-                })
-            })
+            .or_else(|| candidates.first())
             .map(|run| run.run_id.clone())
             .ok_or_else(|| {
                 ForgeError::new(
                     ErrorCode::InvalidArgument,
                     format!(
-                        "no compatible baseline run found for {} ({})",
-                        current.report.project, current.report.command
+                        "no compatible baseline run found for {} ({}){}",
+                        current.report.project,
+                        current.report.command,
+                        scope.describe()
                     ),
                 )
-                .with_suggestion("Pass --baseline <run> explicitly or run the same scenario again.")
+                .with_suggestion(
+                    "Pass --baseline <run>, relax the filters, or run the same scenario again.",
+                )
             })?
     };
     let baseline_dir = resolve_report_dir(ctx, &baseline_id)?;
     let baseline = RunContext::open_dir(baseline_dir, ctx.redactor())?;
-    let comparison = compare_reports(&current.report, &baseline.report);
-    let human = format!(
+    let comparison = match &budget {
+        Some(budget) => compare_with_budget(&current.report, &baseline.report, budget),
+        None => compare_reports(&current.report, &baseline.report),
+    };
+    let mut human = format!(
         "Compared {} with baseline {}\nstatus: {} -> {}\nduration: {}ms -> {}ms ({:+}ms)\nnew failures: {}\nresolved failures: {}\n",
         comparison.current_run_id,
         comparison.baseline_run_id,
@@ -939,6 +1197,44 @@ async fn compare(ctx: &CliContext, args: &ReportCompareArgs) -> Result<CommandSu
             comparison.resolved_failures.join(", ")
         }
     );
+    if comparison.budget.is_some() {
+        human.push_str(&format!(
+            "budget: {} of {} check(s) passed\n",
+            comparison
+                .budget_checks
+                .iter()
+                .filter(|check| check.passed)
+                .count(),
+            comparison.budget_checks.len()
+        ));
+        for violation in &comparison.budget_violations {
+            human.push_str(&format!(
+                "  VIOLATION {}: {}\n",
+                violation.metric, violation.reason
+            ));
+        }
+    }
+    if args.fail_on_regression && !comparison.budget_violations.is_empty() {
+        return Err(ForgeError::new(
+            ErrorCode::PerformanceRegression,
+            format!(
+                "{} performance budget violation(s) comparing {} with {}",
+                comparison.budget_violations.len(),
+                comparison.current_run_id,
+                comparison.baseline_run_id
+            ),
+        )
+        .with_context("comparison", serde_json::to_value(&comparison)?)
+        .with_context(
+            "budget_violations",
+            serde_json::to_value(&comparison.budget_violations)?,
+        )
+        .with_context_string("run_id", &comparison.current_run_id)
+        .with_context_string("baseline_run_id", &comparison.baseline_run_id)
+        .with_suggestion(
+            "Inspect error.context.budget_checks and the stored performance evidence.",
+        ));
+    }
     Ok(success(
         "report.compare",
         serde_json::to_value(&comparison)?,
@@ -1298,10 +1594,122 @@ fn same_project_scope(left: &str, right: &str) -> bool {
     normalize(left) == normalize(right)
 }
 
+/// Filters applied when resolving `latest` / `latest-failure`, listing reports
+/// and selecting a comparison baseline.
+///
+/// Every field is optional: an absent session id, serial, tag list or `since`
+/// means the selection stays project-wide, which preserves the 1.0.0 default
+/// behavior. `tags` uses AND semantics — a run must carry every requested tag.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct ReportScope {
+    pub session_id: Option<String>,
+    pub device_serial: Option<String>,
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_rfc3339: Option<String>,
+}
+
+impl ReportScope {
+    /// Build a scope from the globally selected session/serial plus explicit
+    /// `--tag` and `--since` values supplied by the calling command.
+    pub(crate) fn from_context(
+        ctx: &CliContext,
+        tags: Option<&[String]>,
+        since: Option<&str>,
+    ) -> Result<Self> {
+        let device_serial = ctx
+            .serial_arg
+            .as_deref()
+            .map(str::trim)
+            .filter(|serial| !serial.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var("ANDROIDFORGE_SERIAL")
+                    .ok()
+                    .map(|serial| serial.trim().to_string())
+                    .filter(|serial| !serial.is_empty())
+            });
+        Ok(Self {
+            session_id: ctx.session_id()?,
+            device_serial,
+            tags: tags
+                .map(validate_report_tags)
+                .transpose()?
+                .unwrap_or_default(),
+            since_rfc3339: parse_since_filter(since)?,
+        })
+    }
+
+    fn matches(&self, report: &RunReport) -> bool {
+        let started_after = match &self.since_rfc3339 {
+            None => true,
+            Some(since) => {
+                let Some(started) = chrono::DateTime::parse_from_rfc3339(&report.started_at).ok()
+                else {
+                    return false;
+                };
+                let Some(since) = chrono::DateTime::parse_from_rfc3339(since).ok() else {
+                    return false;
+                };
+                started >= since
+            }
+        };
+        started_after
+            && self
+                .session_id
+                .as_ref()
+                .is_none_or(|session| report.session_id.as_deref() == Some(session.as_str()))
+            && self
+                .device_serial
+                .as_ref()
+                .is_none_or(|serial| report.device_serial.as_deref() == Some(serial.as_str()))
+            && self
+                .tags
+                .iter()
+                .all(|tag| report.tags.iter().any(|candidate| candidate == tag))
+    }
+
+    fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(session) = &self.session_id {
+            parts.push(format!("session {session}"));
+        }
+        if let Some(serial) = &self.device_serial {
+            parts.push(format!("device {serial}"));
+        }
+        if !self.tags.is_empty() {
+            parts.push(format!("tags [{}]", self.tags.join(", ")));
+        }
+        if let Some(since) = &self.since_rfc3339 {
+            parts.push(format!("since {since}"));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!(" (scope: {})", parts.join(", "))
+        }
+    }
+}
+
+/// Single entry point for report selection filters. All call sites (list,
+/// explain, bundle and compare baseline selection) share this resolver.
+pub(crate) fn resolve_report_scope(
+    ctx: &CliContext,
+    tags: Option<&[String]>,
+    since: Option<&str>,
+) -> Result<ReportScope> {
+    ReportScope::from_context(ctx, tags, since)
+}
+
 /// Resolve `latest` and `latest-failure` consistently for reports and bundles.
 /// Only runs whose recorded `project_root` matches the selected project are
-/// eligible, so one app can never receive another app's evidence.
-pub(crate) fn resolve_latest_run_dir(ctx: &CliContext, failures_only: bool) -> Result<PathBuf> {
+/// eligible, so one app can never receive another app's evidence. A non-empty
+/// [`ReportScope`] narrows the candidates further by session, device and tags.
+pub(crate) fn resolve_latest_run_dir(
+    ctx: &CliContext,
+    failures_only: bool,
+    scope: &ReportScope,
+) -> Result<PathBuf> {
     let project_root = ctx.paths.project_root.to_string_lossy().into_owned();
     let mut runs: Vec<(androidforge_core::run::RunSummary, PathBuf)> = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -1318,20 +1726,35 @@ pub(crate) fn resolve_latest_run_dir(ctx: &CliContext, failures_only: bool) -> R
             let Ok(report) = androidforge_core::util::read_json::<RunReport>(&report_path) else {
                 continue;
             };
-            if !same_project_scope(&report.project_root, &project_root) {
+            if !same_project_scope(&report.project_root, &project_root) || !scope.matches(&report) {
                 continue;
             }
             runs.push((summary, path));
         }
     }
+    let detail = scope.describe();
     if runs.is_empty() {
         return Err(ForgeError::new(
             ErrorCode::InvalidArgument,
-            format!("no completed AndroidForge runs exist for project {project_root}"),
+            format!("no completed AndroidForge runs exist for project {project_root}{detail}"),
         )
         .with_suggestion("Run a command that creates a run report for this project first.")
         .with_suggestion("Pass --project <dir> to select another project."));
     }
+    if let Some(selected) = select_latest_run(runs, failures_only) {
+        return Ok(selected);
+    }
+    Err(ForgeError::new(
+        ErrorCode::InvalidArgument,
+        format!("no failed AndroidForge runs exist for project {project_root}{detail}"),
+    )
+    .with_suggestion("Use `latest` to inspect the newest completed run."))
+}
+
+fn select_latest_run(
+    mut runs: Vec<(androidforge_core::run::RunSummary, PathBuf)>,
+    failures_only: bool,
+) -> Option<PathBuf> {
     runs.sort_by(|(left, _), (right, _)| {
         left.started_at
             .cmp(&right.started_at)
@@ -1341,17 +1764,10 @@ pub(crate) fn resolve_latest_run_dir(ctx: &CliContext, failures_only: bool) -> R
         runs.iter()
             .rev()
             .find(|(summary, _)| summary.status != RunStatus::Passed)
-            .ok_or_else(|| {
-                ForgeError::new(
-                    ErrorCode::InvalidArgument,
-                    format!("no failed AndroidForge runs exist for project {project_root}"),
-                )
-                .with_suggestion("Use `latest` to inspect the newest completed run.")
-            })?
     } else {
-        runs.last().expect("runs is non-empty")
+        runs.last()
     };
-    Ok(selected.1.clone())
+    selected.map(|(_, path)| path.clone())
 }
 
 fn resolve_report_dir(ctx: &CliContext, spec: &str) -> Result<PathBuf> {
@@ -1532,9 +1948,11 @@ fn summary_json(report: &RunReport, dir: &std::path::Path) -> serde_json::Value 
 }
 
 async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSuccess> {
+    let scope = resolve_report_scope(ctx, Some(&args.tags), args.since.as_deref())?;
+    let using_latest = matches!(args.run.as_str(), "latest" | "latest-failure");
     let dir = match args.run.as_str() {
-        "latest" => resolve_latest_run_dir(ctx, false)?,
-        "latest-failure" => resolve_latest_run_dir(ctx, true)?,
+        "latest" => resolve_latest_run_dir(ctx, false, &scope)?,
+        "latest-failure" => resolve_latest_run_dir(ctx, true, &scope)?,
         _ => resolve_report_dir(ctx, &args.run)?,
     };
     let report: RunReport = androidforge_core::util::read_json(&dir.join("report.json"))?;
@@ -1579,6 +1997,14 @@ async fn explain(ctx: &CliContext, args: &ReportExplainArgs) -> Result<CommandSu
             "run_dir".to_string(),
             serde_json::json!(dir.to_string_lossy()),
         );
+        // Expose the filter that was actually applied. Explicit run ids bypass
+        // latest-selection, so their reported scope is empty.
+        let applied_scope = if using_latest {
+            scope
+        } else {
+            ReportScope::default()
+        };
+        object.insert("scope".to_string(), serde_json::to_value(applied_scope)?);
         if let Some(recurrence) = &recurrence {
             object.insert("recurrence".to_string(), serde_json::to_value(recurrence)?);
         }
@@ -1762,6 +2188,227 @@ mod tests {
                 )
             });
         }
+    }
+
+    fn test_context(project: &std::path::Path) -> CliContext {
+        let cli = crate::cli::Cli::try_parse_from([
+            "androidforge",
+            "--project",
+            project.to_str().unwrap(),
+            "report",
+            "explain",
+            "latest",
+        ])
+        .expect("parse test CLI");
+        CliContext::new(&cli).expect("build test context")
+    }
+
+    fn write_scoped_report(
+        project: &std::path::Path,
+        run_id: &str,
+        session: Option<&str>,
+        serial: Option<&str>,
+        tags: &[&str],
+        status: RunStatus,
+        started_at: &str,
+    ) {
+        let dir = project.join(".artifacts").join("runs").join(run_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut report = RunReport::new(run_id, "test.run", "Example", project.to_string_lossy());
+        report.session_id = session.map(str::to_string);
+        report.device_serial = serial.map(str::to_string);
+        report.tags = tags.iter().map(|tag| tag.to_string()).collect();
+        report.status = status;
+        report.started_at = started_at.to_string();
+        report.ended_at = Some(started_at.to_string());
+        if status != RunStatus::Passed {
+            report.failure = Some(androidforge_core::run::FailureInfo {
+                code: ErrorCode::SelectorNotFound,
+                message: "no UI element matched".to_string(),
+                failed_operation: "ui.tap".to_string(),
+                recoverable: true,
+                suggestions: Vec::new(),
+                context: BTreeMap::new(),
+                artifacts: Vec::new(),
+            });
+        }
+        std::fs::write(
+            dir.join("report.json"),
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn selected(path: PathBuf) -> String {
+        path.file_name().unwrap().to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn latest_selection_honors_session_and_device_scope() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path();
+        write_scoped_report(
+            project,
+            "ses-a-fail",
+            Some("ses-a"),
+            Some("dev-1"),
+            &[],
+            RunStatus::Failed,
+            "2026-01-01T00:00:00Z",
+        );
+        write_scoped_report(
+            project,
+            "ses-a-pass",
+            Some("ses-a"),
+            Some("dev-1"),
+            &[],
+            RunStatus::Passed,
+            "2026-01-02T00:00:00Z",
+        );
+        write_scoped_report(
+            project,
+            "ses-b-fail",
+            Some("ses-b"),
+            Some("dev-2"),
+            &[],
+            RunStatus::Failed,
+            "2026-01-03T00:00:00Z",
+        );
+        write_scoped_report(
+            project,
+            "ses-b-pass",
+            Some("ses-b"),
+            Some("dev-2"),
+            &[],
+            RunStatus::Passed,
+            "2026-01-04T00:00:00Z",
+        );
+
+        let mut ctx = test_context(project);
+        let unfiltered = ReportScope::default();
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, false, &unfiltered).unwrap()),
+            "ses-b-pass"
+        );
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, true, &unfiltered).unwrap()),
+            "ses-b-fail"
+        );
+
+        ctx.session_arg = Some("ses-a".to_string());
+        let scope = resolve_report_scope(&ctx, None, None).unwrap();
+        assert_eq!(scope.session_id.as_deref(), Some("ses-a"));
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, false, &scope).unwrap()),
+            "ses-a-pass"
+        );
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, true, &scope).unwrap()),
+            "ses-a-fail"
+        );
+
+        ctx.session_arg = None;
+        ctx.serial_arg = Some("dev-1".to_string());
+        let scope = resolve_report_scope(&ctx, None, None).unwrap();
+        assert_eq!(scope.device_serial.as_deref(), Some("dev-1"));
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, false, &scope).unwrap()),
+            "ses-a-pass"
+        );
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, true, &scope).unwrap()),
+            "ses-a-fail"
+        );
+
+        ctx.session_arg = Some("ses-b".to_string());
+        ctx.serial_arg = Some("dev-2".to_string());
+        let scope = resolve_report_scope(&ctx, None, None).unwrap();
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, false, &scope).unwrap()),
+            "ses-b-pass"
+        );
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, true, &scope).unwrap()),
+            "ses-b-fail"
+        );
+
+        // A combination that matches nothing must fail instead of falling back
+        // to another session's or device's run.
+        ctx.session_arg = Some("ses-a".to_string());
+        ctx.serial_arg = Some("dev-2".to_string());
+        let scope = resolve_report_scope(&ctx, None, None).unwrap();
+        let error = resolve_latest_run_dir(&ctx, false, &scope).unwrap_err();
+        assert!(
+            error
+                .message()
+                .to_string()
+                .contains("scope: session ses-a, device dev-2"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn latest_selection_honors_tag_scope() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path();
+        write_scoped_report(
+            project,
+            "tagged-pass",
+            Some("ses-a"),
+            None,
+            &["release", "smoke"],
+            RunStatus::Passed,
+            "2026-01-05T00:00:00Z",
+        );
+        write_scoped_report(
+            project,
+            "tagged-fail",
+            Some("ses-a"),
+            None,
+            &["release"],
+            RunStatus::Failed,
+            "2026-01-06T00:00:00Z",
+        );
+        write_scoped_report(
+            project,
+            "untagged-pass",
+            Some("ses-a"),
+            None,
+            &[],
+            RunStatus::Passed,
+            "2026-01-07T00:00:00Z",
+        );
+
+        let mut ctx = test_context(project);
+        ctx.session_arg = Some("ses-a".to_string());
+
+        let tags = vec!["smoke".to_string()];
+        let scope = resolve_report_scope(&ctx, Some(&tags), None).unwrap();
+        assert_eq!(scope.tags, tags);
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, false, &scope).unwrap()),
+            "tagged-pass"
+        );
+        // The newest failure does not carry the smoke tag.
+        assert!(resolve_latest_run_dir(&ctx, true, &scope).is_err());
+
+        let tags = vec!["release".to_string()];
+        let scope = resolve_report_scope(&ctx, Some(&tags), None).unwrap();
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, true, &scope).unwrap()),
+            "tagged-fail"
+        );
+
+        // Multiple tags use AND semantics and must all be present.
+        let tags = vec!["release".to_string(), "smoke".to_string()];
+        let scope = resolve_report_scope(&ctx, Some(&tags), None).unwrap();
+        assert_eq!(
+            selected(resolve_latest_run_dir(&ctx, false, &scope).unwrap()),
+            "tagged-pass"
+        );
+        let tags = vec!["smoke".to_string(), "missing".to_string()];
+        let scope = resolve_report_scope(&ctx, Some(&tags), None).unwrap();
+        assert!(resolve_latest_run_dir(&ctx, false, &scope).is_err());
     }
 
     #[test]

@@ -50,6 +50,13 @@
     "context": { "type": "array", "items": { "$ref": "#/$defs/node" } },
     "context_total": { "type": "integer", "minimum": 0 },
     "context_truncated": { "type": "boolean" },
+    "semantics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" },
+      "description": "Bounded semantic view from the full hierarchy; present only with --semantics."
+    },
+    "semantics_total": { "type": "integer", "minimum": 0 },
+    "semantics_truncated": { "type": "boolean" },
     "scrollable": { "type": "array", "items": { "$ref": "#/$defs/node" } },
     "scrollable_truncated": { "type": "boolean" },
     "visible_text": { "type": "array", "items": { "type": "string" } },
@@ -87,6 +94,7 @@
         "content_desc": { "type": "string" },
         "hint": { "type": "string" },
         "resource_id": { "type": "string" },
+        "test_tag": { "type": "string", "description": "Compose test tag exposed as a resource id without :id/." },
         "class": { "type": "string" },
         "package": { "type": "string" },
         "bounds": {

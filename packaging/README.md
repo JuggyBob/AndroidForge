@@ -26,7 +26,12 @@ searches `PATH`, `%LOCALAPPDATA%\Programs\Inno Setup 6|7`, and the usual Program
 - Start Menu shortcuts, optional desktop shortcut and uninstaller.
 - User configuration (`%APPDATA%\AndroidForge`, `%LOCALAPPDATA%\AndroidForge`) and project artifacts are
   outside `{app}` and are preserved by upgrade and uninstall.
-- Version metadata is `1.0.0` for this release.
+- Version metadata is `1.1.0` for this release.
+
+> **Pending after packaging:** the Scoop manifest in `packaging/scoop/androidforge.json` still pins the
+> last published (v1.0.0) ZIP hash. Replace it from `dist\SHA256SUMS.txt` when the v1.1.0 package is built.
+
+<!-- replace after packaging: Scoop SHA-256 hash is a v1.0.0 placeholder -->
 
 ## Signing
 

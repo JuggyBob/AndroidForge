@@ -40,12 +40,14 @@
     },
     "cold_start_requested": { "type": "boolean" },
     "settle_ms": { "type": "integer", "minimum": 0 },
+    "screen_on": { "type": ["boolean", "null"] },
     "foreground": { "type": ["boolean", "null"] },
     "activity": { "type": ["string", "null"] },
     "startup": { "$ref": "#/$defs/startup" },
     "jank": { "$ref": "#/$defs/jank" },
     "memory": { "$ref": "#/$defs/memory" },
     "cpu": { "$ref": "#/$defs/cpu" },
+    "sample_quality": { "$ref": "#/$defs/sample_quality" },
     "commands": {
       "type": "array",
       "items": { "$ref": "#/$defs/command" }
@@ -83,7 +85,13 @@
         "percentile_95_ms": { "type": ["number", "null"] },
         "percentile_99_ms": { "type": ["number", "null"] },
         "missed_vsync": { "type": ["integer", "null"], "minimum": 0 },
-        "unknown_reason": { "type": ["string", "null"] }
+        "unknown_reason": { "type": ["string", "null"] },
+        "sample_status": { "type": "string" },
+        "comparable": { "type": "boolean" },
+        "comparison_reason": { "type": ["string", "null"] },
+        "window_start_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "window_end_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "frame_deadline_ms": { "type": ["number", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -106,7 +114,28 @@
         "total_percent": { "type": ["number", "null"] },
         "user_percent": { "type": ["number", "null"] },
         "kernel_percent": { "type": ["number", "null"] },
-        "unknown_reason": { "type": ["string", "null"] }
+        "unknown_reason": { "type": ["string", "null"] },
+        "status": { "type": "string" },
+        "reason": { "type": ["string", "null"] },
+        "window_start": { "type": ["integer", "null"], "minimum": 0 },
+        "window_end": { "type": ["integer", "null"], "minimum": 0 },
+        "sample_pid": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "sample_quality": {
+      "type": "object",
+      "properties": {
+        "jank": { "$ref": "#/$defs/metric_quality" },
+        "cpu": { "$ref": "#/$defs/metric_quality" }
+      },
+      "additionalProperties": false
+    },
+    "metric_quality": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "reason": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },

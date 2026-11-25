@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://androidforge.local/schema/fixture.schema.json",
   "title": "AndroidForge fixture pack",
+  "description": "Declarative app state (prefs, history, installed_version) is debug-only: it requires a debuggable application and explicit data-mutation consent at the execution boundary.",
   "type": "object",
   "required": ["version", "name", "steps"],
   "properties": {
@@ -13,6 +14,57 @@
     "vars": {
       "type": "object",
       "additionalProperties": { "type": "string" }
+    },
+    "state": {
+      "description": "Declarative app-private state, applied/reset by apply_state and reset_state actions. Debug-only.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prefs": {
+          "description": "Simple UTF-8 key/value file pushed through run-as. Format: one 'key=value' per line, '#' comments, keys [A-Za-z0-9_.-]+, no control characters in values, sorted by key.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["values"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1, "maxLength": 240 },
+            "values": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "history": {
+          "description": "Opaque history seeding. The argv command writes a bounded payload; AndroidForge never parses DataStore protobuf.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "command"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "file": { "type": "string", "minLength": 1, "maxLength": 240 },
+            "command": {
+              "description": "Host argv array (program plus arguments); a shell string is not accepted.",
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "installed_version": {
+          "description": "Assert the installed version from the package manager or stamp a version file into app-private state. Both modes require a debuggable app.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "anyOf": [{ "required": ["version_name"] }, { "required": ["version_code"] }],
+          "properties": {
+            "mode": { "enum": ["assert", "set"] },
+            "version_name": { "type": "string", "minLength": 1 },
+            "version_code": { "type": "integer" },
+            "path": { "type": "string", "minLength": 1, "maxLength": 240 }
+          }
+        }
+      }
     },
     "steps": {
       "type": "array",
@@ -30,6 +82,7 @@
           "action": {
             "type": "object",
             "required": ["type"],
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "enum": [
@@ -37,7 +90,8 @@
                   "launch", "force_stop", "grant", "revoke", "app_op",
                   "push", "pull", "app_file_push", "app_file_pull",
                   "settings", "wait", "assert", "script",
-                  "backup_app_data", "restore_app_data"
+                  "backup_app_data", "restore_app_data",
+                  "apply_state", "reset_state"
                 ]
               },
               "args": { "type": "array", "items": { "type": "string" } },

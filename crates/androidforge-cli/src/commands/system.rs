@@ -9,18 +9,48 @@ use chrono::DateTime;
 
 use crate::cli::{
     AlarmsCommand, AppOpsCommand, BatteryCommand, DozeCommand, JobWaitArgs, JobsCommand,
-    NetworkCommand, NetworkProfileCommand, NetworkProxyCommand, NetworkReverseCommand,
-    NotificationWaitArgs, NotificationsCommand, PermissionsCommand, StandbyCommand, TimeCommand,
-    TimeSetArgs,
+    NetworkCommand, NetworkMockCommand, NetworkProfileCommand, NetworkProxyCommand,
+    NetworkReverseCommand, NotificationWaitArgs, NotificationsCommand, PermissionsCommand,
+    StandbyCommand, TimeCommand, TimeSetArgs,
 };
 use crate::commands::common::success;
+use crate::commands::devices::{
+    DeviceScenario, NetworkScenario, ScenarioConsent, ScenarioOutcome, ScenarioRequest,
+    ensure_scenario_consent, plan_scenario, scenario_dry_run,
+};
 use crate::commands::mock;
-use crate::context::CliContext;
+use crate::context::{CliContext, Risk};
 
 async fn target(ctx: &CliContext) -> Result<(Option<Session>, androidforge_core::model::Device)> {
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
     Ok((session, device))
+}
+
+/// Dry-run previews never require a physical-device capability flag and never
+/// dispatch a shell command. Call this before the risk gate in mutating paths.
+fn dry_run(
+    ctx: &CliContext,
+    command: &str,
+    operation: &str,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+) -> Result<CommandSuccess> {
+    debug_assert!(ctx.dry_run, "dry-run helper called outside a dry run");
+    Ok(success(
+        command,
+        serde_json::json!({
+            "dry_run": true,
+            "operation": operation,
+            "serial": device.serial,
+        }),
+        format!(
+            "Dry run: {operation} on {} was not dispatched.\n",
+            device.serial
+        ),
+    )
+    .with_optional_session(session.map(|session| session.id.clone()))
+    .with_device(device.serial.clone()))
 }
 
 pub async fn notifications(
@@ -82,7 +112,16 @@ pub async fn notifications(
             .with_device(device.serial.clone()))
         }
         NotificationsCommand::Tap(args) => {
-            ctx.ensure_physical_mutation_allowed(&device, "tapping a notification")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "notifications.tap",
+                    "tapping a notification",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Input, "tapping a notification")?;
             let selector = args.clone().into_selector();
             let ui = ctx.ui_manager()?;
             let result = notifications.tap(&device.serial, &selector, &ui).await?;
@@ -98,7 +137,16 @@ pub async fn notifications(
             .with_device(device.serial.clone()))
         }
         NotificationsCommand::Clear(args) => {
-            ctx.ensure_physical_mutation_allowed(&device, "clearing notifications")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "notifications.clear",
+                    "clearing notifications",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "clearing notifications")?;
             let selector = args.clone().into_selector();
             let cleared = notifications.clear(&device.serial, &selector).await?;
             Ok(success(
@@ -179,7 +227,16 @@ pub async fn jobs(ctx: &CliContext, command: &JobsCommand) -> Result<CommandSucc
             .with_device(device.serial.clone()))
         }
         JobsCommand::Run { package, job_id } => {
-            ctx.ensure_physical_mutation_allowed(&device, "triggering a JobScheduler job")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "jobs.run",
+                    "triggering a JobScheduler job",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::AppControl, "triggering a JobScheduler job")?;
             let result = jobs.run(&device.serial, package, job_id).await?;
             Ok(success(
                 "jobs.run",
@@ -193,7 +250,16 @@ pub async fn jobs(ctx: &CliContext, command: &JobsCommand) -> Result<CommandSucc
             .with_device(device.serial.clone()))
         }
         JobsCommand::Cancel { package, job_id } => {
-            ctx.ensure_physical_mutation_allowed(&device, "cancelling a JobScheduler job")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "jobs.cancel",
+                    "cancelling a JobScheduler job",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::AppControl, "cancelling a JobScheduler job")?;
             let result = jobs.cancel(&device.serial, package, job_id).await?;
             Ok(success(
                 "jobs.cancel",
@@ -323,13 +389,31 @@ pub async fn permissions(ctx: &CliContext, command: &PermissionsCommand) -> Resu
                 .await?
         }
         "grant" => {
-            ctx.ensure_physical_mutation_allowed(&device, "granting a permission")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "permissions.grant",
+                    "granting a permission",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "granting a permission")?;
             permissions
                 .grant(&device.serial, &package, &permission)
                 .await?
         }
         _ => {
-            ctx.ensure_physical_mutation_allowed(&device, "revoking a permission")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "permissions.revoke",
+                    "revoking a permission",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "revoking a permission")?;
             permissions
                 .revoke(&device.serial, &package, &permission)
                 .await?
@@ -376,7 +460,7 @@ pub async fn appops(ctx: &CliContext, command: &AppOpsCommand) -> Result<Command
                 )
                 .with_device(device.serial.clone()));
             }
-            ctx.ensure_physical_mutation_allowed(&device, "changing an AppOps mode")?;
+            ctx.ensure_risk_allowed(&device, Risk::Data, "changing an AppOps mode")?;
             let state = appops
                 .set(&device.serial, &package, operation, mode)
                 .await?;
@@ -390,7 +474,16 @@ pub async fn appops(ctx: &CliContext, command: &AppOpsCommand) -> Result<Command
         }
         AppOpsCommand::Reset { package, operation } => {
             let package = ctx.package_or_config(package.as_deref())?;
-            ctx.ensure_physical_mutation_allowed(&device, "resetting AppOps")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "appops.reset",
+                    "resetting AppOps",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "resetting AppOps")?;
             let state = appops
                 .reset(&device.serial, &package, operation.as_deref())
                 .await?;
@@ -420,11 +513,20 @@ pub async fn doze(ctx: &CliContext, command: &DozeCommand) -> Result<CommandSucc
                 .with_optional_session(session.map(|session| session.id.clone()))
                 .with_device(device.serial.clone()));
             }
-            ctx.ensure_physical_mutation_allowed(&device, "forcing Doze")?;
+            ctx.ensure_risk_allowed(&device, Risk::Data, "forcing Doze")?;
             manager.force_doze(&device.serial, ctx.yes).await?
         }
         DozeCommand::Unforce => {
-            ctx.ensure_physical_mutation_allowed(&device, "leaving Doze")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "doze.unforce",
+                    "leaving Doze",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "leaving Doze")?;
             manager.unforce_doze(&device.serial).await?
         }
     };
@@ -457,7 +559,16 @@ pub async fn standby(ctx: &CliContext, command: &StandbyCommand) -> Result<Comma
         }
         StandbyCommand::Set { package, bucket } => {
             let package = ctx.package_or_config(package.as_deref())?;
-            ctx.ensure_physical_mutation_allowed(&device, "changing a standby bucket")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "standby.set",
+                    "changing a standby bucket",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "changing a standby bucket")?;
             let state = manager
                 .set_standby(&device.serial, &package, bucket)
                 .await?;
@@ -478,11 +589,29 @@ pub async fn battery(ctx: &CliContext, command: &BatteryCommand) -> Result<Comma
     let state = match command {
         BatteryCommand::Status => manager.battery(&device.serial).await?,
         BatteryCommand::Unplug => {
-            ctx.ensure_physical_mutation_allowed(&device, "changing battery state")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "battery.unplug",
+                    "changing battery state",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "changing battery state")?;
             manager.battery_unplug(&device.serial).await?
         }
         BatteryCommand::Reset => {
-            ctx.ensure_physical_mutation_allowed(&device, "resetting battery state")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "battery.reset",
+                    "resetting battery state",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Data, "resetting battery state")?;
             manager.battery_reset(&device.serial).await?
         }
     };
@@ -508,6 +637,33 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
         return network_profile_list();
     }
     if let NetworkCommand::Mock { command } = command {
+        // `network mock scenarios` is a read-only catalog: no session, device
+        // or host network change, so it bypasses the device gate below.
+        // A named scenario is host-only; reject `--reverse` before resolving a
+        // device so an invalid combination never touches ADB.
+        if let NetworkMockCommand::Serve(args) = command
+            && args.scenario.is_some()
+            && args.reverse
+        {
+            return Err(androidforge_core::error::ForgeError::invalid_argument(
+                "network mock scenarios are host-only; --reverse is not supported",
+            )
+            .with_suggestion("Use raw `network mock serve` if you need an adb reverse mapping."));
+        }
+        // `--reverse` mutates the device through `adb reverse`; the mock
+        // server itself stays local. Gate the device half at this choke point.
+        if let NetworkMockCommand::Serve(args) = command
+            && args.reverse
+            && !ctx.dry_run
+        {
+            let session = ctx.load_session(true)?;
+            let device = ctx.resolve_device(session.as_ref()).await?;
+            ctx.ensure_risk_allowed(
+                &device,
+                Risk::Network,
+                "mapping a mock server port onto a device",
+            )?;
+        }
         return mock::network_mock(ctx, command).await;
     }
     let (mut session, device) = target(ctx).await?;
@@ -531,19 +687,46 @@ pub async fn network(ctx: &CliContext, command: &NetworkCommand) -> Result<Comma
         NetworkCommand::Status => manager.network(&device.serial).await?,
         NetworkCommand::Airplane { enable, disable } => {
             let enabled = bool_switch(*enable, *disable, "airplane")?;
-            ctx.ensure_physical_mutation_allowed(&device, "changing airplane mode")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "network.airplane",
+                    "changing airplane mode",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Network, "changing airplane mode")?;
             manager
                 .set_airplane(&device.serial, enabled, ctx.yes)
                 .await?
         }
         NetworkCommand::Wifi { enable, disable } => {
             let enabled = bool_switch(*enable, *disable, "wifi")?;
-            ctx.ensure_physical_mutation_allowed(&device, "changing Wi-Fi state")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "network.wifi",
+                    "changing Wi-Fi state",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Network, "changing Wi-Fi state")?;
             manager.set_wifi(&device.serial, enabled).await?
         }
         NetworkCommand::Data { enable, disable } => {
             let enabled = bool_switch(*enable, *disable, "data")?;
-            ctx.ensure_physical_mutation_allowed(&device, "changing mobile data")?;
+            if ctx.dry_run {
+                return dry_run(
+                    ctx,
+                    "network.data",
+                    "changing mobile data",
+                    session.as_ref(),
+                    &device,
+                );
+            }
+            ctx.ensure_risk_allowed(&device, Risk::Network, "changing mobile data")?;
             manager.set_mobile_data(&device.serial, enabled).await?
         }
         _ => unreachable!("new network commands return early"),
@@ -630,6 +813,7 @@ async fn network_reverse(
                 .with_optional_session(session.as_ref().map(|session| session.id.clone()))
                 .with_device(device.serial.clone()));
             }
+            ctx.ensure_risk_allowed(device, Risk::Network, "adding an ADB reverse mapping")?;
             adb.reverse_add(&device.serial, &remote, &local).await?;
             if let Some(session) = session.as_mut() {
                 session
@@ -659,6 +843,7 @@ async fn network_reverse(
                 .with_optional_session(session.as_ref().map(|session| session.id.clone()))
                 .with_device(device.serial.clone()));
             }
+            ctx.ensure_risk_allowed(device, Risk::Network, "removing an ADB reverse mapping")?;
             adb.reverse_remove(&device.serial, &remote).await?;
             if let Some(session) = session.as_mut() {
                 session
@@ -684,6 +869,7 @@ async fn network_reverse(
                 .with_optional_session(session.as_ref().map(|session| session.id.clone()))
                 .with_device(device.serial.clone()));
             }
+            ctx.ensure_risk_allowed(device, Risk::Network, "clearing ADB reverse mappings")?;
             adb.reverse_remove_all(&device.serial).await?;
             if let Some(session) = session.as_mut() {
                 let keys = session
@@ -752,7 +938,7 @@ async fn network_proxy(
                 )
                 .with_device(device.serial.clone()));
             }
-            ctx.ensure_physical_mutation_allowed(device, "changing the device proxy")?;
+            ctx.ensure_risk_allowed(device, Risk::Network, "changing the device proxy")?;
             let previous = manager.proxy(&device.serial).await?;
             if let Some(session) = ctx.load_session(true)? {
                 let mut session = session;
@@ -814,7 +1000,7 @@ async fn network_profile(
                 )
                 .with_device(device.serial.clone()));
             }
-            ctx.ensure_physical_mutation_allowed(device, "applying a network profile")?;
+            ctx.ensure_risk_allowed(device, Risk::Network, "applying a network profile")?;
             let Some(session) = session.as_mut() else {
                 return Err(ForgeError::new(
                     ErrorCode::SessionNotFound,
@@ -846,6 +1032,49 @@ fn network_profile_list() -> Result<CommandSuccess> {
             .map(|(name, description)| format!("{name}: {description}\n"))
             .collect::<String>(),
     ))
+}
+
+#[allow(dead_code)] // Public core surface for future CLI/MCP wiring.
+/// Core network scenario control. Maps a canonical scenario mode onto the
+/// existing profile catalog and snapshot recorder, so it shares the single
+/// network settings engine with `network profile apply`. Consent and dry-run
+/// are supplied explicitly by the caller.
+pub async fn apply_network_scenario(
+    ctx: &CliContext,
+    session: &mut Session,
+    device: &androidforge_core::model::Device,
+    mode: NetworkScenario,
+    consent: ScenarioConsent,
+    dry_run: bool,
+) -> Result<ScenarioOutcome> {
+    let request = ScenarioRequest {
+        serial: device.serial.clone(),
+        scenario: DeviceScenario::Network(mode),
+        consent,
+        dry_run,
+    };
+    if dry_run {
+        return Ok(scenario_dry_run(&request));
+    }
+    ensure_scenario_consent(device, &request.scenario, consent)?;
+    let manager = DeviceStateManager::new(ctx.adb()?);
+    // Same recorder used by `network profile apply`: the previous state is
+    // captured before the profile changes it.
+    record_network_state(ctx, session, device, &manager).await?;
+    apply_network_profile(&manager, &device.serial, mode.profile()).await?;
+    session.add_note(
+        &ctx.paths,
+        format!(
+            "network scenario {} applied on {}",
+            mode.as_str(),
+            device.serial
+        ),
+    )?;
+    Ok(ScenarioOutcome {
+        plan: plan_scenario(&request),
+        applied: true,
+        warnings: Vec::new(),
+    })
 }
 
 async fn apply_network_profile(
@@ -942,7 +1171,7 @@ async fn network_restore(
         .with_session(session.id.clone())
         .with_device(device.serial.clone()));
     }
-    ctx.ensure_physical_mutation_allowed(device, "restoring network state")?;
+    ctx.ensure_risk_allowed(device, Risk::Network, "restoring network state")?;
     let mut warnings = Vec::new();
     for (key, setter) in [
         ("network:airplane", "airplane"),
@@ -1074,7 +1303,7 @@ async fn time_set(ctx: &CliContext, args: &TimeSetArgs) -> Result<CommandSuccess
         .with_session(session.id)
         .with_device(device.serial.clone()));
     }
-    ctx.ensure_physical_mutation_allowed(&device, "changing device time")?;
+    ctx.ensure_risk_allowed(&device, Risk::Data, "changing device time")?;
     let before = manager.time(&device.serial).await?;
     session.record_device_setting(
         &ctx.paths,
@@ -1107,7 +1336,16 @@ async fn time_set(ctx: &CliContext, args: &TimeSetArgs) -> Result<CommandSuccess
 async fn time_restore(ctx: &CliContext) -> Result<CommandSuccess> {
     let mut session = ctx.require_session()?;
     let device = ctx.resolve_device(Some(&session)).await?;
-    ctx.ensure_physical_mutation_allowed(&device, "restoring device time")?;
+    if ctx.dry_run {
+        return dry_run(
+            ctx,
+            "time.restore",
+            "restoring device time",
+            Some(&session),
+            &device,
+        );
+    }
+    ctx.ensure_risk_allowed(&device, Risk::Data, "restoring device time")?;
     let manager = DeviceStateManager::new(ctx.adb()?);
     let saved = session.device_settings.clone();
     let epoch = saved

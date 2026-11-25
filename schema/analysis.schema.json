@@ -44,6 +44,69 @@
       },
       "additionalProperties": false
     },
+    "metric_comparison": {
+      "type": "object",
+      "required": ["baseline", "current"],
+      "properties": {
+        "baseline": { "type": ["number", "null"] },
+        "current": { "type": ["number", "null"] },
+        "delta": { "type": ["number", "null"] },
+        "source": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "performance_comparison": {
+      "type": "object",
+      "properties": {
+        "startup_ms": { "$ref": "#/$defs/metric_comparison" },
+        "jank_percent": { "$ref": "#/$defs/metric_comparison" },
+        "janky_frames": { "$ref": "#/$defs/metric_comparison" },
+        "total_frames": { "$ref": "#/$defs/metric_comparison" },
+        "max_frame_ms": { "$ref": "#/$defs/metric_comparison" },
+        "apk_size_bytes": { "$ref": "#/$defs/metric_comparison" },
+        "tests_total": { "$ref": "#/$defs/metric_comparison" },
+        "tests_failed": { "$ref": "#/$defs/metric_comparison" },
+        "tests_skipped": { "$ref": "#/$defs/metric_comparison" },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/metric_comparison" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "budget_violation": {
+      "type": "object",
+      "required": ["metric", "expected", "passed", "reason"],
+      "properties": {
+        "metric": { "type": "string" },
+        "expected": { "type": "number" },
+        "actual": { "type": ["number", "null"] },
+        "delta": { "type": ["number", "null"] },
+        "passed": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "basis": { "enum": ["absolute", "delta"] }
+      },
+      "additionalProperties": false
+    },
+    "performance_budget": {
+      "type": "object",
+      "properties": {
+        "startup_ms": { "type": "number", "minimum": 0 },
+        "jank_percent": { "type": "number", "minimum": 0 },
+        "janky_frames": { "type": "number", "minimum": 0 },
+        "max_frame_ms": { "type": "number", "minimum": 0 },
+        "apk_size_bytes": { "type": "number", "minimum": 0 },
+        "failed_tests": { "type": "number", "minimum": 0 },
+        "startup_delta_ms": { "type": "number" },
+        "jank_percent_delta": { "type": "number" },
+        "max_frame_delta_ms": { "type": "number" },
+        "apk_size_delta_bytes": { "type": "number" },
+        "failed_tests_delta": { "type": "number" },
+        "metrics": { "type": "object", "additionalProperties": { "type": "number" } },
+        "metric_deltas": { "type": "object", "additionalProperties": { "type": "number" } }
+      },
+      "additionalProperties": false
+    },
     "comparison": {
       "type": "object",
       "required": [
@@ -73,7 +136,17 @@
         "baseline_status": { "type": "string" },
         "current_duration_ms": { "type": "integer", "minimum": 0 },
         "baseline_duration_ms": { "type": "integer", "minimum": 0 },
-        "duration_delta_ms": { "type": "integer" }
+        "duration_delta_ms": { "type": "integer" },
+        "performance": { "$ref": "#/$defs/performance_comparison" },
+        "budget": {
+          "anyOf": [
+            { "$ref": "#/$defs/performance_budget" },
+            { "type": "null" }
+          ]
+        },
+        "budget_checks": { "type": "array", "items": { "$ref": "#/$defs/budget_violation" } },
+        "budget_violations": { "type": "array", "items": { "$ref": "#/$defs/budget_violation" } },
+        "budget_passed": { "type": ["boolean", "null"] }
       },
       "additionalProperties": false
     },

@@ -10,9 +10,21 @@
     "tls": { "type": "boolean" },
     "requests": { "type": "integer", "minimum": 0 },
     "routes": { "type": "integer", "minimum": 0 },
-    "stopped_by": { "enum": ["signal", "duration", "max_requests"] },
+    "stopped_by": { "enum": ["signal", "duration", "max_requests", "offline"] },
     "log_path": { "type": "string" },
-    "reverse": { "type": "boolean" }
+    "reverse": { "type": "boolean" },
+    "scenario": {
+      "oneOf": [
+        { "type": "null" },
+        { "enum": ["newer-release", "offline", "bad-digest", "no-APK"] }
+      ]
+    },
+    "scenario_mode": {
+      "oneOf": [
+        { "type": "null" },
+        { "enum": ["serve", "offline"] }
+      ]
+    }
   },
   "additionalProperties": true
 }

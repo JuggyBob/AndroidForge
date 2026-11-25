@@ -205,6 +205,14 @@ pub struct RunReport {
     pub device_serial: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<Device>,
+    /// Free-form labels attached to the run. Reports written before 1.1.0 omit
+    /// this field; it defaults to an empty list so they remain readable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Free-form string metadata attached to the run. Optional for the same
+    /// backward-compatibility reason as `tags`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub meta: BTreeMap<String, String>,
     #[serde(default)]
     pub build: BuildIdentity,
     pub status: RunStatus,
@@ -248,6 +256,8 @@ impl RunReport {
             session_id: None,
             device_serial: None,
             device: None,
+            tags: Vec::new(),
+            meta: BTreeMap::new(),
             build: BuildIdentity::default(),
             status: RunStatus::Running,
             exit_code: 0,
@@ -299,6 +309,11 @@ pub struct RunMetadata {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<Device>,
+    /// Mirrors the report so metadata-only consumers can read the same scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub meta: BTreeMap<String, String>,
     #[serde(default)]
     pub build: BuildIdentity,
     /// PID of the AndroidForge process that created the run. Optional because
@@ -324,6 +339,8 @@ pub struct RunOptions {
     pub command: String,
     pub session_id: Option<String>,
     pub device: Option<Device>,
+    pub tags: Vec<String>,
+    pub meta: BTreeMap<String, String>,
     pub build: BuildIdentity,
     pub tool_versions: BTreeMap<String, String>,
 }
@@ -344,6 +361,8 @@ impl RunOptions {
             command: command.into(),
             session_id: None,
             device: None,
+            tags: Vec::new(),
+            meta: BTreeMap::new(),
             build: BuildIdentity::default(),
             tool_versions: BTreeMap::new(),
         }
@@ -378,6 +397,8 @@ impl RunContext {
         report.session_id = options.session_id.clone();
         report.device_serial = options.device.as_ref().map(|device| device.serial.clone());
         report.device = options.device.clone();
+        report.tags = options.tags.clone();
+        report.meta = options.meta.clone();
         report.build = options.build.clone();
         report.invocation = Some(RunInvocation {
             argv: std::env::args_os()
@@ -408,6 +429,8 @@ impl RunContext {
                 .map(|path| path.to_string_lossy().into_owned()),
             session_id: options.session_id,
             device: options.device,
+            tags: options.tags,
+            meta: options.meta,
             build: options.build,
             creator_pid: Some(std::process::id()),
             creator_host: std::env::var("COMPUTERNAME").ok(),
@@ -481,6 +504,8 @@ impl RunContext {
                 project_config: None,
                 session_id: report.session_id.clone(),
                 device: report.device.clone(),
+                tags: report.tags.clone(),
+                meta: report.meta.clone(),
                 build: report.build.clone(),
                 creator_pid: None,
                 creator_host: None,
@@ -1269,6 +1294,43 @@ mod tests {
         assert_eq!(report.status, RunStatus::Running);
         assert_eq!(report.resume_count, 1);
         assert_eq!(report.failure_history.len(), 1);
+    }
+
+    #[test]
+    fn tags_and_meta_round_trip_and_legacy_reports_default_to_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut options = RunOptions::new(
+            temp.path().join(".artifacts"),
+            temp.path(),
+            "Example",
+            "test.run",
+        );
+        options.tags = vec!["release".to_string(), "smoke".to_string()];
+        options
+            .meta
+            .insert("owner".to_string(), "agent".to_string());
+        let context = RunContext::create(options, Redactor::default()).unwrap();
+
+        let report: RunReport = read_json(&context.report_path()).unwrap();
+        assert_eq!(report.tags, vec!["release", "smoke"]);
+        assert_eq!(report.meta.get("owner").map(String::as_str), Some("agent"));
+        let metadata: RunMetadata = read_json(&context.metadata_path()).unwrap();
+        assert_eq!(metadata.tags, report.tags);
+        assert_eq!(metadata.meta, report.meta);
+
+        // Reports written by 1.0.0 do not carry either field. They must still
+        // deserialize, and reserializing them must not reintroduce the fields.
+        let bytes = std::fs::read(context.report_path()).unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("tags");
+        object.remove("meta");
+        let legacy: RunReport = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.tags.is_empty());
+        assert!(legacy.meta.is_empty());
+        let value = serde_json::to_value(&legacy).unwrap();
+        assert!(value.get("tags").is_none());
+        assert!(value.get("meta").is_none());
     }
 
     #[test]

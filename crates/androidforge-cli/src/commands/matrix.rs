@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use crate::cli::{AgentMatrixArgs, Cli, SessionCommand, SessionEnsureArgs, SessionReleaseArgs};
 use crate::commands::common::success;
+use crate::commands::devices::{DeviceTargetResolution, device_tag_root, expand_device_targets};
 use crate::commands::{apk, session};
 use crate::context::CliContext;
 
@@ -126,6 +127,9 @@ struct MatrixReport {
     target_results: Vec<MatrixTargetResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Host-only tag expansion that produced the concrete serial targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_resolution: Option<DeviceTargetResolution>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,12 +146,13 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             "--parallel must be between 1 and 32",
         ));
     }
-    if args.avd.is_empty() && args.serial.is_empty() {
+    if args.avd.is_empty() && args.serial.is_empty() && args.device.is_empty() {
         return Err(ForgeError::new(
             ErrorCode::MatrixTargetInvalid,
-            "agent matrix requires at least one --avd or --serial target",
+            "agent matrix requires at least one --avd, --serial or --device target",
         )
-        .with_suggestion("Pass --avd <AVD> twice for two independent emulators."));
+        .with_suggestion("Pass --avd <AVD> twice for two independent emulators.")
+        .with_suggestion("Use --device tag:<name> to expand a host-tagged device group."));
     }
     if args.apk.is_none() && args.variant.is_none() && args.flow.is_none() && args.fixture.is_none()
     {
@@ -161,10 +166,26 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
     for avd in &args.avd {
         targets.push(MatrixTargetSpec::Avd { name: avd.clone() });
     }
+    let explicit_serials = args
+        .serial
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
     for serial in &args.serial {
         targets.push(MatrixTargetSpec::Serial {
             serial: serial.clone(),
         });
+    }
+    // Host-only tags expand to concrete serials before any planning or ADB
+    // call. A tag that overlaps an explicit --serial is added once, in a
+    // deterministic (sorted) order, so duplicate targets never collide.
+    let device_resolution = expand_device_targets(&device_tag_root(&ctx.paths), &args.device)?;
+    for serial in &device_resolution.serials {
+        if !explicit_serials.contains(serial) {
+            targets.push(MatrixTargetSpec::Serial {
+                serial: serial.clone(),
+            });
+        }
     }
     let mut seen = std::collections::BTreeSet::new();
     for target in &targets {
@@ -242,6 +263,7 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             "fixture": args.fixture,
             "build": build,
             "owner": owner,
+            "device_resolution": device_resolution,
             "parallel": args.parallel,
             "fail_fast": args.fail_fast,
             "timeout_seconds": child_timeout.as_secs(),
@@ -290,6 +312,7 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
             &started_at,
             started,
             warnings,
+            device_resolution,
         )
         .await;
     }
@@ -622,6 +645,7 @@ pub async fn matrix(cli: &Cli, args: &AgentMatrixArgs) -> Result<CommandSuccess>
         parallel: 1,
         target_results,
         warnings: warnings.clone(),
+        device_resolution: Some(device_resolution),
     };
     let report_path = matrix_dir.join("matrix.json");
     write_json_atomic(&report_path, &report)?;
@@ -669,6 +693,7 @@ async fn parallel_matrix(
     started_at: &str,
     started: Instant,
     mut warnings: Vec<String>,
+    device_resolution: DeviceTargetResolution,
 ) -> Result<CommandSuccess> {
     ensure_dir(matrix_dir)?;
     warnings.push(
@@ -761,6 +786,7 @@ async fn parallel_matrix(
         parallel: args.parallel,
         target_results,
         warnings: warnings.clone(),
+        device_resolution: Some(device_resolution),
     };
     let report_path = matrix_dir.join("matrix.json");
     write_json_atomic(&report_path, &report)?;

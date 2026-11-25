@@ -26,4 +26,5 @@ regex.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+jsonschema = { version = "0.61", default-features = false, features = ["resolve-file"] }
 tempfile.workspace = true

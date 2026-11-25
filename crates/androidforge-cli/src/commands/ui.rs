@@ -1,23 +1,45 @@
-use androidforge_core::error::{ForgeError, Result};
+use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::run::RunContext;
 use androidforge_core::session::Session;
 use androidforge_core::util::write_atomic;
 use androidforge_diagnostics::{FrameResult, capture_frame};
-use androidforge_ui::{Selector, UiHierarchy};
+use androidforge_ui::{BoundsRelation, Selector, UiHierarchy};
+use std::io::Cursor;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::cli::{
-    PostconditionArgs, SelectorArgs, UiAssertNoTextArgs, UiCommand, UiDismissOverlaysArgs,
-    UiDragArgs, UiDumpArgs, UiInspectArgs, UiKeyEventArgs, UiScrollArgs, UiScrollToArgs,
-    UiSelectorArgs, UiSettleArgs, UiSwipeArgs, UiTextArgs, UiWaitArgs,
+    PostconditionArgs, SelectorArgs, UiAssertBoundsArgs, UiAssertNoTextArgs, UiAuditA11yArgs,
+    UiBoundsArgs, UiCommand, UiDismissOverlaysArgs, UiDragArgs, UiDumpArgs, UiInspectArgs,
+    UiKeyEventArgs, UiScrollArgs, UiScrollToArgs, UiSelectorArgs, UiSettleArgs, UiSwipeArgs,
+    UiTextArgs, UiWaitArgs,
 };
 use crate::commands::common::{require_selector, success};
 use crate::commands::observation;
 use crate::commands::ocr;
 use crate::commands::receipt;
-use crate::context::CliContext;
+use crate::context::{CliContext, Risk};
+
+/// UI commands that inject input into the device. Read-only observations
+/// (`dump`, `inspect`, `observe`, `diff`, `find`, `wait`, `assert`, `bounds`,
+/// `assert-bounds`, `assert-no-text`, `settle`, `focused`) are deliberately absent.
+fn ui_input_operation(command: &UiCommand) -> Option<&'static str> {
+    match command {
+        UiCommand::Tap(_) => Some("tapping the screen"),
+        UiCommand::LongPress(_) => Some("long-pressing the screen"),
+        UiCommand::Drag(_) => Some("dragging on the screen"),
+        UiCommand::Text(_) => Some("typing text into a field"),
+        UiCommand::Clear(_) => Some("clearing text in a field"),
+        UiCommand::Scroll(_) | UiCommand::ScrollTo(_) => Some("scrolling the screen"),
+        UiCommand::Swipe(_) => Some("swiping the screen"),
+        UiCommand::Back(_) => Some("sending the Back key"),
+        UiCommand::Home => Some("sending the Home key"),
+        UiCommand::Keyevent(_) => Some("sending a key event"),
+        UiCommand::HideKeyboard => Some("hiding the soft keyboard"),
+        _ => None,
+    }
+}
 
 pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess> {
     if matches!(command, UiCommand::Observe(_) | UiCommand::Diff(_))
@@ -33,6 +55,22 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
     let session = ctx.load_session(true)?;
     let device = ctx.resolve_device(session.as_ref()).await?;
     let serial = device.serial.clone();
+    if let Some(operation) = ui_input_operation(command) {
+        if ctx.dry_run {
+            return Ok(success(
+                "ui.input",
+                serde_json::json!({
+                    "dry_run": true,
+                    "operation": operation,
+                    "serial": serial,
+                }),
+                format!("Dry run: {operation} on {serial} was not dispatched.\n"),
+            )
+            .with_optional_session(session_id(session.as_ref()))
+            .with_device(serial.clone()));
+        }
+        ctx.ensure_risk_allowed(&device, Risk::Input, operation)?;
+    }
     match command {
         UiCommand::Dump(args) => {
             execute_in_run!(
@@ -994,6 +1032,8 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             )
             .await
         }
+        UiCommand::Bounds(args) => bounds(ctx, session.as_ref(), &device, args).await,
+        UiCommand::AssertBounds(args) => assert_bounds(ctx, session.as_ref(), &device, args).await,
         UiCommand::AssertNoText(args) => assert_no_text(ctx, session.as_ref(), &device, args).await,
         UiCommand::Settle(args) => settle(ctx, session.as_ref(), &device, args).await,
         UiCommand::Scroll(args) => scroll(ctx, session.as_ref(), &device, args).await,
@@ -1112,7 +1152,150 @@ pub async fn ui(ctx: &CliContext, command: &UiCommand) -> Result<CommandSuccess>
             )
             .await
         }
+        UiCommand::Audit(args) => match &args.command {
+            crate::cli::UiAuditCommand::A11y(args) => {
+                audit_a11y(ctx, session.as_ref(), &device, args).await
+            }
+        },
     }
+}
+
+/// Read-only accessibility audit. The hierarchy is dumped exactly once; when
+/// `--contrast` is requested a single fresh screenshot is decoded and the
+/// sampled region findings are merged into the same bounded report.
+async fn audit_a11y(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiAuditA11yArgs,
+) -> Result<CommandSuccess> {
+    use androidforge_ui::a11y::{self, A11yOptions};
+    use androidforge_ui::color as ui_color;
+
+    let base = A11yOptions::default();
+    let options = A11yOptions {
+        check_content_descriptions: !args.no_content_descriptions,
+        check_touch_targets: !args.no_touch_targets,
+        check_duplicate_labels: !args.no_duplicate_labels,
+        min_touch_target_dp: args.min_touch_target_dp.unwrap_or(base.min_touch_target_dp),
+        density: args.density.unwrap_or(base.density),
+        min_contrast_ratio: args.min_contrast_ratio.unwrap_or(base.min_contrast_ratio),
+        large_text_contrast_ratio: args
+            .large_text_contrast_ratio
+            .unwrap_or(base.large_text_contrast_ratio),
+        large_text_min_sp: args.large_text_min_sp.unwrap_or(base.large_text_min_sp),
+        max_findings: args.max_findings.unwrap_or(base.max_findings),
+        max_nodes: args.max_nodes.unwrap_or(base.max_nodes),
+    };
+    let serial = device.serial.clone();
+    let ui = ctx.ui_manager()?;
+    let hierarchy = ui.dump(&serial).await?;
+    let mut report = a11y::audit_hierarchy(&hierarchy, options);
+
+    let mut contrast = serde_json::Value::Null;
+    if args.contrast {
+        let foreground = ui_color::parse_hex(
+            args.text_rgb
+                .as_deref()
+                .ok_or_else(|| ForgeError::invalid_argument("--contrast requires --text-rgb"))?,
+        )?;
+        let timeout = ctx.parse_timeout(
+            args.timeout.as_deref(),
+            ctx.config.file.timeouts.screenshot_secs,
+        )?;
+        let adb = ctx.adb()?;
+        let output = adb
+            .exec_out_args(
+                &serial,
+                &["screencap".to_string(), "-p".to_string()],
+                Some(timeout),
+                Some(64 * 1024 * 1024),
+            )
+            .await?;
+        if output.stdout_truncated {
+            return Err(ForgeError::new(
+                ErrorCode::CommandFailed,
+                "contrast screenshot exceeded the 64 MiB capture limit",
+            )
+            .device(serial.clone()));
+        }
+        let image = androidforge_ui::visual::decode_reader(
+            Cursor::new(output.stdout),
+            "contrast screenshot",
+        )?;
+        let threshold = options.contrast_threshold(args.large_text);
+        let mut sampled = 0usize;
+        for node in hierarchy
+            .nodes
+            .iter()
+            .filter(|node| node.visible())
+            .take(options.max_nodes)
+        {
+            if report.findings.len() >= options.max_findings {
+                report.truncated = true;
+                break;
+            }
+            if node
+                .text
+                .as_deref()
+                .is_none_or(|text| text.trim().is_empty())
+            {
+                continue;
+            }
+            let Some(region) = a11y::region_from_bounds(node.bounds, &image) else {
+                continue;
+            };
+            let check = a11y::audit_region_contrast(&image, region, foreground, threshold)
+                .map_err(|error| error.with_context_string("node_path", node.path.clone()))?;
+            sampled += 1;
+            if let Some(finding) = a11y::contrast_finding(node, &check, args.large_text) {
+                report.findings.push(finding);
+            }
+        }
+        contrast = serde_json::json!({
+            "text_rgb": foreground.hex(),
+            "threshold": threshold,
+            "large_text": args.large_text,
+            "nodes_sampled": sampled,
+            "width": image.width,
+            "height": image.height,
+        });
+    }
+
+    let report_value = serde_json::to_value(&report)?;
+    let counts = serde_json::json!({
+        "error": report.count_by_severity(a11y::Severity::Error),
+        "warning": report.count_by_severity(a11y::Severity::Warning),
+        "info": report.count_by_severity(a11y::Severity::Info),
+        "missing_content_description": report.count(a11y::A11yRule::MissingContentDescription),
+        "tiny_touch_target": report.count(a11y::A11yRule::TinyTouchTarget),
+        "duplicate_label": report.count(a11y::A11yRule::DuplicateLabel),
+        "low_contrast": report.count(a11y::A11yRule::LowContrast),
+    });
+    let value = serde_json::json!({
+        "schema_version": 1,
+        "report": report_value,
+        "findings": report.findings,
+        "counts": counts,
+        "contrast": contrast,
+        "serial": serial,
+    });
+    let human = format!(
+        "Audited {} node(s): {} finding(s) ({} error, {} warning){}{}\n",
+        report.nodes_examined,
+        report.findings.len(),
+        counts["error"],
+        counts["warning"],
+        if report.truncated { ", truncated" } else { "" },
+        if args.contrast {
+            " including contrast"
+        } else {
+            ""
+        },
+    );
+    Ok(success("ui.audit.a11y", value, human)
+        .with_optional_session(session.map(|session| session.id.clone()))
+        .with_device(device.serial.clone()))
 }
 
 const SYSTEM_OVERLAY_LABELS: &[&str] = &["got it", "ok", "dismiss", "close"];
@@ -1141,6 +1324,10 @@ async fn dismiss_overlays(
     args: &UiDismissOverlaysArgs,
 ) -> Result<CommandSuccess> {
     if !ctx.dry_run {
+        ctx.ensure_risk_allowed(device, Risk::Input, "dismissing system overlays")?;
+        // Keep the legacy classifier exercised: it maps this operation to the
+        // same Risk::Input and is the compatibility entry point for callers
+        // that describe an operation without naming a risk.
         ctx.ensure_physical_mutation_allowed(device, "dismissing system overlays")?;
     }
     execute_in_run!(
@@ -2025,6 +2212,128 @@ async fn assert_no_text(
     .await
 }
 
+/// Choose the comparison relation and expected value for `ui assert-bounds`.
+///
+/// The three flags are already mutually exclusive at the clap layer; this
+/// second check also covers programmatic callers and produces a single,
+/// documented error when none is provided.
+fn assert_bounds_relation(args: &UiAssertBoundsArgs) -> Result<(BoundsRelation, i32)> {
+    match (args.bottom_y, args.bottom_y_gt, args.bottom_y_lt) {
+        (Some(value), None, None) => Ok((BoundsRelation::Equal, value)),
+        (None, Some(value), None) => Ok((BoundsRelation::GreaterThan, value)),
+        (None, None, Some(value)) => Ok((BoundsRelation::LessThan, value)),
+        _ => Err(ForgeError::invalid_argument(
+            "exactly one of --bottom-y, --bottom-y-gt or --bottom-y-lt is required",
+        )
+        .with_suggestion(
+            "Use --bottom-y for equality, --bottom-y-gt for greater-than, or --bottom-y-lt for less-than.",
+        )),
+    }
+}
+
+/// Resolve one semantic selector to a read-only, eight-field bounds snapshot.
+///
+/// No input is dispatched and no physical-mutation gate is consulted: this is
+/// a single hierarchy read through [`UiManager::bounds`].
+async fn bounds(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiBoundsArgs,
+) -> Result<CommandSuccess> {
+    reject_ref_for("ui bounds", &args.selector)?;
+    let selector = require_selector(&args.selector)?;
+    let serial = device.serial.clone();
+    let description = selector.describe();
+    execute_in_run!(
+        ctx,
+        "ui.bounds",
+        Some("ui bounds"),
+        session,
+        Some(device),
+        true,
+        |_run| async {
+            let ui = ctx.ui_manager()?;
+            let result = ui.bounds(&serial, &selector).await?;
+            Ok(success(
+                "ui.bounds",
+                serde_json::to_value(result)?,
+                format!(
+                    "Bounds for {description}: [{},{}][{},{}] ({}x{}), center ({},{}).\n",
+                    result.left,
+                    result.top,
+                    result.right,
+                    result.bottom,
+                    result.width,
+                    result.height,
+                    result.center_x,
+                    result.center_y
+                ),
+            )
+            .with_optional_session(session_id(session))
+            .with_device(serial.clone()))
+        },
+    )
+    .await
+}
+
+/// Assert the resolved element's bottom edge against a chosen relation.
+///
+/// All three relations are read-only comparisons through the core
+/// `assert_bottom_y*` methods; a failure is `E_UI_ASSERTION_FAILED` with the
+/// structured comparison attached as error context.
+async fn assert_bounds(
+    ctx: &CliContext,
+    session: Option<&Session>,
+    device: &androidforge_core::model::Device,
+    args: &UiAssertBoundsArgs,
+) -> Result<CommandSuccess> {
+    reject_ref_for("ui assert-bounds", &args.selector)?;
+    let selector = require_selector(&args.selector)?;
+    let (relation, expected) = assert_bounds_relation(args)?;
+    let tolerance = args.tolerance;
+    let serial = device.serial.clone();
+    let description = selector.describe();
+    execute_in_run!(
+        ctx,
+        "ui.assert-bounds",
+        Some("ui assert-bounds"),
+        session,
+        Some(device),
+        true,
+        |_run| async {
+            let ui = ctx.ui_manager()?;
+            let result = match relation {
+                BoundsRelation::Equal => {
+                    ui.assert_bottom_y(&serial, &selector, expected, tolerance).await?
+                }
+                BoundsRelation::GreaterThan => {
+                    ui.assert_bottom_y_gt(&serial, &selector, expected, tolerance)
+                        .await?
+                }
+                BoundsRelation::LessThan => {
+                    ui.assert_bottom_y_lt(&serial, &selector, expected, tolerance)
+                        .await?
+                }
+            };
+            Ok(success(
+                "ui.assert-bounds",
+                serde_json::to_value(result)?,
+                format!(
+                    "bottom_y {} passed for {description}: expected {} (tolerance {}), actual {}.\n",
+                    result.relation.as_str(),
+                    result.expected,
+                    result.tolerance,
+                    result.actual
+                ),
+            )
+            .with_optional_session(session_id(session))
+            .with_device(serial.clone()))
+        },
+    )
+    .await
+}
+
 async fn wait_or_assert(
     ctx: &CliContext,
     session: Option<&Session>,
@@ -2032,16 +2341,71 @@ async fn wait_or_assert(
     args: &UiWaitArgs,
     assertion: bool,
 ) -> Result<CommandSuccess> {
+    let mode_count = args.for_idle as u8
+        + args.for_stable as u8
+        + args.for_bounds_stable as u8
+        + (!args.for_text_gone.is_empty() as u8);
+    if mode_count > 1 {
+        return Err(ForgeError::invalid_argument(
+            "--for-text-gone/--for-idle/--for-stable/--for-bounds-stable are mutually exclusive",
+        ));
+    }
+    if args.for_bounds_stable {
+        if args.not_exists {
+            return Err(ForgeError::invalid_argument(
+                "--for-bounds-stable cannot be combined with --not-exists",
+            ));
+        }
+        validate_reference_args(&args.selector)?;
+        if args.selector.has_ref() {
+            return Err(ForgeError::invalid_argument(
+                "--for-bounds-stable requires a semantic selector and does not support --ref",
+            )
+            .with_suggestion("Use --text, --content-desc or --resource-id instead of --ref."));
+        }
+        let selector = require_selector(&args.selector)?;
+        let serial = device.serial.clone();
+        let timeout = ctx.parse_timeout(
+            args.timeout.as_deref(),
+            if assertion {
+                1
+            } else {
+                ctx.config.file.ui.default_timeout_secs
+            },
+        )?;
+        let stable_for = ctx.parse_timeout(args.stable_for.as_deref(), 2)?;
+        let command = if assertion { "ui.assert" } else { "ui.wait" };
+        return execute_in_run!(
+            ctx,
+            command,
+            Some("ui wait bounds"),
+            session,
+            Some(device),
+            true,
+            |_run| async {
+                let ui = ctx.ui_manager()?;
+                let result = ui
+                    .wait_for_bounds_stable(&serial, &selector, stable_for, timeout)
+                    .await?;
+                Ok(success(
+                    command,
+                    serde_json::to_value(&result)?,
+                    format!(
+                        "UI bounds stable for {}ms after {} attempt(s) in {}ms.\n",
+                        result.stable_for_ms, result.attempts, result.duration_ms
+                    ),
+                )
+                .with_optional_session(session_id(session))
+                .with_device(serial.clone()))
+            },
+        )
+        .await;
+    }
     let special = !args.for_text_gone.is_empty() || args.for_idle || args.for_stable;
     if special {
         if args.selector.has_selector() || args.selector.has_ref() || args.not_exists {
             return Err(ForgeError::invalid_argument(
                 "--for-text-gone/--for-idle/--for-stable cannot be combined with a selector or --not-exists",
-            ));
-        }
-        if args.for_idle && args.for_stable {
-            return Err(ForgeError::invalid_argument(
-                "--for-idle and --for-stable are mutually exclusive",
             ));
         }
         let serial = device.serial.clone();
@@ -3214,6 +3578,55 @@ mod tests {
         assert_eq!(action["element_ref"], "el-abcdef");
         assert_eq!(action["observation_token"], "obs-1");
         assert_eq!(action["resolved_node"]["path"], "0/1");
+    }
+
+    #[test]
+    fn assert_bounds_relation_selects_each_comparison() {
+        let base = || UiAssertBoundsArgs {
+            selector: SelectorArgs::default(),
+            bottom_y: None,
+            bottom_y_gt: None,
+            bottom_y_lt: None,
+            tolerance: 0,
+        };
+        let eq = assert_bounds_relation(&UiAssertBoundsArgs {
+            bottom_y: Some(300),
+            ..base()
+        })
+        .expect("equality");
+        assert_eq!(eq, (BoundsRelation::Equal, 300));
+        let gt = assert_bounds_relation(&UiAssertBoundsArgs {
+            bottom_y_gt: Some(299),
+            ..base()
+        })
+        .expect("greater than");
+        assert_eq!(gt, (BoundsRelation::GreaterThan, 299));
+        let lt = assert_bounds_relation(&UiAssertBoundsArgs {
+            bottom_y_lt: Some(301),
+            ..base()
+        })
+        .expect("less than");
+        assert_eq!(lt, (BoundsRelation::LessThan, 301));
+    }
+
+    #[test]
+    fn assert_bounds_relation_requires_exactly_one_value() {
+        let none = UiAssertBoundsArgs {
+            selector: SelectorArgs::default(),
+            bottom_y: None,
+            bottom_y_gt: None,
+            bottom_y_lt: None,
+            tolerance: 0,
+        };
+        let error = assert_bounds_relation(&none).unwrap_err();
+        assert!(error.message().contains("exactly one"));
+
+        let ambiguous = UiAssertBoundsArgs {
+            bottom_y: Some(300),
+            bottom_y_gt: Some(299),
+            ..none
+        };
+        assert!(assert_bounds_relation(&ambiguous).is_err());
     }
 
     #[test]

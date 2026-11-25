@@ -358,13 +358,17 @@ impl DevicePreparer {
         })
     }
 
-    async fn set_dark_mode(
+    /// Apply a night mode value (`yes`, `no` or `auto`) through the same
+    /// settings/restore engine used by `prepare`. The previous value is
+    /// recorded in the session before the command is dispatched.
+    pub async fn set_night_mode(
         &self,
         serial: &str,
-        dark: bool,
+        mode: &str,
         session: &mut Session,
         paths: &ForgePaths,
     ) -> Result<PrepareChange> {
+        let mode = normalize_night_mode(mode)?;
         let before = self
             .adb
             .shell_args(
@@ -383,7 +387,6 @@ impl DevicePreparer {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         });
-        let mode = if dark { "yes" } else { "no" };
         session.record_device_setting(paths, "cmd:uimode_night", previous.clone())?;
         self.adb
             .shell_args(
@@ -426,6 +429,17 @@ impl DevicePreparer {
             applied: true,
             note: None,
         })
+    }
+
+    async fn set_dark_mode(
+        &self,
+        serial: &str,
+        dark: bool,
+        session: &mut Session,
+        paths: &ForgePaths,
+    ) -> Result<PrepareChange> {
+        self.set_night_mode(serial, if dark { "yes" } else { "no" }, session, paths)
+            .await
     }
 
     async fn set_orientation(
@@ -685,8 +699,34 @@ impl DevicePreparer {
     }
 }
 
+/// Canonicalise the small value set accepted by `cmd uimode night`.
+/// Aliases are accepted at the API boundary so scenarios can use `auto`
+/// without introducing a second settings writer.
+fn normalize_night_mode(value: &str) -> Result<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "yes" | "on" | "true" | "1" => Ok("yes"),
+        "no" | "off" | "false" | "0" => Ok("no"),
+        "auto" => Ok("auto"),
+        other => Err(
+            ForgeError::invalid_argument(format!("unsupported night mode '{other}'"))
+                .with_suggestion("Use yes, no or auto."),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::normalize_night_mode;
+
+    #[test]
+    fn night_mode_accepts_canonical_values_and_aliases() {
+        assert_eq!(normalize_night_mode("yes").unwrap(), "yes");
+        assert_eq!(normalize_night_mode("ON").unwrap(), "yes");
+        assert_eq!(normalize_night_mode("false").unwrap(), "no");
+        assert_eq!(normalize_night_mode(" auto ").unwrap(), "auto");
+        assert!(normalize_night_mode("sometimes").is_err());
+    }
+
     #[test]
     fn density_restore_prefers_override() {
         let previous = "Physical density: 420\nOverride density: 560\n";

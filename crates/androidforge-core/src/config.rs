@@ -368,6 +368,17 @@ pub struct BuildSection {
     pub conventional_fallback: bool,
     /// Maximum number of files inspected for one resolution request.
     pub max_candidates: usize,
+    /// Map of variant name to an explicit argv array. No shell string is
+    /// interpreted and no build command is inferred. Missing entries are valid.
+    pub commands: BTreeMap<String, Vec<String>>,
+    /// Project-relative working directory for build commands. Must not contain
+    /// `..`, an absolute path or a drive prefix.
+    pub cwd: Option<String>,
+    /// Build-specific timeout. Takes precedence over `[timeouts].build_secs`.
+    pub timeout_secs: Option<u64>,
+    /// Environment variable names passed through to build commands. Names
+    /// only: no `=` and no NUL.
+    pub env_passthrough: Vec<String>,
 }
 
 impl Default for BuildSection {
@@ -378,6 +389,10 @@ impl Default for BuildSection {
             variants: BTreeMap::new(),
             conventional_fallback: true,
             max_candidates: 64,
+            commands: BTreeMap::new(),
+            cwd: None,
+            timeout_secs: None,
+            env_passthrough: Vec::new(),
         }
     }
 }
@@ -696,6 +711,55 @@ impl ForgeConfig {
                 "max_candidates must be greater than zero".to_string(),
             ));
         }
+        for (variant, argv) in &file.build.commands {
+            let field = format!("build.commands.{variant}");
+            if !valid_variant_key(variant) {
+                issues.push(issue(
+                    Severity::Error,
+                    "build.commands",
+                    format!("variant key '{variant}' is empty or has invalid characters"),
+                ));
+            }
+            if argv.is_empty() {
+                issues.push(issue(
+                    Severity::Error,
+                    field.clone(),
+                    "command array must not be empty".to_string(),
+                ));
+            }
+            if argv.iter().any(String::is_empty) {
+                issues.push(issue(
+                    Severity::Error,
+                    field.clone(),
+                    "command array must not contain empty argv elements".to_string(),
+                ));
+            }
+        }
+        if let Some(cwd) = &file.build.cwd
+            && !valid_relative_build_cwd(cwd)
+        {
+            issues.push(issue(
+                Severity::Error,
+                "build.cwd",
+                format!("'{cwd}' must be a relative path without '..' or a drive prefix"),
+            ));
+        }
+        if file.build.timeout_secs == Some(0) {
+            issues.push(issue(
+                Severity::Error,
+                "build.timeout_secs",
+                "timeout must be greater than zero".to_string(),
+            ));
+        }
+        for name in &file.build.env_passthrough {
+            if !valid_env_name(name) {
+                issues.push(issue(
+                    Severity::Error,
+                    "build.env_passthrough",
+                    format!("'{name}' is not a valid environment variable name"),
+                ));
+            }
+        }
         if file.health.battery_warn_percent > 100 {
             issues.push(issue(
                 Severity::Error,
@@ -942,6 +1006,50 @@ fn valid_package_name(value: &str) -> bool {
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     })
+}
+
+/// Variant names follow the same safe-name rule used elsewhere in AndroidForge:
+/// non-empty and only ASCII letters, digits, '.', '_' or '-'. This admits
+/// conventional Gradle variants such as `debug`, `release` and `freeDebug`.
+fn valid_variant_key(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+/// A build working directory must stay inside the project: no absolute paths,
+/// drive prefixes, UNC roots or `..` components.
+fn valid_relative_build_cwd(value: &str) -> bool {
+    if value.is_empty() || Path::new(value).is_absolute() || value.starts_with(['/', '\\']) {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return false;
+    }
+    if Path::new(value)
+        .components()
+        .any(|component| matches!(component, std::path::Component::Prefix(_)))
+    {
+        return false;
+    }
+    !value.split(['/', '\\']).any(|part| part == "..")
+}
+
+/// Environment variable names are POSIX-style identifiers. Names only: an
+/// `=` would turn this into a `KEY=VALUE` assignment and a NUL cannot be passed
+/// to a process environment.
+fn valid_env_name(value: &str) -> bool {
+    if value.is_empty() || value.contains('=') || value.contains('\0') {
+        return false;
+    }
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn default_true() -> bool {
@@ -1219,5 +1327,176 @@ mod tests {
             config.fixture_path("jsondir").file_name().unwrap(),
             "fixture.json"
         );
+    }
+
+    #[test]
+    fn build_section_parses_commands_cwd_timeout_and_env() {
+        let config = config_from(
+            "adapter_version = 1
+[build]
+default_variant = \"debug\"
+cwd = \"app\"
+timeout_secs = 120
+env_passthrough = [\"JAVA_HOME\", \"CI\"]
+[build.commands]
+debug = [\"./gradlew\", \"assembleDebug\"]
+\"freeDebug\" = [\"gradle\", \":app:assembleFreeDebug\"]
+",
+            "",
+        );
+        let build = &config.file.build;
+        assert_eq!(
+            build.commands.get("debug"),
+            Some(&vec!["./gradlew".to_string(), "assembleDebug".to_string()])
+        );
+        assert_eq!(
+            build.commands.get("freeDebug"),
+            Some(&vec![
+                "gradle".to_string(),
+                ":app:assembleFreeDebug".to_string()
+            ])
+        );
+        assert_eq!(build.cwd.as_deref(), Some("app"));
+        assert_eq!(build.timeout_secs, Some(120));
+        assert_eq!(build.env_passthrough, vec!["JAVA_HOME", "CI"]);
+        assert!(config.validate().valid);
+    }
+
+    #[test]
+    fn build_commands_reject_bad_keys_and_argv() {
+        let mut config = config_from("adapter_version = 1\n", "");
+        config.file.build.commands.insert(
+            String::new(),
+            vec!["gradle".to_string(), "assembleDebug".to_string()],
+        );
+        config
+            .file
+            .build
+            .commands
+            .insert("bad key".to_string(), vec!["gradle".to_string()]);
+        config
+            .file
+            .build
+            .commands
+            .insert("empty-argv".to_string(), Vec::new());
+        config
+            .file
+            .build
+            .commands
+            .insert("debug".to_string(), vec![String::new()]);
+
+        let report = config.validate();
+        assert!(!report.valid);
+        for field in [
+            "build.commands",
+            "build.commands.empty-argv",
+            "build.commands.debug",
+        ] {
+            assert!(
+                report.issues.iter().any(|issue| issue.field == field),
+                "missing issue for {field}: {:?}",
+                report.issues
+            );
+        }
+    }
+
+    #[test]
+    fn build_cwd_rejects_escapes_and_absolute_paths() {
+        let mut config = config_from("adapter_version = 1\n", "");
+        for invalid in [
+            "",
+            "../outside",
+            "app/../../outside",
+            "/tmp",
+            "C:\\work",
+            "\\\\server\\share",
+        ] {
+            config.file.build.cwd = Some(invalid.to_string());
+            let report = config.validate();
+            assert!(!report.valid, "'{invalid}' should be rejected");
+            assert!(
+                report.issues.iter().any(|issue| issue.field == "build.cwd"),
+                "'{invalid}' should produce a build.cwd issue: {:?}",
+                report.issues
+            );
+        }
+        config.file.build.cwd = Some("app/src".to_string());
+        assert!(config.validate().valid);
+        config.file.build.cwd = None;
+        assert!(config.validate().valid);
+    }
+
+    #[test]
+    fn build_timeout_must_be_positive() {
+        let mut config = config_from("adapter_version = 1\n[build]\ntimeout_secs = 30\n", "");
+        assert_eq!(config.file.build.timeout_secs, Some(30));
+        assert!(config.validate().valid);
+
+        config.file.build.timeout_secs = Some(0);
+        let report = config.validate();
+        assert!(!report.valid);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.field == "build.timeout_secs")
+        );
+
+        config.file.build.timeout_secs = None;
+        assert!(config.validate().valid);
+    }
+
+    #[test]
+    fn build_env_passthrough_requires_names_only() {
+        let mut config = config_from(
+            "adapter_version = 1\n[build]\nenv_passthrough = [\"JAVA_HOME\", \"_CI\"]\n",
+            "",
+        );
+        assert!(config.validate().valid);
+
+        for invalid in ["", "A=B", "BAD=NAME", "A\0B", "1BAD", "WITH SPACE"] {
+            config.file.build.env_passthrough = vec![invalid.to_string()];
+            let report = config.validate();
+            assert!(!report.valid, "'{invalid}' should be rejected");
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.field == "build.env_passthrough"),
+                "'{invalid}' should produce a build.env_passthrough issue: {:?}",
+                report.issues
+            );
+        }
+    }
+
+    #[test]
+    fn build_without_commands_remains_valid() {
+        let config = config_from(
+            "adapter_version = 1
+[build]
+default_variant = \"debug\"
+[build.variants]
+debug = [\"app/build/outputs/apk/debug/*.apk\"]
+",
+            "",
+        );
+        assert!(config.file.build.commands.is_empty());
+        assert!(config.file.build.cwd.is_none());
+        assert!(config.file.build.timeout_secs.is_none());
+        assert!(config.file.build.env_passthrough.is_empty());
+        assert!(config.validate().valid);
+    }
+
+    #[test]
+    fn build_rejects_unknown_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".androidforge")).unwrap();
+        std::fs::write(
+            temp.path().join(".androidforge/project.toml"),
+            "adapter_version = 1\n[build]\nnot_a_build_field = true\n",
+        )
+        .unwrap();
+        let paths = ForgePaths::discover(Some(temp.path().to_path_buf()), None).unwrap();
+        assert!(ForgeConfig::load(&paths).is_err());
     }
 }

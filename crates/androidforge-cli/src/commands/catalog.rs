@@ -234,7 +234,14 @@ fn safety(path: &[String]) -> &'static str {
         "maintenance clean",
         "report import",
         "report prune",
+        "avd create",
+        "devices tag add",
+        "devices tag remove",
+        "devices tag clear",
         "fixture run",
+        // Declarative state writes/removes app-private files through run-as.
+        "fixture apply",
+        "fixture reset",
         "conformance run",
         "hook run",
         "tools uninstall",
@@ -247,6 +254,8 @@ fn safety(path: &[String]) -> &'static str {
     const MUTATING: &[&str] = &[
         "agent test",
         "agent matrix",
+        // An allowlisted scenario dispatches audited app/UI/fixture operations.
+        "scenario run",
         "app install",
         "app launch",
         "app force-stop",
@@ -273,6 +282,9 @@ fn safety(path: &[String]) -> &'static str {
         "session claim",
         "devices prepare",
         "devices restore",
+        "devices scenario",
+        "devices shell",
+        "devices input tap",
         "ui tap",
         "ui long-press",
         "ui drag",
@@ -287,6 +299,13 @@ fn safety(path: &[String]) -> &'static str {
         "ui hide-keyboard",
         "capture record start",
         "capture record stop",
+        // Launches the target package by design. Adds no physical mutation flag:
+        // the existing scoped app-control consent rules still apply.
+        "capture launch",
+        // Startup measurement launches the app (`am start -W`, and `am force-stop`
+        // with --cold), so the same scoped app-control consent rules apply.
+        // `diagnostics frames` stays read-only: it only reads gfxinfo counters.
+        "diagnostics performance",
         "notifications tap",
         "ui dismiss-overlays",
         "snapshot save",
@@ -297,6 +316,14 @@ fn safety(path: &[String]) -> &'static str {
     if MUTATING.iter().any(|prefix| joined.starts_with(prefix)) {
         return "device-mutation";
     }
+    // Named baselines write only to the local, run-scoped store; a11y audits
+    // and contrast checks only read the hierarchy and screenshot. They stay
+    // read-only even when a fresh screenshot is captured from a device.
+    // `build` executes a project-configured host command and writes a bounded
+    // local log artifact. Neither is device mutation: build alone resolves no
+    // session and contacts no ADB device. Its install/launch flags reuse the
+    // already-classified app paths and their physical gates, and the curated
+    // MCP build tool deliberately omits those flags.
     "read-only"
 }
 
@@ -305,13 +332,42 @@ fn examples(path: &str, arguments: &[CatalogArg]) -> Vec<String> {
         "doctor" => &[
             "androidforge doctor --json",
             "androidforge doctor fix --plan --json",
+            "androidforge doctor --capacity --json",
         ],
+        "avd images" => &["androidforge avd images --json"],
+        "avd create" => &[
+            "androidforge avd create Pixel_8_API_35 --image \"system-images;android-35;google_apis;x86_64\" --device pixel_7 --dry-run --json",
+            "androidforge avd create Pixel_8_API_35 --image \"system-images;android-35;google_apis;x86_64\" --device pixel_7 --yes --json",
+        ],
+        "ports list" => &["androidforge ports list --json"],
+        "artifacts scan-secrets" => &["androidforge artifacts scan-secrets --project . --json"],
+        "devices shell" => &[
+            "androidforge devices shell --read-only --session <ID> --json -- dumpsys gfxinfo com.example",
+            "androidforge devices shell --read-only --allow \"pm list\" --session <ID> --json -- pm list packages",
+            "androidforge device shell --read-only --session <ID> --json -- getprop ro.build.version.release",
+        ],
+        "devices input tap" => &[
+            "androidforge devices input tap 540 1200 --session <ID> --json",
+            "androidforge device input tap 540 1200 --session <ID> --dry-run --json",
+        ],
+        "devices scenario" => &[
+            "androidforge devices scenario --night yes --session <ID> --json",
+            "androidforge devices scenario --network offline --dry-run --json",
+        ],
+        "devices tag add" => {
+            &["androidforge devices tag add --serial emulator-5554 --tag nightly --json"]
+        }
+        "devices tag list" => &["androidforge devices tag list --json"],
         "context" => &[
             "androidforge context --json",
             "androidforge ctx --brief --json",
         ],
         "agent brief" => &["androidforge agent brief --json"],
         "agent test" => &["androidforge agent test --apk .\\app-debug.apk --dry-run --json"],
+        "agent matrix" => &[
+            "androidforge agent matrix --avd Pixel_8_API_35 --avd Pixel_7_API_34 --flow conformance --dry-run --json",
+            "androidforge agent matrix --device tag:nightly --flow conformance --dry-run --json",
+        ],
         "session ensure" => &[
             "androidforge session ensure --serial emulator-5554 --owner MyAgent --json",
             "androidforge session ensure --avd Pixel_8_API_35 --headless --wait --timeout 10m --json",
@@ -320,18 +376,30 @@ fn examples(path: &str, arguments: &[CatalogArg]) -> Vec<String> {
             "androidforge session list --mine --active --json",
             "androidforge session gc --reclaim --dry-run --json",
         ],
+        "build" => &[
+            "androidforge build --variant debug --json",
+            "androidforge build --variant debug --module app --expected-package com.example.app --json",
+            "androidforge build --variant debug --install --only-if-changed --json",
+        ],
         "app install" => &[
             "androidforge app install .\\app-debug.apk --session <ID> --json",
             "androidforge app install .\\base.apk --split .\\config.arm64_v8a.apk --only-if-changed --session <ID> --json",
+            "androidforge app install .\\app-debug.apk --session <ID> --wait-for-confirmation --confirm-text \"Install\" --json",
         ],
         "app verify-installed" => {
             &["androidforge app verify-installed --apk .\\app-debug.apk --session <ID> --json"]
         }
-        "app data export" => {
-            &["androidforge app data export com.example.app .\\data.tar --session <ID> --json"]
-        }
+        "app data export" => &[
+            "androidforge app data export com.example.app --session <ID> --json",
+            "androidforge app data export com.example.app --output .\\data.tar --session <ID> --json",
+            "androidforge app data export com.example.app .\\data.tar --allow-in-project --overwrite --session <ID> --json",
+        ],
         "app data import" => &[
             "androidforge app data import com.example.app .\\data.tar --yes --session <ID> --json",
+        ],
+        "maintenance clean" => &[
+            "androidforge maintenance clean --runs --keep-tag release --json",
+            "androidforge maintenance clean --runs --keep-tag release --keep-last 5 --yes --json",
         ],
         "ui observe" => &["androidforge ui observe --session <ID> --json"],
         "ui tap" => &[
@@ -344,14 +412,67 @@ fn examples(path: &str, arguments: &[CatalogArg]) -> Vec<String> {
         "ui wait" => &[
             "androidforge ui wait --text \"Saved\" --timeout 20 --session <ID> --json",
             "androidforge ui wait --for-idle --session <ID> --json",
+            "androidforge ui wait --text \"Save\" --for-bounds-stable --stable-for 2s --timeout 15 --session <ID> --json",
+        ],
+        "ui audit a11y" => &[
+            "androidforge ui audit a11y --session <ID> --json",
+            "androidforge ui audit a11y --session <ID> --contrast --text-rgb #FFFFFF --density 2.75 --json",
+        ],
+        "ui bounds" => &["androidforge ui bounds --text \"Save\" --session <ID> --json"],
+        "ui assert-bounds" => &[
+            "androidforge ui assert-bounds --text \"Save\" --bottom-y 300 --tolerance 2 --session <ID> --json",
+            "androidforge ui assert-bounds --resource-id com.example:id/save --bottom-y-gt 800 --session <ID> --json",
         ],
         "network mock serve" => &[
             "androidforge network mock serve --port 8080 --route 'GET /health=200' --reverse --max-requests 2 --session <ID> --json",
+            "androidforge network mock serve --scenario offline --port 8080 --json",
         ],
+        "network mock scenarios" => &["androidforge network mock scenarios --json"],
+        "fixture apply" => &["androidforge fixture apply state-demo --session <ID> --json"],
+        "fixture reset" => &["androidforge fixture reset state-demo --yes --session <ID> --json"],
+        "scenario run" => &[
+            "androidforge scenario run smoke.toml --dry-run --json",
+            "androidforge scenario run smoke.toml --session <ID> --yes --allow-physical-input --json",
+            "androidforge scenario run smoke.json --repeat 3 --yes --json",
+        ],
+        "scenario validate" => &["androidforge scenario validate smoke.toml --json"],
         "capture screenshot" => &[
             "androidforge capture screenshot --session <ID> --json",
             "androidforge capture screenshot --compare .\\baseline.png --region 0,120,1080,900 --max-diff-ratio 0.002 --session <ID> --json",
         ],
+        "capture assert-color" => &[
+            "androidforge capture assert-color --rgb #1A73E8 --at 540,1200 --tolerance 8 --session <ID> --json",
+            "androidforge capture assert-color --rgb #FFFFFF --region 0,0,1080,200 --majority --session <ID> --json",
+        ],
+        "capture baseline save" => {
+            &["androidforge capture baseline save --name home_screen --session <ID> --json"]
+        }
+        "capture baseline update" => {
+            &["androidforge capture baseline update --name home_screen --session <ID> --json"]
+        }
+        "capture baseline compare" => &[
+            "androidforge capture baseline compare --name home_screen --region 0,120,1080,900 --max-diff-ratio 0.002 --session <ID> --json",
+        ],
+        "capture baseline list" => &["androidforge capture baseline list --json"],
+        "capture contrast" => &[
+            "androidforge capture contrast --rgb #FFFFFF --at 540,1200 --session <ID> --json",
+            "androidforge capture contrast --rgb #000000 --region 0,0,1080,200 --majority --session <ID> --json",
+        ],
+        "capture launch" => &[
+            "androidforge capture launch com.example.app --session <ID> --expect-first-frame --no-splash --json",
+            "androidforge capture launch com.example.app --session <ID> --fps 10 --duration 5s --expected-color #1A73E8 --ui-dump-package --json",
+        ],
+        "diagnostics frames" => &[
+            "androidforge diagnostics frames com.example.app --session <ID> --json",
+            "androidforge diagnostics frames com.example.app --session <ID> --reset --duration 5s --baseline .\\runs\\old\\frames\\report.json --max-p99 5 --json",
+        ],
+        "diagnostics logcat query" => &[
+            "androidforge diagnostics logcat query --session <ID> --redact-patterns AIza,sk- --json",
+        ],
+        "diagnostics logcat watch" => &[
+            "androidforge diagnostics logcat watch --session <ID> --redact-patterns ghp_,AKIA --json",
+        ],
+        "report bundle" => &["androidforge report bundle latest --redact-secrets --json"],
         "tools install" => &["androidforge tools install maestro --yes --json"],
         "tools status" => &["androidforge tools status maestro --json"],
         "tools catalog" => &["androidforge tools catalog --json"],
@@ -394,6 +515,7 @@ mod tests {
         let catalog = command_catalog();
         for expected in [
             "app data export",
+            "maintenance clean",
             "app verify-installed",
             "ui tap",
             "ui drag",
@@ -435,6 +557,66 @@ mod tests {
     }
 
     #[test]
+    fn app_control_commands_stay_device_mutation() {
+        let catalog = command_catalog();
+        for path in ["app launch", "app force-stop"] {
+            let command = catalog
+                .iter()
+                .find(|command| command.path == path)
+                .unwrap_or_else(|| panic!("missing {path}"));
+            assert_eq!(command.safety, "device-mutation", "{path}");
+        }
+    }
+
+    #[test]
+    fn frames_and_color_commands_are_read_only_and_launch_is_mutating() {
+        let catalog = command_catalog();
+        for (path, safety) in [
+            ("diagnostics frames", "read-only"),
+            ("capture assert-color", "read-only"),
+            ("capture launch", "device-mutation"),
+        ] {
+            let command = catalog
+                .iter()
+                .find(|command| command.path == path)
+                .unwrap_or_else(|| panic!("missing {path}"));
+            assert_eq!(command.safety, safety, "{path}");
+            assert!(
+                !command.examples.is_empty(),
+                "{path} has no curated example"
+            );
+        }
+        let launch = catalog
+            .iter()
+            .find(|command| command.path == "capture launch")
+            .expect("capture launch");
+        for flag in [
+            "fps",
+            "duration",
+            "expect-first-frame",
+            "no-splash",
+            "expected-color",
+            "tolerance",
+            "ui-dump-package",
+        ] {
+            assert!(
+                launch
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.long.as_deref() == Some(flag)),
+                "capture launch is missing --{flag}"
+            );
+        }
+        assert!(
+            !launch
+                .arguments
+                .iter()
+                .any(|argument| argument.long.as_deref() == Some("allow-physical-mutation")),
+            "capture launch must not advertise a physical mutation flag"
+        );
+    }
+
+    #[test]
     fn dangerous_commands_are_classified() {
         let catalog = command_catalog();
         for expected in [
@@ -460,6 +642,180 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {}", expected.0));
             assert_eq!(command.safety, expected.1, "{}", expected.0);
         }
+    }
+
+    #[test]
+    fn scoped_export_and_retention_flags_keep_their_safety_classes() {
+        let catalog = command_catalog();
+        for (path, safety) in [
+            ("app data export", "read-only"),
+            ("maintenance clean", "destructive"),
+        ] {
+            let command = catalog
+                .iter()
+                .find(|command| command.path == path)
+                .unwrap_or_else(|| panic!("missing {path}"));
+            assert_eq!(command.safety, safety, "{path}");
+            assert!(
+                !command.examples.is_empty(),
+                "{path} has no curated example"
+            );
+        }
+        let export = catalog
+            .iter()
+            .find(|command| command.path == "app data export")
+            .expect("app data export");
+        for flag in ["output", "allow-in-project", "overwrite"] {
+            assert!(
+                export
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.long.as_deref() == Some(flag)),
+                "app data export is missing --{flag}"
+            );
+        }
+        assert!(
+            export
+                .arguments
+                .iter()
+                .any(|argument| argument.id == "path" && !argument.required),
+            "the legacy export path must stay optional so the default can be used"
+        );
+        let clean = catalog
+            .iter()
+            .find(|command| command.path == "maintenance clean")
+            .expect("maintenance clean");
+        for flag in ["keep-tag", "older-than", "keep-last"] {
+            assert!(
+                clean
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.long.as_deref() == Some(flag)),
+                "maintenance clean is missing --{flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounds_commands_are_read_only_and_documented() {
+        let catalog = command_catalog();
+        for (path, tool_name, flags) in [
+            ("ui bounds", "androidforge_ui_bounds", vec![]),
+            (
+                "ui assert-bounds",
+                "androidforge_ui_assert_bounds",
+                vec!["bottom-y", "bottom-y-gt", "bottom-y-lt", "tolerance"],
+            ),
+            (
+                "ui wait",
+                "androidforge_ui_wait",
+                vec!["for-bounds-stable", "stable-for", "timeout"],
+            ),
+        ] {
+            let command = catalog
+                .iter()
+                .find(|command| command.path == path)
+                .unwrap_or_else(|| panic!("missing catalog entry {path}"));
+            assert_eq!(command.safety, "read-only", "{path}");
+            assert_eq!(command.tool_name, tool_name, "{path}");
+            assert!(
+                !command.examples.is_empty(),
+                "{path} has no curated example"
+            );
+            for flag in flags {
+                assert!(
+                    command
+                        .arguments
+                        .iter()
+                        .any(|argument| argument.long.as_deref() == Some(flag)),
+                    "{path} is missing --{flag}"
+                );
+            }
+        }
+        let assert_bounds = catalog
+            .iter()
+            .find(|command| command.path == "ui assert-bounds")
+            .expect("ui assert-bounds");
+        let tolerance = assert_bounds
+            .arguments
+            .iter()
+            .find(|argument| argument.id == "tolerance")
+            .expect("tolerance argument");
+        assert_eq!(tolerance.default.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn scenario_commands_are_classified_and_documented() {
+        let catalog = command_catalog();
+        let run = catalog
+            .iter()
+            .find(|command| command.path == "scenario run")
+            .expect("scenario run");
+        assert_eq!(run.safety, "device-mutation", "scenario run");
+        assert_eq!(run.tool_name, "androidforge_scenario_run");
+        assert!(
+            run.examples
+                .iter()
+                .any(|example| example.contains("--dry-run")),
+            "scenario run needs a dry-run example"
+        );
+        for flag in ["file", "repeat"] {
+            assert!(
+                run.arguments.iter().any(|argument| argument.id == flag),
+                "scenario run is missing {flag}"
+            );
+        }
+        let validate = catalog
+            .iter()
+            .find(|command| command.path == "scenario validate")
+            .expect("scenario validate");
+        assert_eq!(validate.safety, "read-only", "scenario validate");
+        assert_eq!(validate.tool_name, "androidforge_scenario_validate");
+        assert!(!validate.examples.is_empty());
+    }
+
+    #[test]
+    fn new_command_entries_are_classified_and_documented() {
+        let catalog = command_catalog();
+        for path in ["devices shell", "devices input tap"] {
+            let command = catalog
+                .iter()
+                .find(|command| command.path == path)
+                .unwrap_or_else(|| panic!("missing catalog entry {path}"));
+            assert_eq!(command.safety, "device-mutation", "{path}");
+            assert!(
+                !command.examples.is_empty(),
+                "{path} has no curated example"
+            );
+        }
+        let shell = catalog
+            .iter()
+            .find(|command| command.path == "devices shell")
+            .expect("devices shell");
+        assert!(
+            shell
+                .examples
+                .iter()
+                .any(|example| example.contains("--read-only")),
+            "device shell needs a read-only example"
+        );
+        let scan = catalog
+            .iter()
+            .find(|command| command.path == "artifacts scan-secrets")
+            .expect("artifacts scan-secrets");
+        assert_eq!(scan.safety, "read-only");
+        assert_eq!(scan.tool_name, "androidforge_artifacts_scan_secrets");
+        let bundle = catalog
+            .iter()
+            .find(|command| command.path == "report bundle")
+            .expect("report bundle");
+        assert!(
+            bundle
+                .arguments
+                .iter()
+                .any(|argument| argument.long.as_deref() == Some("redact-secrets")),
+            "report bundle is missing --redact-secrets"
+        );
     }
 
     impl CatalogCommand {

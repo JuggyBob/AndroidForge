@@ -3,7 +3,7 @@
 ; The binaries are intentionally unsigned. Code signing is a documented future step.
 
 #define MyAppName "AndroidForge"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "AndroidForge"
 #define MyAppURL "https://github.com/JuggyBob/AndroidForge"
 #define MyAppExeName "androidforge-desktop.exe"
@@ -34,9 +34,9 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=1.0.0.0
-VersionInfoProductVersion=1.0.0
-VersionInfoTextVersion=1.0.0
+VersionInfoVersion=1.1.0.0
+VersionInfoProductVersion=1.1.0
+VersionInfoTextVersion=1.1.0
 VersionInfoCompany=AndroidForge
 VersionInfoDescription=AndroidForge developer cockpit
 VersionInfoCopyright=AndroidForge contributors

@@ -17,6 +17,21 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// NDJSON on stdout: implies `--json`, minifies every line and writes one
+    /// envelope line (plus streamed iteration lines for `scenario run`).
+    #[arg(long, global = true)]
+    pub jsonl: bool,
+
+    /// Keep only these comma-separated top-level keys of the result object.
+    /// Envelope fields are never removed. Envelope trimming is still available
+    /// through `--output-profile compact|brief`.
+    #[arg(long, global = true, value_name = "KEYS")]
+    pub fields: Option<String>,
+
+    /// Write one JSON stats line to stderr after the primary payload.
+    #[arg(long, global = true)]
+    pub stats: bool,
+
     /// Output detail profile. `compact` minifies and caps evidence; `brief` is the smallest decision-oriented view.
     #[arg(long, global = true, value_enum, env = "ANDROIDFORGE_PROFILE")]
     pub output_profile: Option<OutputProfile>,
@@ -49,9 +64,45 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub yes: bool,
 
+    /// Wait for an OEM on-device install confirmation dialog after a restricted
+    /// install failure, tap the single unambiguous confirm button through the
+    /// audited UI path, then retry the install once. Install consent is unchanged.
+    #[arg(long, global = true)]
+    pub wait_for_confirmation: bool,
+
+    /// Button label that confirms the OEM dialog. Repeatable; when omitted a
+    /// built-in list of localized labels is used. Matching is case-insensitive.
+    #[arg(long = "confirm-text", global = true)]
+    pub confirm_text: Vec<String>,
+
+    /// Maximum time to wait for the OEM confirmation dialog, for example 15s.
+    #[arg(long = "confirmation-timeout", global = true)]
+    pub confirmation_timeout: Option<String>,
+
     /// Allow data-changing operations on a physical device. Emulators never need this flag.
+    /// Superset of every scoped `--allow-physical-*` flag below.
     #[arg(long, global = true)]
     pub allow_physical_mutation: bool,
+
+    /// Allow app launch, force-stop, broadcast, service, kill and intent operations on a physical device.
+    #[arg(long, global = true)]
+    pub allow_physical_app_control: bool,
+
+    /// Allow app-private data and fixture operations on a physical device.
+    #[arg(long, global = true)]
+    pub allow_physical_data: bool,
+
+    /// Allow network state, proxy and mock changes on a physical device.
+    #[arg(long, global = true)]
+    pub allow_physical_network: bool,
+
+    /// Allow install and uninstall operations on a physical device.
+    #[arg(long, global = true)]
+    pub allow_physical_install: bool,
+
+    /// Allow input injection (tap, text, clear, scroll, back, home and keys) on a physical device.
+    #[arg(long, global = true)]
+    pub allow_physical_input: bool,
 
     /// Session id. Also read from ANDROIDFORGE_SESSION.
     #[arg(long, global = true)]
@@ -109,6 +160,10 @@ impl OutputProfile {
 pub enum Command {
     /// Inspect host, SDK, ADB, emulator, tools, AVDs, disks and sessions.
     Doctor {
+        /// Report conservative host RAM/commit/disk capacity and per-AVD estimates.
+        /// Unknown readings stay `null`/unknown with a reason; this flag is read-only.
+        #[arg(long)]
+        capacity: bool,
         #[command(subcommand)]
         command: Option<DoctorCommand>,
     },
@@ -149,7 +204,8 @@ pub enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
-    /// Discover and wait for Android devices.
+    /// Discover, inspect and operate Android devices. `device` is the retained
+    /// 1.0.0 alias for this canonical command.
     #[command(alias = "device")]
     Devices {
         #[command(subcommand)]
@@ -159,6 +215,11 @@ pub enum Command {
     Avd {
         #[command(subcommand)]
         command: AvdCommand,
+    },
+    /// Inspect emulator console/ADB/gRPC port allocation without a device.
+    Ports {
+        #[command(subcommand)]
+        command: PortsCommand,
     },
     /// Start, inspect and stop Android emulators.
     Emulator {
@@ -175,6 +236,8 @@ pub enum Command {
         #[command(subcommand)]
         command: AppCommand,
     },
+    /// Build a configured variant, optionally install the result and launch it.
+    Build(BuildArgs),
     /// Inspect and verify APKs locally.
     Apk {
         #[command(subcommand)]
@@ -189,6 +252,11 @@ pub enum Command {
     Capture {
         #[command(subcommand)]
         command: CaptureCommand,
+    },
+    /// Inspect AndroidForge-owned artifacts without a session or device.
+    Artifacts {
+        #[command(subcommand)]
+        command: ArtifactsCommand,
     },
     /// Collect logcat, crashes, process/task state and dumpsys evidence.
     Diagnostics {
@@ -259,6 +327,11 @@ pub enum Command {
     Conformance {
         #[command(subcommand)]
         command: ConformanceCommand,
+    },
+    /// Run or validate an allowlisted declarative scenario manifest.
+    Scenario {
+        #[command(subcommand)]
+        command: ScenarioCommand,
     },
     /// Run optional Maestro or instrumentation tests.
     Test {
@@ -336,6 +409,10 @@ pub struct AgentMatrixArgs {
     /// Connected-device serial target. Repeat for multiple devices.
     #[arg(long)]
     pub serial: Vec<String>,
+    /// Host-tagged device target. `tag:<name>` resolves through the local tag
+    /// store to concrete serials; literal serials are accepted too. Repeatable.
+    #[arg(long = "device")]
+    pub device: Vec<String>,
     /// Flow to run, for example conformance or a path.
     #[arg(long)]
     pub flow: Option<String>,
@@ -627,6 +704,16 @@ pub struct SessionGcArgs {
     pub reclaim: bool,
     #[arg(long)]
     pub stop: bool,
+    /// Release the device lock of terminal (released/failed/abandoned) session
+    /// tombstones without deleting their history. Dry-run by default when used.
+    #[arg(long)]
+    pub forget_terminal: bool,
+    /// Owner allowed to forget terminal sessions. Defaults to ANDROIDFORGE_OWNER.
+    #[arg(long)]
+    pub owner: Option<String>,
+    /// Forget terminal sessions owned by someone else. Never steals a live lock.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -667,6 +754,66 @@ pub enum DevicesCommand {
     Disconnect(DevicesEndpointArgs),
     /// Collect structured, read-only device health.
     Health(DevicesHealthArgs),
+    /// Apply one device setting through the typed scenario API.
+    Scenario(DevicesScenarioArgs),
+    /// Manage host-only device tags used by `agent matrix --device`.
+    Tag {
+        #[command(subcommand)]
+        command: DevicesTagCommand,
+    },
+    /// Run a shell command through the typed ADB path. `--read-only` requires an allowlisted command and no physical grant.
+    Shell(DeviceShellArgs),
+    /// Inject input through the audited UI path under the narrow `Risk::Input` gate.
+    Input {
+        #[command(subcommand)]
+        command: DeviceInputCommand,
+    },
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct DevicesScenarioArgs {
+    /// Night mode: yes, no or auto. Mutates device settings.
+    #[arg(long, conflicts_with_all = ["locale", "font", "network"])]
+    pub night: Option<String>,
+    /// BCP-47 locale tag, for example en-US. Mutates device settings.
+    #[arg(long, conflicts_with_all = ["night", "font", "network"])]
+    pub locale: Option<String>,
+    /// Font scale between 0.5 and 2.0, for example 1.15. Mutates device settings.
+    #[arg(long, conflicts_with_all = ["night", "locale", "network"])]
+    pub font: Option<String>,
+    /// Network mode: offline, online, wifi-only or data-only. Mutates network state.
+    #[arg(long, conflicts_with_all = ["night", "locale", "font"])]
+    pub network: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DevicesTagCommand {
+    /// Add a safe host-only tag to a serial. Idempotent.
+    Add(DevicesTagArgs),
+    /// Remove a tag from a serial. Idempotent.
+    Remove(DevicesTagArgs),
+    /// List tags for one serial, or every tagged serial.
+    List {
+        /// Serial to inspect. Omit to list all tagged serials.
+        #[arg(long)]
+        serial: Option<String>,
+    },
+    /// Remove every tag from a serial. Idempotent.
+    Clear {
+        /// Serial whose tags should be cleared.
+        #[arg(long)]
+        serial: String,
+    },
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct DevicesTagArgs {
+    /// Device serial, for example emulator-5554.
+    #[arg(long)]
+    pub serial: String,
+    /// Safe token: 1-64 lowercase letters/digits/'.'/'_'/'-'.
+    #[arg(long)]
+    pub tag: String,
 }
 
 #[derive(Debug, Args)]
@@ -727,12 +874,35 @@ pub struct PrepareArgs {
 #[derive(Debug, Subcommand)]
 pub enum AvdCommand {
     List,
+    /// List installed SDK system images available for AVD creation. Read-only.
+    Images,
+    /// Create an AVD through `avdmanager`. Host-side mutation: requires --yes.
+    Create(AvdCreateArgs),
     /// Not implemented. Kept as an explicit structured refusal rather than a fake clone.
     Clone {
         source: String,
         #[arg(long)]
         name: Option<String>,
     },
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct AvdCreateArgs {
+    /// AVD name. Letters, numbers, '.', '_' and '-'; no path separators.
+    pub name: String,
+    /// Full SDK system-image package id, for example system-images;android-35;google_apis;x86_64.
+    #[arg(long)]
+    pub image: String,
+    /// Device profile id accepted by `avdmanager -d`, for example pixel_7.
+    #[arg(long)]
+    pub device: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PortsCommand {
+    /// Report every conventional emulator console port with its ADB/gRPC pair,
+    /// ownership from active AndroidForge sessions and free/allocated/occupied state.
+    List,
 }
 
 #[derive(Debug, Subcommand)]
@@ -779,7 +949,7 @@ pub enum AppCommand {
     List(AppListArgs),
     FilePush(AppFilePushArgs),
     FilePull(AppFilePullArgs),
-    DataBackup(AppDataArgs),
+    DataBackup(AppDataExportArgs),
     DataRestore(AppDataArgs),
     /// Verify the live installed APK against a local APK without installing.
     VerifyInstalled(AppVerifyInstalledArgs),
@@ -825,7 +995,7 @@ pub struct AppDataSeedArgs {
 #[derive(Debug, Subcommand)]
 pub enum AppDataCommand {
     /// Export app-private data through run-as (debuggable apps).
-    Export(AppDataArgs),
+    Export(AppDataExportArgs),
     /// Import app-private data through run-as (debuggable apps).
     Import(AppDataArgs),
     /// Clear app data and optionally restore a baseline archive.
@@ -1008,6 +1178,29 @@ pub struct AppDataArgs {
     pub path: PathBuf,
 }
 
+/// Arguments for `app data export` (and its `app data backup` alias).
+///
+/// The positional `path` keeps the original explicit-destination form; the
+/// named `--output` flag is equivalent. When neither is supplied the safe
+/// managed `<artifacts_dir>/export` default is used. Destinations inside the
+/// project root and existing files require an explicit opt-in.
+#[derive(Debug, Args, Clone)]
+pub struct AppDataExportArgs {
+    pub package: String,
+    /// Explicit destination archive. Omit to use the managed artifacts/export
+    /// default, which is outside the project's source tree.
+    pub path: Option<PathBuf>,
+    /// Named equivalent of the positional destination path.
+    #[arg(long = "output", conflicts_with = "path")]
+    pub output: Option<PathBuf>,
+    /// Allow an explicit destination inside the project root.
+    #[arg(long = "allow-in-project")]
+    pub allow_in_project: bool,
+    /// Replace an existing destination archive instead of refusing it.
+    #[arg(long)]
+    pub overwrite: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ApkCommand {
     Inspect {
@@ -1050,6 +1243,53 @@ pub struct ApkVerifyArgs {
     pub expected_package: Option<String>,
     #[arg(long)]
     pub min_version_code: Option<i64>,
+}
+
+/// Arguments for `androidforge build`.
+///
+/// Build alone is host-side: it resolves a configured argv from
+/// `[build.commands.<variant>]`, runs it with a bounded capture and a timeout,
+/// then resolves the produced APK with the same deterministic logic as
+/// `apk resolve`. It needs no session and touches no device. The install/launch
+/// flags opt into the existing verified app paths and their physical gates.
+#[derive(Debug, Args)]
+pub struct BuildArgs {
+    /// Variant configured in [build.commands.<variant>]. Defaults to [build].default_variant.
+    #[arg(long)]
+    pub variant: Option<String>,
+    /// Restrict the produced APK to one module directory when several outputs match.
+    #[arg(long)]
+    pub module: Option<String>,
+    /// Override the build timeout, for example 20m or 300s.
+    #[arg(long)]
+    pub timeout: Option<String>,
+    /// Require the built APK to declare this exact package identity.
+    #[arg(long = "expected-package")]
+    pub expected_package: Option<String>,
+    /// Install the built APK through the verified `app install` path.
+    #[arg(long)]
+    pub install: bool,
+    /// Launch after installing. Implies --install.
+    #[arg(long)]
+    pub launch: bool,
+    /// Force-stop then launch with a verified new PID. Implies --launch.
+    #[arg(long)]
+    pub cold: bool,
+    /// Skip installation when the installed build is byte-equivalent.
+    #[arg(long = "only-if-changed")]
+    pub only_if_changed: bool,
+    /// Uninstall before installing, deleting app data. Requires --yes.
+    #[arg(long)]
+    pub fresh: bool,
+    /// Allow installing an older version code.
+    #[arg(long)]
+    pub downgrade: bool,
+    /// Skip the post-install identity verification.
+    #[arg(long = "no-verify")]
+    pub no_verify: bool,
+    /// Launcher activity, for example .MainActivity. Requires --launch or --cold.
+    #[arg(long)]
+    pub activity: Option<String>,
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -1131,6 +1371,10 @@ pub enum UiCommand {
     #[command(alias = "w")]
     Wait(UiWaitArgs),
     Assert(UiWaitArgs),
+    /// Read the current bounds of a semantic UI element. Read-only.
+    Bounds(UiBoundsArgs),
+    /// Assert the bottom edge (`bottom_y`) of a semantic UI element. Read-only.
+    AssertBounds(UiAssertBoundsArgs),
     /// Assert that text is not present.
     AssertNoText(UiAssertNoTextArgs),
     /// Dismiss known SystemUI immersive/permission overlays with a safe allowlist.
@@ -1144,6 +1388,72 @@ pub enum UiCommand {
     Keyevent(UiKeyEventArgs),
     HideKeyboard,
     Focused,
+    /// Read-only accessibility and contrast audit of the current hierarchy.
+    Audit(UiAuditArgs),
+}
+
+/// Arguments for `ui audit`. The only audit today is `a11y`; keeping it nested
+/// leaves room for other read-only audits without a breaking command rename.
+#[derive(Debug, Args)]
+pub struct UiAuditArgs {
+    #[command(subcommand)]
+    pub command: UiAuditCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UiAuditCommand {
+    /// Audit the hierarchy for structural accessibility issues and, optionally,
+    /// WCAG contrast of text against sampled screenshot backgrounds. Read-only.
+    A11y(UiAuditA11yArgs),
+}
+
+/// Arguments for `ui audit a11y`. Every option maps directly onto
+/// `androidforge_ui::a11y::A11yOptions`; omitted numeric values keep the core
+/// defaults. No command in this group injects input or mutates the device.
+#[derive(Debug, Args)]
+pub struct UiAuditA11yArgs {
+    /// Skip the missing content-description rule.
+    #[arg(long = "no-content-descriptions")]
+    pub no_content_descriptions: bool,
+    /// Skip the tiny touch-target rule.
+    #[arg(long = "no-touch-targets")]
+    pub no_touch_targets: bool,
+    /// Skip the duplicate accessible-label rule.
+    #[arg(long = "no-duplicate-labels")]
+    pub no_duplicate_labels: bool,
+    /// Minimum touch target in dp (core default: 48).
+    #[arg(long)]
+    pub min_touch_target_dp: Option<f64>,
+    /// Device density in px per dp; bounds are device pixels (default: 1.0).
+    #[arg(long)]
+    pub density: Option<f64>,
+    /// WCAG ratio required for normal text (default: 4.5).
+    #[arg(long)]
+    pub min_contrast_ratio: Option<f64>,
+    /// WCAG ratio required for large text (default: 3.0).
+    #[arg(long)]
+    pub large_text_contrast_ratio: Option<f64>,
+    /// Text size in sp at which the large-text ratio applies (default: 24).
+    #[arg(long)]
+    pub large_text_min_sp: Option<f64>,
+    /// Maximum findings returned (core default: 200).
+    #[arg(long)]
+    pub max_findings: Option<usize>,
+    /// Maximum visible nodes examined (core default: 5000).
+    #[arg(long)]
+    pub max_nodes: Option<usize>,
+    /// Also capture a screenshot and merge per-node region contrast findings.
+    #[arg(long)]
+    pub contrast: bool,
+    /// Text colour used for contrast sampling, in #RRGGBB form. Requires --contrast.
+    #[arg(long, required_if_eq("contrast", "true"))]
+    pub text_rgb: Option<String>,
+    /// Apply the large-text contrast exception to sampled text.
+    #[arg(long = "large-text", requires = "contrast")]
+    pub large_text: bool,
+    /// Screenshot timeout when --contrast is used, for example 10s.
+    #[arg(long)]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1151,6 +1461,9 @@ pub struct UiObserveArgs {
     /// Return the complete parsed hierarchy in addition to the compact view.
     #[arg(long)]
     pub full: bool,
+    /// Include a bounded semantic view with Compose test tags and derived roles.
+    #[arg(long)]
+    pub semantics: bool,
     /// Bounded retries for transient read failures (0-5). This command is read-only.
     #[arg(long, default_value_t = 0)]
     pub retries: u32,
@@ -1339,11 +1652,43 @@ pub struct UiWaitArgs {
     /// Wait until the hierarchy stays unchanged for --stable-for.
     #[arg(long = "for-stable")]
     pub for_stable: bool,
-    /// Stability window for --for-stable (default 2s).
+    /// Wait until the selected element's bounds stay unchanged for --stable-for. Requires a selector.
+    #[arg(long = "for-bounds-stable")]
+    pub for_bounds_stable: bool,
+    /// Stability window for --for-stable and --for-bounds-stable (default 2s).
     #[arg(long = "stable-for")]
     pub stable_for: Option<String>,
     #[arg(long)]
     pub timeout: Option<String>,
+}
+
+/// Arguments for `ui bounds`: one semantic selector, one hierarchy read,
+/// eight integer bounds fields. Read-only; never gated by physical consent.
+#[derive(Debug, Args)]
+pub struct UiBoundsArgs {
+    #[command(flatten)]
+    pub selector: SelectorArgs,
+}
+
+/// Arguments for `ui assert-bounds`. Exactly one of `--bottom-y`,
+/// `--bottom-y-gt` or `--bottom-y-lt` must be supplied; they are mutually
+/// exclusive. All comparisons use `--tolerance` (default 0). Read-only.
+#[derive(Debug, Args)]
+pub struct UiAssertBoundsArgs {
+    #[command(flatten)]
+    pub selector: SelectorArgs,
+    /// Expected bottom edge (device pixels) for equality comparison.
+    #[arg(long = "bottom-y", conflicts_with_all = ["bottom_y_gt", "bottom_y_lt"])]
+    pub bottom_y: Option<i32>,
+    /// Assert bottom_y is greater than this value plus --tolerance.
+    #[arg(long = "bottom-y-gt", conflicts_with_all = ["bottom_y", "bottom_y_lt"])]
+    pub bottom_y_gt: Option<i32>,
+    /// Assert bottom_y is less than this value minus --tolerance.
+    #[arg(long = "bottom-y-lt", conflicts_with_all = ["bottom_y", "bottom_y_gt"])]
+    pub bottom_y_lt: Option<i32>,
+    /// Dead-band in device pixels applied to every comparison (default 0).
+    #[arg(long, default_value_t = 0)]
+    pub tolerance: i32,
 }
 
 #[derive(Debug, Args)]
@@ -1413,10 +1758,109 @@ pub enum CaptureCommand {
     Screenshot(CaptureScreenshotArgs),
     /// Capture a single preview frame without creating a run or artifact.
     Frame(CaptureFrameArgs),
+    /// Sample launch frames, detect the first app frame and optionally assert its colour.
+    Launch(CaptureLaunchArgs),
+    /// Assert the colour of a fresh, host-only screenshot.
+    AssertColor(CaptureAssertColorArgs),
+    /// Save, update, compare and list named screenshot baselines. All store
+    /// operations are host-side; capturing a fresh screenshot is read-only.
+    Baseline {
+        #[command(subcommand)]
+        command: BaselineCommand,
+    },
+    /// Check WCAG contrast of a fresh, host-only screenshot region. Read-only.
+    Contrast(CaptureContrastArgs),
     Record {
         #[command(subcommand)]
         command: RecordCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BaselineCommand {
+    /// Save a new named baseline. Refuses to overwrite an existing name.
+    Save(BaselineSaveArgs),
+    /// Replace an existing named baseline deliberately.
+    Update(BaselineSaveArgs),
+    /// Compare a fresh screenshot with a saved baseline.
+    Compare(BaselineCompareArgs),
+    /// List saved baseline metadata without touching the device.
+    List,
+}
+
+#[derive(Debug, Args)]
+pub struct BaselineSaveArgs {
+    /// Validated baseline name: 1-64 ASCII letters/digits/'.'/'_'/'-'.
+    #[arg(long)]
+    pub name: String,
+    /// Use this local PNG instead of capturing a fresh screenshot.
+    #[arg(long)]
+    pub source: Option<PathBuf>,
+    /// Also copy the saved PNG to this local path.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    /// Screenshot capture timeout when --source is absent.
+    #[arg(long)]
+    pub timeout: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct BaselineCompareArgs {
+    /// Saved baseline name to compare against.
+    #[arg(long)]
+    pub name: String,
+    /// Use this local PNG instead of capturing a fresh screenshot.
+    #[arg(long)]
+    pub current: Option<PathBuf>,
+    /// Device-pixel region x1,y1,x2,y2 for comparison.
+    #[arg(long)]
+    pub region: Option<String>,
+    /// Maximum changed-pixel ratio that still passes (0.0 = exact).
+    #[arg(long = "max-diff-ratio", default_value_t = 0.0)]
+    pub max_diff_ratio: f64,
+    /// Per-channel tolerance treated as unchanged (0-255).
+    #[arg(long = "diff-threshold", default_value_t = 0)]
+    pub diff_threshold: u8,
+    /// Optional path for the diff visualization PNG.
+    #[arg(long = "diff-output")]
+    pub diff_output: Option<PathBuf>,
+    /// Also copy the captured PNG to this local path.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    /// Screenshot capture timeout when --current is absent.
+    #[arg(long)]
+    pub timeout: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CaptureContrastArgs {
+    /// Text/foreground colour in #RRGGBB form.
+    #[arg(long)]
+    pub rgb: String,
+    /// Sample a single device pixel at x,y instead of a region.
+    #[arg(long, conflicts_with = "region")]
+    pub at: Option<String>,
+    /// Device-pixel background region x,y,w,h.
+    #[arg(long, conflicts_with = "at")]
+    pub region: Option<String>,
+    /// Use the most frequent colour in the region instead of its average.
+    #[arg(long)]
+    pub majority: bool,
+    /// WCAG ratio threshold (default: 4.5, or 3.0 with --large-text).
+    #[arg(long)]
+    pub threshold: Option<f64>,
+    /// Apply the WCAG large-text 3:1 exception.
+    #[arg(long = "large-text")]
+    pub large_text: bool,
+    /// Optional label recorded in a failed contrast finding.
+    #[arg(long)]
+    pub label: Option<String>,
+    /// Use a local PNG instead of capturing a fresh screenshot.
+    #[arg(long)]
+    pub source: Option<PathBuf>,
+    /// Screenshot capture timeout when --source is absent.
+    #[arg(long)]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1453,6 +1897,61 @@ pub struct CaptureFrameArgs {
     pub timeout: Option<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct CaptureLaunchArgs {
+    /// Package whose focus marks the first app frame. Launched by this command.
+    pub package: String,
+    /// Launcher activity, for example .MainActivity.
+    #[arg(long)]
+    pub activity: Option<String>,
+    /// Requested samples per second (1-30, default 10).
+    #[arg(long)]
+    pub fps: Option<u32>,
+    /// Sampling window, for example 5s (100-30000 ms, default 5s).
+    #[arg(long)]
+    pub duration: Option<String>,
+    /// Fall back to `uiautomator dump /dev/tty` when focus does not match. No device file is created.
+    #[arg(long)]
+    pub ui_dump_package: bool,
+    /// Fail with E_UI_ASSERTION_FAILED when no first app frame is observed.
+    #[arg(long)]
+    pub expect_first_frame: bool,
+    /// Fail with E_UI_ASSERTION_FAILED when the first app frame is blank white or black.
+    #[arg(long)]
+    pub no_splash: bool,
+    /// Expected #RRGGBB colour of the first app frame.
+    #[arg(long = "expected-color")]
+    pub expected_color: Option<String>,
+    /// Which colour to check against --expected-color.
+    #[arg(long = "color-sample", value_parser = ["centre", "dominant"])]
+    pub color_sample: Option<String>,
+    /// Per-channel tolerance for --expected-color (0-255, default 16).
+    #[arg(long)]
+    pub tolerance: Option<u8>,
+}
+
+#[derive(Debug, Args)]
+pub struct CaptureAssertColorArgs {
+    /// Expected opaque colour in #RRGGBB form.
+    #[arg(long)]
+    pub rgb: String,
+    /// Sample a single device pixel at x,y instead of the image centre.
+    #[arg(long, conflicts_with = "region")]
+    pub at: Option<String>,
+    /// Device-pixel region x,y,w,h to sample.
+    #[arg(long, conflicts_with = "at")]
+    pub region: Option<String>,
+    /// Use the most frequent colour in the sampled region instead of its average.
+    #[arg(long)]
+    pub majority: bool,
+    /// Per-channel tolerance (0-255, default 16).
+    #[arg(long)]
+    pub tolerance: Option<u8>,
+    /// Screenshot capture timeout, for example 10s.
+    #[arg(long)]
+    pub timeout: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum RecordCommand {
     Start(RecordStartArgs),
@@ -1472,6 +1971,52 @@ pub struct RecordStartArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum ArtifactsCommand {
+    /// Scan stored artifact text for suspected secrets without printing their values.
+    ScanSecrets(ArtifactsScanSecretsArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ArtifactsScanSecretsArgs {
+    /// Scan this directory directly instead of the project's `.artifacts` store.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceShellArgs {
+    /// Require every command prefix to match an allowlist and no deny prefix. No physical grant is needed.
+    #[arg(long)]
+    pub read_only: bool,
+    /// Additional read-only command prefix. Repeatable; replaces the conservative default list when present.
+    #[arg(long)]
+    pub allow: Vec<String>,
+    /// Refuse a command whose tokens start with (or contain) this prefix. Repeatable.
+    #[arg(long)]
+    pub deny: Vec<String>,
+    /// Per-command timeout, for example 30s.
+    #[arg(long)]
+    pub timeout: Option<String>,
+    /// Exact remote argv. Everything after `--` is passed to `adb shell` as separate, quoted arguments.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeviceInputCommand {
+    /// Tap exact device-pixel coordinates through `UiManager::tap_xy`.
+    Tap(DeviceInputTapArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceInputTapArgs {
+    /// Device-pixel X coordinate.
+    pub x: i32,
+    /// Device-pixel Y coordinate.
+    pub y: i32,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum DiagnosticsCommand {
     Collect(DiagnosticsCollectArgs),
     App {
@@ -1488,6 +2033,35 @@ pub enum DiagnosticsCommand {
     /// Measure startup, jank, memory and CPU explicitly.
     #[command(alias = "perf")]
     Performance(DiagnosticsPerformanceArgs),
+    /// Parse frame timing from `dumpsys gfxinfo` and write frames/report.json.
+    Frames(DiagnosticsFramesArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DiagnosticsFramesArgs {
+    /// Package whose gfxinfo frame counters are collected.
+    pub package: String,
+    /// Reset gfxinfo counters with `dumpsys gfxinfo <package> reset` first.
+    #[arg(long)]
+    pub reset: bool,
+    /// Explicit sampling window to wait before collection, for example 5s.
+    #[arg(long)]
+    pub duration: Option<String>,
+    /// Per-command timeout, for example 30s.
+    #[arg(long)]
+    pub timeout: Option<String>,
+    /// Baseline frames/report.json to compare against.
+    #[arg(long)]
+    pub baseline: Option<PathBuf>,
+    /// Allowed increase in jank percentage points before a regression (default 0).
+    #[arg(long)]
+    pub max_janky: Option<f64>,
+    /// Allowed increase in the 99th percentile frame time in ms (default 0).
+    #[arg(long)]
+    pub max_p99: Option<f64>,
+    /// Allowed increase in the longest frame time in ms (default 0).
+    #[arg(long)]
+    pub max_frame_ms: Option<f64>,
 }
 
 #[derive(Debug, Args)]
@@ -1506,6 +2080,21 @@ pub struct DiagnosticsPerformanceArgs {
     /// Per-command timeout, for example 30s.
     #[arg(long)]
     pub timeout: Option<String>,
+    /// Wake the screen before measuring. Explicit opt-in only; never implicit.
+    #[arg(long)]
+    pub wake: bool,
+    /// Skip the screen-on preflight. Only use when a sleeping display is acceptable evidence.
+    #[arg(long)]
+    pub no_screen_check: bool,
+    /// Minimum rendered frames before a jank percentage is reported.
+    #[arg(long, default_value_t = androidforge_diagnostics::DEFAULT_MIN_FRAMES)]
+    pub min_frames: u64,
+    /// Sample frames for this duration after launch, for example 5s.
+    #[arg(long)]
+    pub frame_window: Option<String>,
+    /// Additional warmup before frame sampling, for example 2s.
+    #[arg(long)]
+    pub warmup: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1534,6 +2123,9 @@ pub enum LogcatCommand {
 
 #[derive(Debug, Args)]
 pub struct LogcatQueryArgs {
+    /// Literal token prefixes to redact everywhere before output or storage. Repeatable or comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub redact_patterns: Vec<String>,
     /// Bounded retries for transient read failures (0-5).
     #[arg(long, default_value_t = 0)]
     pub retries: u32,
@@ -1560,6 +2152,9 @@ pub struct LogcatQueryArgs {
 
 #[derive(Debug, Args)]
 pub struct LogcatWatchArgs {
+    /// Literal token prefixes to redact before each NDJSON record is emitted. Repeatable or comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub redact_patterns: Vec<String>,
     /// Keep the package's process logs plus lines that mention the package name.
     /// Package PIDs are sampled at the start of the watch; if the app restarts
     /// mid-stream, only lines mentioning the package name are guaranteed to
@@ -1585,6 +2180,9 @@ pub struct LogcatWatchArgs {
 
 #[derive(Debug, Args)]
 pub struct LogcatTailArgs {
+    /// Literal token prefixes to redact before printing, emitting or storing. Repeatable or comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub redact_patterns: Vec<String>,
     /// Bounded retries for transient read failures (0-5). Logcat reads are read-only.
     #[arg(long, default_value_t = 0)]
     pub retries: u32,
@@ -1600,6 +2198,9 @@ pub struct LogcatTailArgs {
 
 #[derive(Debug, Args)]
 pub struct LogcatPeekArgs {
+    /// Literal token prefixes to redact before printing or emitting. Repeatable or comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub redact_patterns: Vec<String>,
     /// Bounded retries for transient read failures (0-5).
     #[arg(long, default_value_t = 0)]
     pub retries: u32,
@@ -1619,6 +2220,9 @@ pub struct LogcatPeekArgs {
 pub struct LogcatStartArgs {
     #[arg(long)]
     pub package: Option<String>,
+    /// Literal token prefixes persisted for `logcat stop` redaction. Repeatable or comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub redact_patterns: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1849,12 +2453,19 @@ pub struct NetworkReverseAddArgs {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)] // Serving carries the full bounded option set; listing is empty.
 pub enum NetworkMockCommand {
     Serve(NetworkMockServeArgs),
+    /// List the built-in, loopback-only network mock scenarios. Read-only.
+    Scenarios,
 }
 
 #[derive(Debug, Args)]
 pub struct NetworkMockServeArgs {
+    /// Built-in scenario to serve: newer-release, offline, bad-digest or no-APK.
+    /// Scenarios are loopback-only, bounded, redacted and host-only (no --reverse).
+    #[arg(long)]
+    pub scenario: Option<String>,
     /// Local port to listen on.
     #[arg(long, default_value_t = 8080)]
     pub port: u16,
@@ -1937,8 +2548,24 @@ pub enum HookCommand {
 #[derive(Debug, Subcommand)]
 pub enum FixtureCommand {
     List,
-    Validate { name: String },
+    Validate {
+        name: String,
+    },
     Run(FixtureRunArgs),
+    /// Apply only the declarative state block of a fixture (debug-only).
+    Apply(FixtureStateArgs),
+    /// Remove only the files created by a fixture's declarative state.
+    Reset(FixtureStateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FixtureStateArgs {
+    pub name: String,
+    /// Package whose app-private state is changed. Defaults to the project adapter package.
+    #[arg(long)]
+    pub package: Option<String>,
+    #[arg(long = "var")]
+    pub vars: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1961,6 +2588,32 @@ pub enum ConformanceCommand {
 pub struct ConformanceRunArgs {
     #[arg(long)]
     pub flow: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ScenarioCommand {
+    /// Execute an allowlisted scenario. Mutating steps need --yes plus the
+    /// scoped physical flags for the device risks the scenario exercises.
+    Run(ScenarioRunArgs),
+    /// Parse and validate a scenario manifest without touching a device.
+    Validate(ScenarioValidateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ScenarioRunArgs {
+    /// Scenario manifest path. `.json` (or a JSON object body) is parsed as
+    /// JSON; every other file is parsed as TOML.
+    pub file: PathBuf,
+    /// Override the manifest's repeat count for this run.
+    #[arg(long)]
+    pub repeat: Option<u32>,
+}
+
+#[derive(Debug, Args)]
+pub struct ScenarioValidateArgs {
+    /// Scenario manifest path. `.json` (or a JSON object body) is parsed as
+    /// JSON; every other file is parsed as TOML.
+    pub file: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2028,6 +2681,12 @@ pub struct RunEventsArgs {
 pub struct RunStartArgs {
     #[arg(long)]
     pub name: String,
+    /// Free-form label stored on the run report and metadata. Repeat to attach several labels.
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    /// KEY=VALUE metadata stored on the run. Secret-looking keys are rejected. Repeatable.
+    #[arg(long = "meta")]
+    pub meta: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -2070,6 +2729,10 @@ pub struct MaintenanceCleanArgs {
     pub older_than: Option<String>,
     #[arg(long)]
     pub keep_last: Option<usize>,
+    /// Protect runs carrying any of these tags from retention. Repeatable;
+    /// OR semantics. Using this flag without `--yes` forces a dry run.
+    #[arg(long = "keep-tag")]
+    pub keep_tag: Vec<String>,
     /// Include released/failed/abandoned session tombstones.
     #[arg(long)]
     pub sessions: bool,
@@ -2086,6 +2749,12 @@ pub enum ReportCommand {
         /// Include runs from the current directory and ancestor project artifact stores.
         #[arg(long)]
         all: bool,
+        /// Only list runs carrying every one of these tags. Repeatable.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Only list runs started at or after this RFC3339 timestamp or duration ago.
+        #[arg(long)]
+        since: Option<String>,
     },
     Show {
         run: String,
@@ -2148,6 +2817,36 @@ pub struct ReportCompareArgs {
     pub run: String,
     #[arg(long)]
     pub baseline: Option<String>,
+    /// Baseline runs must carry every one of these tags. Repeatable.
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    /// Baseline runs must have started at or after this RFC3339 timestamp or duration ago.
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Fail with E_PERFORMANCE_REGRESSION (exit 11) when a budget check fails.
+    #[arg(long)]
+    pub fail_on_regression: bool,
+    /// Full PerformanceBudget as a JSON object; supports absolute, delta and named-metric thresholds.
+    #[arg(long = "budget")]
+    pub budget: Option<String>,
+    /// Convenience threshold: maximum current startup time in milliseconds.
+    #[arg(long = "max-startup-ms")]
+    pub max_startup_ms: Option<f64>,
+    /// Convenience threshold: maximum jank percentage.
+    #[arg(long = "max-jank-percent")]
+    pub max_jank_percent: Option<f64>,
+    /// Convenience threshold: maximum p99 frame time in milliseconds.
+    #[arg(long = "max-p99-ms")]
+    pub max_p99_ms: Option<f64>,
+    /// Convenience threshold: maximum longest frame time in milliseconds.
+    #[arg(long = "max-frame-ms")]
+    pub max_frame_ms: Option<f64>,
+    /// Convenience threshold: maximum APK size in bytes.
+    #[arg(long = "max-apk-size-bytes")]
+    pub max_apk_size_bytes: Option<f64>,
+    /// Convenience threshold: maximum number of failed tests.
+    #[arg(long = "max-failed-tests")]
+    pub max_failed_tests: Option<f64>,
 }
 
 #[derive(Debug, Args)]
@@ -2161,6 +2860,12 @@ pub struct ReportExplainArgs {
     /// Emit a human-readable Markdown explanation instead of JSON.
     #[arg(long)]
     pub markdown: bool,
+    /// `latest`/`latest-failure` must carry every one of these tags. Repeatable.
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    /// `latest`/`latest-failure` must have started at or after this RFC3339 timestamp or duration ago.
+    #[arg(long)]
+    pub since: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -2234,6 +2939,15 @@ pub struct ReportBundleArgs {
     /// Maximum uncompressed payload size in bytes.
     #[arg(long, default_value_t = 26_214_400)]
     pub max_bytes: u64,
+    /// Force text redaction even when configured redaction is disabled, then refuse any bundle with a remaining suspected secret.
+    #[arg(long)]
+    pub redact_secrets: bool,
+    /// `latest`/`latest-failure` must carry every one of these tags. Repeatable.
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    /// `latest`/`latest-failure` must have started at or after this RFC3339 timestamp or duration ago.
+    #[arg(long)]
+    pub since: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

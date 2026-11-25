@@ -97,16 +97,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "tools catalog failed" }
           if ($catalog.PSObject.Properties.Name -contains 'result') { $catalog = $catalog.result }
           $commands = @($catalog.commands).Count
-          if ($commands -ne 191) { throw "CLI catalog has $commands commands, expected 191" }
+          if ($commands -ne 219) { throw "CLI catalog has $commands commands, expected 219" }
 
           $tools = & $cli tools schema --format mcp --json | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw "tools schema failed" }
           if ($tools.PSObject.Properties.Name -contains 'result') { $tools = $tools.result }
           $toolCount = @($tools.tools).Count
-          if ($toolCount -ne 192) { throw "MCP schema has $toolCount tools, expected 192" }
+          if ($toolCount -ne 221) { throw "MCP schema has $toolCount tools, expected 221" }
 
           $schemas = @(Get-ChildItem schema -Filter *.json).Count
-          if ($schemas -ne 31) { throw "schema/ has $schemas JSON files, expected 31" }
+          if ($schemas -ne 38) { throw "schema/ has $schemas JSON files, expected 38" }
           Write-Host "Catalog drift check passed: $commands commands, $toolCount tools, $schemas schemas"
 
       - name: Package portable ZIP, installer and checksums

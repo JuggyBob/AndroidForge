@@ -8,7 +8,8 @@ use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::paths::ForgePaths;
 use androidforge_core::toolchain::Toolchain;
-use androidforge_core::util::{is_dir_writable, now_rfc3339};
+use androidforge_core::util::{format_bytes, is_dir_writable, now_rfc3339};
+use androidforge_emulator::{AvdInfo, CapacitySnapshot};
 use androidforge_process::{CommandSpec, Runner};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -387,6 +388,60 @@ pub async fn doctor(cli: &Cli) -> Result<CommandSuccess> {
         success.exit_code = 3;
     }
     Ok(success)
+}
+
+/// `doctor --capacity`: read-only host RAM/commit/disk report plus conservative
+/// per-AVD commit estimates. Every unavailable numeric reading stays `null`
+/// with a source and an explicit reason; nothing is fabricated as zero.
+pub async fn capacity(cli: &Cli) -> Result<CommandSuccess> {
+    let paths = ForgePaths::discover(None, cli.project.clone())?;
+    let config = match ForgeConfig::load(&paths) {
+        Ok(mut config) => {
+            let adjusted = paths.with_artifact_dir(&config.artifact_dir);
+            config.paths = adjusted;
+            config
+        }
+        Err(_) => {
+            let paths = paths.with_artifact_dir(&paths.project_root.join(".artifacts"));
+            ForgeConfig {
+                artifact_dir: paths.artifacts_dir.clone(),
+                paths,
+                file: ForgeConfigFile::default(),
+                warnings: Vec::new(),
+            }
+        }
+    };
+    let host = host_capacity(&config.artifact_dir);
+    let toolchain = Toolchain::discover(&config);
+    let (avds, avd_inventory_error) =
+        match androidforge_emulator::list_avds(&toolchain, cli.trace).await {
+            Ok(avds) => (avds, None),
+            Err(error) => (Vec::new(), Some(error.message().to_string())),
+        };
+    let estimates = estimate_avd_capacities(&avds, &host);
+    let mut notes = host.notes.clone();
+    if let Some(error) = &avd_inventory_error {
+        notes.push(format!("AVD inventory unavailable: {error}"));
+    }
+    notes.push(
+        "Capacity readings are advisory; unknown values suppress warnings rather than assuming safety."
+            .to_string(),
+    );
+    let result = serde_json::json!({
+        "schema_version": 1,
+        "status": if host.commit_available.value_bytes.is_none() || host.physical_available.value_bytes.is_none() { "partial" } else { "ok" },
+        "read_only": true,
+        "host": host,
+        "avds": avds,
+        "estimates": estimates,
+        "avd_inventory_error": avd_inventory_error,
+        "notes": notes,
+    });
+    Ok(success(
+        "doctor.capacity",
+        result,
+        capacity_summary(&host, &estimates),
+    ))
 }
 
 fn enrich_check(check: &Check) -> CheckView {
@@ -1702,6 +1757,34 @@ pub(crate) fn schema_files() -> Vec<(&'static str, &'static str)> {
             "wireless.schema.json",
             include_str!("../../../../schema/wireless.schema.json"),
         ),
+        (
+            "frames.schema.json",
+            include_str!("../../../../schema/frames.schema.json"),
+        ),
+        (
+            "capture-launch.schema.json",
+            include_str!("../../../../schema/capture-launch.schema.json"),
+        ),
+        (
+            "network-mock-scenario.schema.json",
+            include_str!("../../../../schema/network-mock-scenario.schema.json"),
+        ),
+        (
+            "visual-baseline.schema.json",
+            include_str!("../../../../schema/visual-baseline.schema.json"),
+        ),
+        (
+            "a11y.schema.json",
+            include_str!("../../../../schema/a11y.schema.json"),
+        ),
+        (
+            "scenario.schema.json",
+            include_str!("../../../../schema/scenario.schema.json"),
+        ),
+        (
+            "report.schema.json",
+            include_str!("../../../../schema/report.schema.json"),
+        ),
     ]
 }
 
@@ -1888,4 +1971,416 @@ pub async fn config(cli: &Cli, command: &ConfigCommand) -> Result<CommandSuccess
 #[allow(dead_code)]
 fn path_hint(path: Option<&Path>) -> Option<String> {
     path.map(|path| path.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// Capacity primitives for `doctor --capacity` (no CLI flag wiring in this
+// workstream). Unavailable numeric values are `null`, never zero.
+// ---------------------------------------------------------------------------
+
+/// One measured (or explicitly unavailable) host capacity value.
+// Public core API for the later CLI wiring wave; unused until then.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapacityReading {
+    pub value_bytes: Option<u64>,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+#[allow(dead_code)]
+impl CapacityReading {
+    pub fn measured(value_bytes: u64, source: impl Into<String>) -> Self {
+        Self {
+            value_bytes: Some(value_bytes),
+            source: source.into(),
+            unavailable_reason: None,
+        }
+    }
+
+    pub fn unknown(source: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            value_bytes: None,
+            source: source.into(),
+            unavailable_reason: Some(reason.into()),
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostCapacity {
+    pub os: String,
+    pub arch: String,
+    pub physical_total: CapacityReading,
+    pub physical_available: CapacityReading,
+    /// Commit limit: physical RAM plus configured pagefile.
+    pub commit_limit: CapacityReading,
+    /// Bytes the current host can still commit without extending the pagefile.
+    pub commit_available: CapacityReading,
+    pub disk_free: CapacityReading,
+    pub disk_path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[allow(dead_code)]
+impl HostCapacity {
+    /// Convert measured values into the emulator crate's conservative status
+    /// snapshot. Unknown readings stay `None`.
+    pub fn snapshot(&self) -> CapacitySnapshot {
+        CapacitySnapshot {
+            available_ram_bytes: self.physical_available.value_bytes,
+            available_commit_bytes: self.commit_available.value_bytes,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AvdCapacityEstimate {
+    pub avd: String,
+    pub configured_ram_mb: Option<u32>,
+    /// Configured AVD RAM as a lower bound of commit need; `None` if unknown.
+    pub estimated_commit_bytes: Option<u64>,
+    pub headroom_commit_bytes: Option<u64>,
+    /// No disk estimate is fabricated: AVD image/user-data size is not known
+    /// from `config.ini` alone.
+    pub estimated_disk_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+// The full Windows MEMORYSTATUSEX layout must be declared even though only
+// the RAM/commit fields are consumed here.
+#[cfg(windows)]
+#[allow(dead_code)]
+#[repr(C)]
+struct MemoryStatusEx {
+    dw_length: u32,
+    dw_memory_load: u32,
+    ull_total_phys: u64,
+    ull_avail_phys: u64,
+    ull_total_pagefile: u64,
+    ull_avail_pagefile: u64,
+    ull_total_virtual: u64,
+    ull_avail_virtual: u64,
+    ull_avail_extended_virtual: u64,
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(dead_code)]
+unsafe extern "system" {
+    fn GlobalMemoryStatusEx(lp_buffer: *mut MemoryStatusEx) -> i32;
+}
+
+#[cfg(windows)]
+#[allow(dead_code)]
+fn read_windows_memory() -> std::result::Result<MemoryStatusEx, String> {
+    let mut status: MemoryStatusEx = unsafe { std::mem::zeroed() };
+    status.dw_length = std::mem::size_of::<MemoryStatusEx>() as u32;
+    // SAFETY: `status` is a correctly initialised, correctly sized
+    // MEMORYSTATUSEX with dwLength set; the API only writes to this struct.
+    if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
+        return Err(format!(
+            "GlobalMemoryStatusEx failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(status)
+}
+
+/// Read host RAM/commit through the documented Windows `GlobalMemoryStatusEx`
+/// API and free disk space through the existing `fs2` helper. No new dependency
+/// is added, and every unavailable value carries a reason.
+#[allow(dead_code)]
+pub fn host_capacity(disk_path: &Path) -> HostCapacity {
+    const MEMORY_SOURCE: &str = "windows.GlobalMemoryStatusEx";
+    let os = std::env::consts::OS.to_string();
+    let arch = std::env::consts::ARCH.to_string();
+    let mut notes = vec![
+        "ullTotalPageFile is the host commit limit; ullAvailPageFile is available commit."
+            .to_string(),
+    ];
+    let (physical_total, physical_available, commit_limit, commit_available) = {
+        #[cfg(windows)]
+        {
+            match read_windows_memory() {
+                Ok(status) => (
+                    CapacityReading::measured(status.ull_total_phys, MEMORY_SOURCE),
+                    CapacityReading::measured(status.ull_avail_phys, MEMORY_SOURCE),
+                    CapacityReading::measured(status.ull_total_pagefile, MEMORY_SOURCE),
+                    CapacityReading::measured(status.ull_avail_pagefile, MEMORY_SOURCE),
+                ),
+                Err(reason) => (
+                    CapacityReading::unknown(MEMORY_SOURCE, reason.clone()),
+                    CapacityReading::unknown(MEMORY_SOURCE, reason.clone()),
+                    CapacityReading::unknown(MEMORY_SOURCE, reason.clone()),
+                    CapacityReading::unknown(MEMORY_SOURCE, reason),
+                ),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let reason = format!("GlobalMemoryStatusEx is a Windows API; host OS is {os}");
+            (
+                CapacityReading::unknown(MEMORY_SOURCE, reason.clone()),
+                CapacityReading::unknown(MEMORY_SOURCE, reason.clone()),
+                CapacityReading::unknown(MEMORY_SOURCE, reason.clone()),
+                CapacityReading::unknown(MEMORY_SOURCE, reason),
+            )
+        }
+    };
+    let disk_source = format!("fs2::available_space({})", disk_path.display());
+    let disk_free = match androidforge_core::util::available_space(disk_path) {
+        Ok(bytes) => CapacityReading::measured(bytes, disk_source),
+        Err(error) => CapacityReading::unknown(disk_source, error.to_string()),
+    };
+    if disk_free.value_bytes.is_none() {
+        notes.push("free disk space could not be measured; no value was assumed.".to_string());
+    }
+    HostCapacity {
+        os,
+        arch,
+        physical_total,
+        physical_available,
+        commit_limit,
+        commit_available,
+        disk_free,
+        disk_path: disk_path.to_string_lossy().into_owned(),
+        notes,
+    }
+}
+
+/// Conservative per-AVD capacity estimate from known values only.
+#[allow(dead_code)]
+pub fn estimate_avd_capacity(avd: &AvdInfo, host: &HostCapacity) -> AvdCapacityEstimate {
+    let estimated_commit_bytes = avd
+        .ram_mb
+        .map(|mb| u64::from(mb).saturating_mul(1024 * 1024));
+    let headroom_commit_bytes = match (estimated_commit_bytes, host.commit_available.value_bytes) {
+        (Some(estimate), Some(available)) => available.checked_sub(estimate),
+        _ => None,
+    };
+    let mut notes = Vec::new();
+    match avd.ram_mb {
+        Some(_) => notes.push(
+            "Configured AVD RAM is a lower bound; emulator process and guest overhead are not included."
+                .to_string(),
+        ),
+        None => notes.push(
+            "AVD RAM is not configured in this AVD; no commit estimate was fabricated.".to_string(),
+        ),
+    }
+    notes.push(
+        "AVD image/user-data size is not measured; no disk estimate was fabricated.".to_string(),
+    );
+    AvdCapacityEstimate {
+        avd: avd.name.clone(),
+        configured_ram_mb: avd.ram_mb,
+        estimated_commit_bytes,
+        headroom_commit_bytes,
+        estimated_disk_bytes: None,
+        warning: androidforge_emulator::capacity_warning(avd.ram_mb, Some(&host.snapshot())),
+        notes,
+    }
+}
+
+#[allow(dead_code)]
+pub fn estimate_avd_capacities(avds: &[AvdInfo], host: &HostCapacity) -> Vec<AvdCapacityEstimate> {
+    avds.iter()
+        .map(|avd| estimate_avd_capacity(avd, host))
+        .collect()
+}
+
+#[allow(dead_code)]
+pub fn format_capacity(reading: &CapacityReading) -> String {
+    match reading.value_bytes {
+        Some(bytes) => format!("{} [{}]", format_bytes(bytes), reading.source),
+        None => format!(
+            "unknown [{}: {}]",
+            reading.source,
+            reading
+                .unavailable_reason
+                .clone()
+                .unwrap_or_else(|| "no reason recorded".to_string())
+        ),
+    }
+}
+
+#[allow(dead_code)]
+pub fn capacity_summary(host: &HostCapacity, estimates: &[AvdCapacityEstimate]) -> String {
+    let mut human = String::new();
+    human.push_str(&format!("Host capacity ({} {}):\n", host.os, host.arch));
+    for (name, reading) in [
+        ("physical_total", &host.physical_total),
+        ("physical_available", &host.physical_available),
+        ("commit_limit", &host.commit_limit),
+        ("commit_available", &host.commit_available),
+        ("disk_free", &host.disk_free),
+    ] {
+        human.push_str(&format!("  {name}: {}\n", format_capacity(reading)));
+    }
+    if estimates.is_empty() {
+        human.push_str("AVD estimates: none\n");
+    } else {
+        human.push_str("AVD estimates:\n");
+        for estimate in estimates {
+            let commit = estimate
+                .estimated_commit_bytes
+                .map(format_bytes)
+                .unwrap_or_else(|| "unknown".to_string());
+            human.push_str(&format!(
+                "  {}: ram={} estimated_commit={}{}\n",
+                estimate.avd,
+                estimate
+                    .configured_ram_mb
+                    .map(|mb| format!("{mb} MiB"))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                commit,
+                estimate
+                    .warning
+                    .as_ref()
+                    .map(|warning| format!(" warning={warning}"))
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    human
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    fn measured(bytes: u64) -> CapacityReading {
+        CapacityReading::measured(bytes, "test")
+    }
+
+    fn host_with(available_commit: Option<u64>, available_ram: Option<u64>) -> HostCapacity {
+        let reading = |value: Option<u64>| match value {
+            Some(bytes) => measured(bytes),
+            None => CapacityReading::unknown("test", "not available"),
+        };
+        HostCapacity {
+            os: "test".to_string(),
+            arch: "test64".to_string(),
+            physical_total: measured(16 * 1024 * 1024 * 1024),
+            physical_available: reading(available_ram),
+            commit_limit: measured(32 * 1024 * 1024 * 1024),
+            commit_available: reading(available_commit),
+            disk_free: reading(Some(10 * 1024 * 1024 * 1024)),
+            disk_path: "C:\\artifacts".to_string(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn avd(ram_mb: Option<u32>) -> AvdInfo {
+        AvdInfo {
+            name: "Pixel_7".to_string(),
+            path: None,
+            target: None,
+            abi: None,
+            device: None,
+            tag: None,
+            ram_mb,
+        }
+    }
+
+    #[test]
+    fn formats_known_and_unknown_capacity() {
+        assert!(format_capacity(&measured(1024)).starts_with("1.0 KiB"));
+        let unknown = CapacityReading::unknown("test", "API unavailable");
+        assert_eq!(format_capacity(&unknown), "unknown [test: API unavailable]");
+        let json = serde_json::to_value(&unknown).unwrap();
+        assert!(json.get("value_bytes").unwrap().is_null());
+    }
+
+    #[test]
+    fn estimates_use_configured_ram_only() {
+        let host = host_with(Some(64 * 1024 * 1024 * 1024), Some(32 * 1024 * 1024 * 1024));
+        let estimate = estimate_avd_capacity(&avd(Some(2048)), &host);
+        assert_eq!(
+            estimate.estimated_commit_bytes,
+            Some(2 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            estimate.headroom_commit_bytes,
+            Some(62 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(estimate.estimated_disk_bytes, None);
+        assert_eq!(estimate.warning, None);
+        assert!(
+            estimate
+                .notes
+                .iter()
+                .any(|note| note.contains("lower bound"))
+        );
+    }
+
+    #[test]
+    fn unknown_capacity_or_ram_produces_no_estimate_or_warning() {
+        let unknown_host = host_with(None, None);
+        assert!(unknown_host.snapshot().is_unknown());
+        let estimate = estimate_avd_capacity(&avd(Some(4096)), &unknown_host);
+        assert_eq!(
+            estimate.estimated_commit_bytes,
+            Some(4 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(estimate.headroom_commit_bytes, None);
+        assert_eq!(estimate.warning, None);
+        let no_ram = estimate_avd_capacity(&avd(None), &host_with(Some(1), Some(1)));
+        assert_eq!(no_ram.estimated_commit_bytes, None);
+        assert_eq!(no_ram.headroom_commit_bytes, None);
+        assert!(no_ram.notes.iter().any(|note| note.contains("fabricated")));
+    }
+
+    #[test]
+    fn summary_reports_unknown_and_warning_explicitly() {
+        let mut host = host_with(Some(512 * 1024 * 1024), Some(512 * 1024 * 1024));
+        host.physical_available = CapacityReading::unknown("test", "not available");
+        let estimate = estimate_avd_capacity(&avd(Some(4096)), &host);
+        let summary = capacity_summary(&host, &[estimate]);
+        assert!(summary.contains("unknown [test: not available]"));
+        assert!(summary.contains("exceeds available commit"));
+        let empty = capacity_summary(&host, &[]);
+        assert!(empty.contains("AVD estimates: none"));
+    }
+
+    #[test]
+    fn host_capacity_has_explicit_sources_and_unknown_reasons() {
+        let host = host_capacity(&std::env::temp_dir());
+        assert_eq!(host.os, std::env::consts::OS);
+        assert!(!host.physical_total.source.is_empty());
+        assert!(!host.commit_available.source.is_empty());
+        assert!(!host.disk_free.source.is_empty());
+        assert_eq!(
+            host.snapshot().available_ram_bytes,
+            host.physical_available.value_bytes
+        );
+        assert_eq!(
+            host.snapshot().available_commit_bytes,
+            host.commit_available.value_bytes
+        );
+        let json = serde_json::to_value(&host).unwrap();
+        for field in [
+            "physical_total",
+            "physical_available",
+            "commit_limit",
+            "commit_available",
+            "disk_free",
+        ] {
+            let reading = &json[field];
+            if reading["value_bytes"].is_null() {
+                assert!(
+                    reading.get("unavailable_reason").is_some(),
+                    "{field} must explain why it is unknown"
+                );
+            }
+        }
+    }
 }

@@ -542,6 +542,32 @@ pub fn tool_definitions() -> Vec<Value> {
         schema(json!({}), &[]),
     ));
     tools.push(tool(
+        "androidforge_doctor_capacity",
+        "Report conservative host RAM/commit/disk capacity and per-AVD commit estimates. Unknown values stay null/unknown with a reason. Read-only.",
+        schema(
+            json!({
+                "project": {"type": "string", "description": "Project directory containing .androidforge/project.toml."},
+                "output_profile": {"enum": ["full", "compact", "brief"]},
+            }),
+            &[],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_build",
+        "Run the configured host build command for a variant and resolve the produced APK. Host-only: bounded local log capture, no session or device access. Install/launch flags are deliberately omitted; use androidforge_app_install / androidforge_app_launch, which keep their physical-device gates.",
+        schema(
+            json!({
+                "project": {"type": "string", "description": "Project directory containing .androidforge/project.toml."},
+                "variant": {"type": "string", "description": "Variant in [build.commands.<variant>]. Defaults to [build].default_variant."},
+                "module": {"type": "string", "description": "Restrict APK resolution to one module directory."},
+                "timeout": {"type": "string", "description": "Build timeout override, for example 20m."},
+                "expected_package": {"type": "string", "description": "Require the built APK to declare this package."},
+                "dry_run": {"type": "boolean", "description": "Plan without executing the build or writing artifacts."},
+            }),
+            &[],
+        ),
+    ));
+    tools.push(tool(
         "androidforge_capabilities",
         "Return the implemented, best-effort and unsupported capability matrix.",
         schema(json!({}), &[]),
@@ -591,6 +617,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "project": {"type": "string"},
                 "package": {"type": "string"},
                 "full": {"type": "boolean"},
+                "semantics": {"type": "boolean"},
                 "retries": {"type": "integer", "minimum": 0, "maximum": 5},
             }),
             &["session"],
@@ -600,6 +627,24 @@ pub fn tool_definitions() -> Vec<Value> {
         "androidforge_ui_find",
         "Find UI nodes with selectors, relative bounds, regex/role matching or OCR fallback.",
         common_selector(&["session"]),
+    ));
+    tools.push(tool(
+        "androidforge_ui_bounds",
+        "Read the eight bounds fields of one semantic UI element. Read-only; no physical gate.",
+        common_selector(&["session"]),
+    ));
+    tools.push(tool(
+        "androidforge_ui_assert_bounds",
+        "Assert bottom_y with eq/gt/lt and tolerance. Read-only; failures are E_UI_ASSERTION_FAILED with comparison context.",
+        merge_common_selector(
+            common_selector(&["session"]),
+            json!({
+                "bottom_y": {"type": "integer", "description": "Expected bottom edge for equality."},
+                "bottom_y_gt": {"type": "integer", "description": "Assert bottom_y is greater than this value plus tolerance."},
+                "bottom_y_lt": {"type": "integer", "description": "Assert bottom_y is less than this value minus tolerance."},
+                "tolerance": {"type": "integer", "minimum": 0, "default": 0, "description": "Dead-band in device pixels."},
+            }),
+        ),
     ));
     tools.push(tool(
         "androidforge_ui_tap",
@@ -678,12 +723,15 @@ pub fn tool_definitions() -> Vec<Value> {
     ));
     tools.push(tool(
         "androidforge_app_data",
-        "Export, import, reset or seed app-private data. Import/reset/seed require confirm=true.",
+        "Export, import, reset or seed app-private data. Export defaults to the managed artifacts/export destination; --output selects an explicit path (in-project and overwrite need explicit opt-in). Import/reset/seed require confirm=true.",
         schema(
             json!({
                 "action": {"type": "string", "enum": ["export", "import", "reset", "seed"]},
                 "package": {"type": "string"},
-                "path": {"type": "string"},
+                "path": {"type": "string", "description": "Legacy positional destination for export/import; use output for the named export form."},
+                "output": {"type": "string", "description": "Explicit export destination (--output). Conflicts with path."},
+                "allow_in_project": {"type": "boolean", "description": "Allow an explicit export destination inside the project root."},
+                "overwrite": {"type": "boolean", "description": "Replace an existing export destination instead of refusing it."},
                 "baseline": {"type": "string"},
                 "backup_current": {"type": "string"},
                 "file": {"type": "string"},
@@ -693,6 +741,23 @@ pub fn tool_definitions() -> Vec<Value> {
                 "project": {"type": "string"},
             }),
             &["action", "package", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_maintenance_clean",
+        "Prune old terminal sessions and run artifacts. Host-only and destructive: confirm=true is required to delete; keep_tag protects runs carrying any listed tag, and using it without confirm is a dry run. Running, active and protected runs are never deleted.",
+        schema(
+            json!({
+                "project": {"type": "string"},
+                "older_than": {"type": "string", "description": "Age threshold, for example 30d. Default 30d."},
+                "keep_last": {"type": "integer", "minimum": 0, "description": "Preserve the newest N runs. Default 10."},
+                "keep_tag": {"type": "array", "items": {"type": "string"}, "description": "Protect runs carrying any of these tags. Repeatable."},
+                "sessions": {"type": "boolean", "description": "Include terminal session tombstones."},
+                "runs": {"type": "boolean", "description": "Include terminal run directories."},
+                "dry_run": {"type": "boolean", "description": "Preview without deleting anything."},
+                "confirm": {"type": "boolean", "description": "Required to actually delete."},
+            }),
+            &[],
         ),
     ));
     tools.push(tool(
@@ -722,7 +787,7 @@ pub fn tool_definitions() -> Vec<Value> {
     ));
     tools.push(tool(
         "androidforge_ui_wait",
-        "Wait for a selector, for text to disappear, for an idle hierarchy, or for a stable hierarchy.",
+        "Wait for a selector, for text to disappear, for an idle hierarchy, for a stable hierarchy, or for stable element bounds.",
         merge_common_selector(
             common_selector(&["session"]),
             json!({
@@ -730,6 +795,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "for_text_gone": {"type": "array", "items": {"type": "string"}},
                 "for_idle": {"type": "boolean"},
                 "for_stable": {"type": "boolean"},
+                "for_bounds_stable": {"type": "boolean", "description": "Re-resolve the selector until its bounds stay unchanged for stable_for. Requires a semantic selector."},
                 "stable_for": {"type": "string"},
                 "timeout": {"type": "string"},
             }),
@@ -765,9 +831,10 @@ pub fn tool_definitions() -> Vec<Value> {
     ));
     tools.push(tool(
         "androidforge_network_mock_serve",
-        "Run a bounded local mock HTTP(S) server. Set max_requests or duration so the call returns.",
+        "Run a bounded local mock HTTP(S) server. Raw routes need max_requests or duration so the call returns; built-in scenarios carry their own bounds. Scenarios are loopback-only, redacted and host-only; --reverse is not allowed with them.",
         schema(
             json!({
+                "scenario": {"type": "string", "enum": ["newer-release", "offline", "bad-digest", "no-APK"], "description": "Built-in scenario name; routes and bounds come from its fixture."},
                 "port": {"type": "integer", "minimum": 1, "maximum": 65535},
                 "bind": {"type": "string"},
                 "routes_file": {"type": "string"},
@@ -783,8 +850,13 @@ pub fn tool_definitions() -> Vec<Value> {
                 "session": {"type": "string"},
                 "project": {"type": "string"},
             }),
-            &["route", "max_requests", "session"],
+            &[],
         ),
+    ));
+    tools.push(tool(
+        "androidforge_network_mock_scenarios",
+        "List built-in network mock scenarios with mode and fixture file. Read-only: no session, device or network change.",
+        schema(json!({}), &[]),
     ));
     tools.push(tool(
         "androidforge_session_list",
@@ -818,8 +890,74 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
     ));
     tools.push(tool(
+        "androidforge_diagnostics_frames",
+        "Collect gfxinfo frame timing into frames/report.json, with optional baseline thresholds. Read-only; exit 11 on a measured regression.",
+        schema(
+            json!({
+                "package": {"type": "string", "description": "Package whose gfxinfo counters are collected."},
+                "reset": {"type": "boolean", "description": "Reset gfxinfo counters before collecting."},
+                "duration": {"type": "string", "description": "Explicit sampling window, for example 5s."},
+                "timeout": {"type": "string", "description": "Per-command timeout, for example 30s."},
+                "baseline": {"type": "string", "description": "Baseline frames/report.json to compare against."},
+                "max_janky": {"type": "number", "minimum": 0, "description": "Allowed increase in jank percentage points."},
+                "max_p99": {"type": "number", "minimum": 0, "description": "Allowed increase in p99 frame time in ms."},
+                "max_frame_ms": {"type": "number", "minimum": 0, "description": "Allowed increase in max frame time in ms."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "serial": {"type": "string"},
+                "output_profile": {"enum": ["full", "compact", "brief"]},
+                "dry_run": {"type": "boolean"},
+            }),
+            &["package"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_capture_assert_color",
+        "Check the colour of a fresh, host-only screenshot against #RRGGBB. Read-only; mismatch is E_UI_ASSERTION_FAILED.",
+        schema(
+            json!({
+                "rgb": {"type": "string", "description": "Expected opaque colour in #RRGGBB form."},
+                "at": {"type": "string", "description": "Sample one device pixel at x,y."},
+                "region": {"type": "string", "description": "Device-pixel region x,y,w,h to sample."},
+                "majority": {"type": "boolean", "description": "Use the most frequent colour of the region."},
+                "tolerance": {"type": "integer", "minimum": 0, "maximum": 255, "description": "Max per-channel difference (default 16)."},
+                "timeout": {"type": "string", "description": "Screenshot timeout, for example 10s."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "serial": {"type": "string"},
+                "output_profile": {"enum": ["full", "compact", "brief"]},
+                "dry_run": {"type": "boolean", "description": "Plan without a device session; no device state is changed."},
+            }),
+            &["rgb"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_capture_launch",
+        "Launch a package and sample bounded screencap frames to assert the first app frame. Launches by design; uses existing scoped app-control consent, no physical mutation flag.",
+        schema(
+            json!({
+                "package": {"type": "string", "description": "Package to launch and observe."},
+                "activity": {"type": "string"},
+                "fps": {"type": "integer", "minimum": 1, "maximum": 30, "description": "Samples per second (default 10)."},
+                "duration": {"type": "string", "description": "Sampling window, for example 5s."},
+                "ui_dump_package": {"type": "boolean", "description": "Fall back to uiautomator dump /dev/tty when focus does not match."},
+                "expect_first_frame": {"type": "boolean"},
+                "no_splash": {"type": "boolean"},
+                "expected_color": {"type": "string", "description": "Expected #RRGGBB colour of the first app frame."},
+                "color_sample": {"enum": ["centre", "dominant"], "description": "Which colour to check against expected_color."},
+                "tolerance": {"type": "integer", "minimum": 0, "maximum": 255},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "serial": {"type": "string"},
+                "output_profile": {"enum": ["full", "compact", "brief"]},
+                "dry_run": {"type": "boolean"},
+            }),
+            &["package"],
+        ),
+    ));
+    tools.push(tool(
         "androidforge_app_install",
-        "Install an APK or split set. `fresh` requires confirm=true.",
+        "Install an APK or split set. `fresh` requires confirm=true. `wait_for_confirmation` watches for an OEM on-device prompt and retries once only after an unambiguous audited tap; install consent is unchanged.",
         schema(
             json!({
                 "apk": {"type": "string"},
@@ -828,6 +966,9 @@ pub fn tool_definitions() -> Vec<Value> {
                 "fresh": {"type": "boolean"},
                 "only_if_changed": {"type": "boolean"},
                 "allow_downgrade": {"type": "boolean"},
+                "wait_for_confirmation": {"type": "boolean", "description": "Wait for an OEM install confirmation dialog after a restricted install failure."},
+                "confirm_text": {"type": "array", "items": {"type": "string"}, "description": "Confirm button labels; overrides the built-in localized list."},
+                "confirmation_timeout": {"type": "string", "description": "Maximum dialog wait, for example 15s."},
                 "confirm": {"type": "boolean"},
             }),
             &["apk", "session"],
@@ -861,6 +1002,62 @@ pub fn tool_definitions() -> Vec<Value> {
                 "confirm": {"type": "boolean"},
             }),
             &["name", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_fixture_apply",
+        "Apply only the declarative app state of a fixture (prefs, history, installed_version). Debug-only app-private data mutation; requires confirm=true and the physical-data gate where applicable.",
+        schema(
+            json!({
+                "name": {"type": "string", "description": "Fixture pack name."},
+                "package": {"type": "string", "description": "Defaults to the project adapter package."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "confirm": {"type": "boolean"},
+            }),
+            &["name", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_fixture_reset",
+        "Remove only the app-private files declared by a fixture's state block. Destructive; requires confirm=true and the physical-data gate where applicable.",
+        schema(
+            json!({
+                "name": {"type": "string", "description": "Fixture pack name."},
+                "package": {"type": "string", "description": "Defaults to the project adapter package."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "confirm": {"type": "boolean"},
+            }),
+            &["name", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_scenario_run",
+        "Run an allowlisted declarative scenario manifest (.json/.toml) through the audited app/UI/fixture operations. Mutating steps require confirm=true or dry_run=true; physical-device capability flags are never forwarded over MCP, so a physical device stays gated by its scoped flags.",
+        schema(
+            json!({
+                "file": {"type": "string", "description": "Scenario manifest path (.json or .toml)."},
+                "repeat": {"type": "integer", "minimum": 1, "description": "Override the manifest repeat count."},
+                "dry_run": {"type": "boolean", "description": "Plan steps without dispatch; no consent or device is required."},
+                "confirm": {"type": "boolean", "description": "Required for a real run with device-mutating steps."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "output_profile": {"enum": ["full", "compact", "brief"]},
+            }),
+            &["file"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_scenario_validate",
+        "Parse and validate an allowlisted scenario manifest without touching a device. Read-only.",
+        schema(
+            json!({
+                "file": {"type": "string", "description": "Scenario manifest path (.json or .toml)."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+            }),
+            &["file"],
         ),
     ));
     tools.push(tool(
@@ -926,6 +1123,38 @@ pub fn tool_definitions() -> Vec<Value> {
             &["session"],
         ),
     ));
+    // Only the read-only shell form is exposed over MCP. Physical flags are
+    // never advertised or forwarded; `read_only` is forced by tool_argv.
+    tools.push(tool(
+        "androidforge_devices_shell",
+        "Run an allowlisted read-only `devices shell` command through the typed ADB path (the 1.0.0 `device` alias is retained). MCP always passes --read-only; the mutating form and physical consent flags are not exposed. Reuse diagnostics dump commands such as dumpsys, getprop and settings get.",
+        schema(
+            json!({
+                "command": {"type": "array", "items": {"type": "string"}, "description": "Exact remote argv after `--`; each item is quoted separately."},
+                "allow": {"type": "array", "items": {"type": "string"}, "description": "Optional read-only command prefixes; replaces the conservative default list."},
+                "deny": {"type": "array", "items": {"type": "string"}, "description": "Refuse commands starting with or containing these prefixes."},
+                "timeout": {"type": "string", "description": "Per-command timeout, for example 30s."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "dry_run": {"type": "boolean", "description": "Print the exact argv without resolving a device."},
+            }),
+            &["command", "session"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_devices_input_tap",
+        "Tap exact device-pixel coordinates through `devices input tap` and the audited UiManager::tap_xy path, returning the display size. Physical devices keep the narrow Risk::Input consent gate; MCP never forwards physical flags.",
+        schema(
+            json!({
+                "x": {"type": "integer", "description": "Device-pixel X coordinate."},
+                "y": {"type": "integer", "description": "Device-pixel Y coordinate."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "dry_run": {"type": "boolean", "description": "Print the coordinates without resolving a device."},
+            }),
+            &["x", "y", "session"],
+        ),
+    ));
     tools.push(tool(
         "androidforge_diagnostics_logcat_query",
         "Read a bounded logcat window and return structured, filtered records. Read-only.",
@@ -941,6 +1170,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "grep": {"type": "string", "description": "Regular expression applied to tag and message."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 20000},
                 "retries": {"type": "integer", "minimum": 0, "maximum": 5},
+                "redact_patterns": {"type": "array", "items": {"type": "string"}, "description": "Literal token prefixes redacted before output or storage."},
             }),
             &["session"],
         ),
@@ -959,6 +1189,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "anr": {"type": "boolean"},
                 "timeout": {"type": "string"},
                 "max_events": {"type": "integer", "minimum": 1, "maximum": 10000},
+                "redact_patterns": {"type": "array", "items": {"type": "string"}, "description": "Literal token prefixes redacted before each NDJSON record is emitted."},
             }),
             &["session"],
         ),
@@ -1078,14 +1309,42 @@ pub fn tool_definitions() -> Vec<Value> {
     ));
     tools.push(tool(
         "androidforge_report_explain",
-        "Explain a run or the latest failure with diagnosis, evidence and next commands.",
+        "Explain a run or the latest failure with diagnosis, evidence and next commands. latest/latest-failure can be narrowed by session, device, tags and since.",
         schema(
             json!({
                 "run": {"type": "string", "description": "Run id, latest or latest-failure."},
+                "tag": {"type": "array", "items": {"type": "string"}, "description": "Require all of these run tags when selecting latest/latest-failure."},
+                "since": {"type": "string", "description": "Only runs started at or after this RFC3339 instant or duration ago, for example 30d."},
+                "session": {"type": "string"},
                 "project": {"type": "string"},
                 "output_profile": {"enum": ["full", "compact", "brief"]},
             }),
             &["run"],
+        ),
+    ));
+    tools.push(tool(
+        "androidforge_diagnostics_performance",
+        "Measure startup, jank, memory and CPU and write performance/report.json. A real run launches the app (`am start -W`; --cold also force-stops it); physical devices need the app-control grant outside MCP, which never forwards physical capability flags. Classified device-mutation: requires confirm=true unless dry_run=true.",
+        schema(
+            json!({
+                "package": {"type": "string", "description": "Defaults to [project].package."},
+                "activity": {"type": "string", "description": "Explicit launcher activity, for example com.example/.MainActivity."},
+                "cold": {"type": "boolean", "description": "Explicit cold-start force-stop request."},
+                "settle": {"type": "string", "description": "Delay after launch before sampling, for example 2s."},
+                "timeout": {"type": "string", "description": "Per-command timeout, for example 30s."},
+                "wake": {"type": "boolean", "description": "Explicit opt-in to wake the screen. Never implicit."},
+                "no_screen_check": {"type": "boolean", "description": "Opt out of the screen-on preflight."},
+                "min_frames": {"type": "integer", "minimum": 1, "default": 30, "description": "Minimum rendered frames before a jank percentage is reported."},
+                "frame_window": {"type": "string", "description": "Frame sample window duration, for example 5s."},
+                "warmup": {"type": "string", "description": "Additional warmup before frame sampling, for example 2s."},
+                "session": {"type": "string"},
+                "project": {"type": "string"},
+                "serial": {"type": "string"},
+                "output_profile": {"enum": ["full", "compact", "brief"]},
+                "dry_run": {"type": "boolean"},
+                "confirm": {"type": "boolean", "description": "Required unless dry_run is true."},
+            }),
+            &[],
         ),
     ));
     // Every remaining CLI leaf command gets a generated MCP tool. Curated tools
@@ -1104,6 +1363,30 @@ pub fn tool_definitions() -> Vec<Value> {
         tools.push(generated_tool(&command));
     }
     tools
+}
+
+/// Global flags that MCP tools must never advertise or forward. Physical
+/// capability flags are intentionally in this list: an MCP caller cannot
+/// self-approve a physical-device mutation.
+fn is_stripped_global(key: &str) -> bool {
+    matches!(
+        key,
+        "session"
+            | "project"
+            | "serial"
+            | "output_profile"
+            | "confirm"
+            | "wait_for_confirmation"
+            | "confirm_text"
+            | "confirmation_timeout"
+            | "allow_physical_mutation"
+            | "allow_physical_app_control"
+            | "allow_physical_data"
+            | "allow_physical_network"
+            | "allow_physical_install"
+            | "allow_physical_input"
+            | "dry_run"
+    )
 }
 
 fn generated_tool(command: &crate::commands::catalog::CatalogCommand) -> Value {
@@ -1127,17 +1410,7 @@ fn generated_tool(command: &crate::commands::catalog::CatalogCommand) -> Value {
     let mut required = Vec::new();
     for argument in &command.arguments {
         let key = argument.long.clone().unwrap_or_else(|| argument.id.clone());
-        if matches!(
-            key.as_str(),
-            "session"
-                | "project"
-                | "serial"
-                | "output_profile"
-                | "confirm"
-                | "allow_physical_mutation"
-                | "dry_run"
-        ) && !(key == "serial" && serial_is_array(command))
-        {
+        if is_stripped_global(&key) && !(key == "serial" && serial_is_array(command)) {
             continue;
         }
         let schema = match argument.kind.as_str() {
@@ -1685,6 +1958,35 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             return Ok(argv);
         }
         "androidforge_doctor" => argv.extend(["doctor".to_string(), "--json".to_string()]),
+        "androidforge_doctor_capacity" => {
+            argv.extend(["doctor".to_string(), "--capacity".to_string()]);
+            push_global(&mut argv, arguments);
+            argv.push("--json".to_string());
+        }
+        // MCP build stays host-only: no --session/--serial and no
+        // --install/--launch/--cold. Device mutations go through the existing
+        // curated app tools, which retain their physical consent checks.
+        "androidforge_build" => {
+            argv.extend(["build".to_string(), "--json".to_string()]);
+            if let Some(project) = arg_str(arguments, "project") {
+                argv.push("--project".to_string());
+                argv.push(project);
+            }
+            if arg_bool(arguments, "dry_run") {
+                argv.push("--dry-run".to_string());
+            }
+            for (key, flag) in [
+                ("variant", "--variant"),
+                ("module", "--module"),
+                ("timeout", "--timeout"),
+                ("expected_package", "--expected-package"),
+            ] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+        }
         "androidforge_capabilities" => {
             argv.extend(["capabilities".to_string(), "--json".to_string()])
         }
@@ -1739,6 +2041,9 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             if arg_bool(arguments, "full") {
                 argv.push("--full".to_string());
             }
+            if arg_bool(arguments, "semantics") {
+                argv.push("--semantics".to_string());
+            }
             if let Some(package) = arg_str(arguments, "package") {
                 argv.push("--package".to_string());
                 argv.push(package);
@@ -1752,6 +2057,37 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             argv.extend(["ui".to_string(), "find".to_string(), "--json".to_string()]);
             push_global(&mut argv, arguments);
             push_selector(&mut argv, arguments);
+        }
+        "androidforge_ui_bounds" => {
+            argv.extend(["ui".to_string(), "bounds".to_string(), "--json".to_string()]);
+            push_global(&mut argv, arguments);
+            push_selector(&mut argv, arguments);
+        }
+        "androidforge_ui_assert_bounds" => {
+            argv.extend([
+                "ui".to_string(),
+                "assert-bounds".to_string(),
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            push_selector(&mut argv, arguments);
+            for (key, flag) in [
+                ("bottom_y", "--bottom-y"),
+                ("bottom_y_gt", "--bottom-y-gt"),
+                ("bottom_y_lt", "--bottom-y-lt"),
+                ("tolerance", "--tolerance"),
+            ] {
+                if let Some(value) = arguments.get(key) {
+                    let value = value
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| value.as_i64().map(|number| number.to_string()));
+                    if let Some(value) = value {
+                        argv.push(flag.to_string());
+                        argv.push(value);
+                    }
+                }
+            }
         }
         "androidforge_ui_tap" => {
             argv.extend(["ui".to_string(), "tap".to_string(), "--json".to_string()]);
@@ -1843,6 +2179,121 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                 argv.push(value.to_string());
             }
         }
+        "androidforge_diagnostics_frames" => {
+            let package = arg_str(arguments, "package")
+                .ok_or_else(|| "androidforge_diagnostics_frames requires package".to_string())?;
+            argv.extend([
+                "diagnostics".to_string(),
+                "frames".to_string(),
+                package,
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            if let Some(serial) = arg_str(arguments, "serial") {
+                argv.extend(["--serial".to_string(), serial]);
+            }
+            for (key, flag) in [
+                ("duration", "--duration"),
+                ("timeout", "--timeout"),
+                ("baseline", "--baseline"),
+            ] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+            for (key, flag) in [
+                ("max_janky", "--max-janky"),
+                ("max_p99", "--max-p99"),
+                ("max_frame_ms", "--max-frame-ms"),
+            ] {
+                if let Some(value) = arguments.get(key).and_then(Value::as_f64) {
+                    argv.push(flag.to_string());
+                    argv.push(value.to_string());
+                }
+            }
+            if arg_bool(arguments, "reset") {
+                argv.push("--reset".to_string());
+            }
+            if arg_bool(arguments, "dry_run") {
+                argv.push("--dry-run".to_string());
+            }
+        }
+        "androidforge_capture_assert_color" => {
+            let rgb = arg_str(arguments, "rgb")
+                .ok_or_else(|| "androidforge_capture_assert_color requires rgb".to_string())?;
+            argv.extend([
+                "capture".to_string(),
+                "assert-color".to_string(),
+                "--rgb".to_string(),
+                rgb,
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            if let Some(serial) = arg_str(arguments, "serial") {
+                argv.extend(["--serial".to_string(), serial]);
+            }
+            for (key, flag) in [
+                ("at", "--at"),
+                ("region", "--region"),
+                ("timeout", "--timeout"),
+            ] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+            if let Some(tolerance) = arguments.get("tolerance").and_then(Value::as_u64) {
+                argv.extend(["--tolerance".to_string(), tolerance.to_string()]);
+            }
+            if arg_bool(arguments, "majority") {
+                argv.push("--majority".to_string());
+            }
+            if arg_bool(arguments, "dry_run") {
+                argv.push("--dry-run".to_string());
+            }
+        }
+        "androidforge_capture_launch" => {
+            let package = arg_str(arguments, "package")
+                .ok_or_else(|| "androidforge_capture_launch requires package".to_string())?;
+            argv.extend([
+                "capture".to_string(),
+                "launch".to_string(),
+                package,
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            if let Some(serial) = arg_str(arguments, "serial") {
+                argv.extend(["--serial".to_string(), serial]);
+            }
+            for (key, flag) in [
+                ("activity", "--activity"),
+                ("duration", "--duration"),
+                ("expected_color", "--expected-color"),
+                ("color_sample", "--color-sample"),
+            ] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+            for (key, flag) in [("fps", "--fps"), ("tolerance", "--tolerance")] {
+                if let Some(value) = arguments.get(key).and_then(Value::as_u64) {
+                    argv.push(flag.to_string());
+                    argv.push(value.to_string());
+                }
+            }
+            for (key, flag) in [
+                ("ui_dump_package", "--ui-dump-package"),
+                ("expect_first_frame", "--expect-first-frame"),
+                ("no_splash", "--no-splash"),
+                ("dry_run", "--dry-run"),
+            ] {
+                if arg_bool(arguments, key) {
+                    argv.push(flag.to_string());
+                }
+            }
+        }
         "androidforge_app_install" => {
             let apk = arg_str(arguments, "apk")
                 .ok_or_else(|| "androidforge_app_install requires apk".to_string())?;
@@ -1865,6 +2316,16 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             }
             if arg_bool(arguments, "allow_downgrade") {
                 argv.push("--downgrade".to_string());
+            }
+            if arg_bool(arguments, "wait_for_confirmation") {
+                argv.push("--wait-for-confirmation".to_string());
+            }
+            for text in arg_strings(arguments, "confirm_text") {
+                argv.push("--confirm-text".to_string());
+                argv.push(text);
+            }
+            if let Some(timeout) = arg_str(arguments, "confirmation_timeout") {
+                argv.extend(["--confirmation-timeout".to_string(), timeout]);
             }
         }
         "androidforge_app_verify_installed" => {
@@ -1935,7 +2396,22 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             ]);
             push_global(&mut argv, arguments);
             match action.as_str() {
-                "export" | "import" => {
+                "export" => {
+                    // Named --output wins over the legacy positional path; both
+                    // go through the same safe resolver in the CLI.
+                    if let Some(output) = arg_str(arguments, "output") {
+                        argv.extend(["--output".to_string(), output]);
+                    } else if let Some(path) = arg_str(arguments, "path") {
+                        argv.push(path);
+                    }
+                    if arg_bool(arguments, "allow_in_project") {
+                        argv.push("--allow-in-project".to_string());
+                    }
+                    if arg_bool(arguments, "overwrite") {
+                        argv.push("--overwrite".to_string());
+                    }
+                }
+                "import" => {
                     if let Some(path) = arg_str(arguments, "path") {
                         argv.push(path);
                     }
@@ -1964,6 +2440,48 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                     return Err(format!("app data {action} requires confirm=true"));
                 }
                 argv.push("--yes".to_string());
+            }
+        }
+        "androidforge_maintenance_clean" => {
+            let keep_tags = arg_strings(arguments, "keep_tag");
+            let dry_run = arg_bool(arguments, "dry_run");
+            let confirm = arg_bool(arguments, "confirm");
+            // A tag-protected call without confirmation is a deliberate dry
+            // run; every other destructive call needs an explicit confirm.
+            if !dry_run && !confirm && keep_tags.is_empty() {
+                return Err(
+                    "androidforge_maintenance_clean requires confirm=true or dry_run=true"
+                        .to_string(),
+                );
+            }
+            argv.extend([
+                "maintenance".to_string(),
+                "clean".to_string(),
+                "--json".to_string(),
+            ]);
+            if let Some(project) = arg_str(arguments, "project") {
+                argv.extend(["--project".to_string(), project]);
+            }
+            if let Some(older_than) = arg_str(arguments, "older_than") {
+                argv.extend(["--older-than".to_string(), older_than]);
+            }
+            if let Some(keep_last) = arguments.get("keep_last").and_then(Value::as_u64) {
+                argv.extend(["--keep-last".to_string(), keep_last.to_string()]);
+            }
+            for tag in keep_tags {
+                argv.push("--keep-tag".to_string());
+                argv.push(tag);
+            }
+            for (key, flag) in [("sessions", "--sessions"), ("runs", "--runs")] {
+                if arg_bool(arguments, key) {
+                    argv.push(flag.to_string());
+                }
+            }
+            if confirm {
+                argv.push("--yes".to_string());
+            }
+            if dry_run {
+                argv.push("--dry-run".to_string());
             }
         }
         "androidforge_ui_drag" => {
@@ -2013,6 +2531,9 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             }
             if arg_bool(arguments, "for_stable") {
                 argv.push("--for-stable".to_string());
+            }
+            if arg_bool(arguments, "for_bounds_stable") {
+                argv.push("--for-bounds-stable".to_string());
             }
             for (key, flag) in [("stable_for", "--stable-for"), ("timeout", "--timeout")] {
                 if let Some(value) = arg_str(arguments, key) {
@@ -2064,13 +2585,14 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             }
         }
         "androidforge_network_mock_serve" => {
+            let scenario = arg_str(arguments, "scenario");
             let max_requests = arguments
                 .get("max_requests")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            if max_requests == 0 && arg_str(arguments, "duration").is_none() {
+            if scenario.is_none() && max_requests == 0 && arg_str(arguments, "duration").is_none() {
                 return Err(
-                    "androidforge_network_mock_serve requires max_requests > 0 or duration"
+                    "androidforge_network_mock_serve requires max_requests > 0 or duration unless a scenario is set"
                         .to_string(),
                 );
             }
@@ -2081,6 +2603,10 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                 "--json".to_string(),
             ]);
             push_global(&mut argv, arguments);
+            if let Some(scenario) = scenario {
+                argv.push("--scenario".to_string());
+                argv.push(scenario);
+            }
             for (key, flag) in [
                 ("bind", "--bind"),
                 ("routes_file", "--routes"),
@@ -2112,6 +2638,72 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
             if arg_bool(arguments, "reverse") {
                 argv.push("--reverse".to_string());
             }
+        }
+        "androidforge_network_mock_scenarios" => {
+            argv.extend([
+                "network".to_string(),
+                "mock".to_string(),
+                "scenarios".to_string(),
+                "--json".to_string(),
+            ]);
+        }
+        "androidforge_fixture_apply" | "androidforge_fixture_reset" => {
+            let fixture =
+                arg_str(arguments, "name").ok_or_else(|| format!("{name} requires name"))?;
+            if !arg_bool(arguments, "confirm") {
+                return Err(format!("{name} requires confirm=true"));
+            }
+            let action = if name == "androidforge_fixture_apply" {
+                "apply"
+            } else {
+                "reset"
+            };
+            argv.extend([
+                "fixture".to_string(),
+                action.to_string(),
+                fixture,
+                "--yes".to_string(),
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            if let Some(package) = arg_str(arguments, "package") {
+                argv.push("--package".to_string());
+                argv.push(package);
+            }
+        }
+        "androidforge_scenario_run" => {
+            let file = arg_str(arguments, "file")
+                .ok_or_else(|| "androidforge_scenario_run requires file".to_string())?;
+            let dry_run = arg_bool(arguments, "dry_run");
+            if !dry_run && !arg_bool(arguments, "confirm") {
+                return Err(
+                    "androidforge_scenario_run is a device-mutation command and requires confirm=true or dry_run=true"
+                        .to_string(),
+                );
+            }
+            argv.extend(["scenario".to_string(), "run".to_string(), file]);
+            push_global(&mut argv, arguments);
+            if let Some(repeat) = arguments.get("repeat").and_then(Value::as_u64) {
+                argv.extend(["--repeat".to_string(), repeat.to_string()]);
+            }
+            if !dry_run {
+                argv.push("--yes".to_string());
+            }
+            if dry_run {
+                argv.push("--dry-run".to_string());
+            }
+            argv.push("--json".to_string());
+        }
+        "androidforge_scenario_validate" => {
+            let file = arg_str(arguments, "file")
+                .ok_or_else(|| "androidforge_scenario_validate requires file".to_string())?;
+            argv.extend([
+                "scenario".to_string(),
+                "validate".to_string(),
+                file,
+                "--json".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
         }
         "androidforge_session_list" => {
             argv.extend([
@@ -2309,6 +2901,106 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                 argv.push("--stop".to_string());
             }
         }
+        "androidforge_diagnostics_performance" => {
+            let dry_run = arg_bool(arguments, "dry_run");
+            if !dry_run && !arg_bool(arguments, "confirm") {
+                return Err(
+                    "androidforge_diagnostics_performance requires confirm=true or dry_run=true"
+                        .to_string(),
+                );
+            }
+            argv.extend(["diagnostics".to_string(), "performance".to_string()]);
+            // `package` is an optional positional, so it must precede flags.
+            if let Some(package) = arg_str(arguments, "package") {
+                argv.push(package);
+            }
+            argv.push("--json".to_string());
+            push_global(&mut argv, arguments);
+            if let Some(serial) = arg_str(arguments, "serial") {
+                argv.push("--serial".to_string());
+                argv.push(serial);
+            }
+            if dry_run {
+                argv.push("--dry-run".to_string());
+            }
+            for (key, flag) in [
+                ("activity", "--activity"),
+                ("settle", "--settle"),
+                ("timeout", "--timeout"),
+                ("frame_window", "--frame-window"),
+                ("warmup", "--warmup"),
+            ] {
+                if let Some(value) = arg_str(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+            if let Some(min_frames) = arguments.get("min_frames").and_then(Value::as_u64) {
+                argv.push("--min-frames".to_string());
+                argv.push(min_frames.to_string());
+            }
+            for (key, flag) in [
+                ("cold", "--cold"),
+                ("wake", "--wake"),
+                ("no_screen_check", "--no-screen-check"),
+            ] {
+                if arg_bool(arguments, key) {
+                    argv.push(flag.to_string());
+                }
+            }
+        }
+        "androidforge_devices_shell" => {
+            argv.extend(["devices".to_string(), "shell".to_string()]);
+            push_global(&mut argv, arguments);
+            // Defense in depth: the read-only form is the only MCP surface.
+            argv.push("--read-only".to_string());
+            for (key, flag) in [("allow", "--allow"), ("deny", "--deny")] {
+                for value in arg_strings(arguments, key) {
+                    argv.push(flag.to_string());
+                    argv.push(value);
+                }
+            }
+            if let Some(timeout) = arg_str(arguments, "timeout") {
+                argv.push("--timeout".to_string());
+                argv.push(timeout);
+            }
+            if arg_bool(arguments, "dry_run") {
+                argv.push("--dry-run".to_string());
+            }
+            let command = arg_strings(arguments, "command");
+            if command.is_empty() {
+                return Err(
+                    "androidforge_devices_shell requires a non-empty command array".to_string(),
+                );
+            }
+            // `--json` must precede `--`; everything after it is the exact
+            // remote argv and must not be polluted by global flags.
+            argv.push("--json".to_string());
+            argv.push("--".to_string());
+            argv.extend(command);
+        }
+        "androidforge_devices_input_tap" => {
+            argv.extend([
+                "devices".to_string(),
+                "input".to_string(),
+                "tap".to_string(),
+            ]);
+            push_global(&mut argv, arguments);
+            let x = arguments
+                .get("x")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| "androidforge_devices_input_tap requires x".to_string())?;
+            let y = arguments
+                .get("y")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| "androidforge_devices_input_tap requires y".to_string())?;
+            argv.push(x.to_string());
+            argv.push(y.to_string());
+            if arg_bool(arguments, "dry_run") {
+                argv.push("--dry-run".to_string());
+            }
+            argv.push("--json".to_string());
+        }
         "androidforge_diagnostics_logcat_query" => {
             argv.extend([
                 "diagnostics".to_string(),
@@ -2339,6 +3031,10 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                     argv.push(value.to_string());
                 }
             }
+            for value in arg_strings(arguments, "redact_patterns") {
+                argv.push("--redact-patterns".to_string());
+                argv.push(value);
+            }
         }
         "androidforge_diagnostics_logcat_watch" => {
             argv.extend([
@@ -2366,6 +3062,10 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                 if arg_bool(arguments, key) {
                     argv.push(flag.to_string());
                 }
+            }
+            for value in arg_strings(arguments, "redact_patterns") {
+                argv.push("--redact-patterns".to_string());
+                argv.push(value);
             }
         }
         "androidforge_network_proxy_get" => {
@@ -2497,6 +3197,14 @@ fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<String>, 
                 "--json".to_string(),
             ]);
             push_global(&mut argv, arguments);
+            for tag in arg_strings(arguments, "tag") {
+                argv.push("--tag".to_string());
+                argv.push(tag);
+            }
+            if let Some(since) = arg_str(arguments, "since") {
+                argv.push("--since".to_string());
+                argv.push(since);
+            }
         }
         other => {
             let catalog = crate::commands::catalog::command_catalog();
@@ -2533,17 +3241,7 @@ fn append_generated_argv(
     let mut positionals = Vec::new();
     for argument in &command.arguments {
         let key = argument.long.clone().unwrap_or_else(|| argument.id.clone());
-        if matches!(
-            key.as_str(),
-            "session"
-                | "project"
-                | "serial"
-                | "output_profile"
-                | "confirm"
-                | "allow_physical_mutation"
-                | "dry_run"
-        ) && !(key == "serial" && serial_is_array(command))
-        {
+        if is_stripped_global(&key) && !(key == "serial" && serial_is_array(command)) {
             continue;
         }
         let value = arguments.get(&key);
@@ -2821,6 +3519,154 @@ mod tests {
     }
 
     #[test]
+    fn doctor_capacity_tool_maps_to_read_only_cli_argv() {
+        let argv = tool_argv(
+            "androidforge_doctor_capacity",
+            &json!({"project": "A:/proj", "output_profile": "brief"}),
+        )
+        .expect("capacity argv");
+        assert_eq!(
+            argv,
+            vec![
+                "doctor",
+                "--capacity",
+                "--project",
+                "A:/proj",
+                "--output-profile",
+                "brief",
+                "--json"
+            ]
+        );
+        assert!(
+            tool_definitions()
+                .iter()
+                .any(|tool| tool["name"] == "androidforge_doctor_capacity")
+        );
+    }
+
+    #[test]
+    fn observe_tool_forwards_semantics_but_never_presentation_flags() {
+        let argv = tool_argv(
+            "androidforge_ui_observe",
+            &json!({"session": "ses-1", "full": true, "semantics": true}),
+        )
+        .unwrap();
+        assert_eq!(argv[0], "ui");
+        assert_eq!(argv[1], "observe");
+        assert!(argv.iter().any(|arg| arg == "--semantics"));
+        assert!(argv.iter().any(|arg| arg == "--full"));
+        for forbidden in ["--jsonl", "--fields", "--stats"] {
+            assert!(
+                !argv.iter().any(|arg| arg == forbidden),
+                "MCP argv contains {forbidden}: {argv:?}"
+            );
+        }
+        let catalog = tool_definitions();
+        let observe = catalog
+            .iter()
+            .find(|tool| tool["name"] == "androidforge_ui_observe")
+            .expect("observe tool");
+        assert!(observe["inputSchema"]["properties"]["semantics"].is_object());
+        for forbidden in ["jsonl", "fields", "stats"] {
+            assert!(
+                observe["inputSchema"]["properties"]
+                    .get(forbidden)
+                    .is_none(),
+                "MCP schema exposes {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounds_and_wait_tools_map_to_read_only_cli_argv() {
+        let bounds = tool_argv(
+            "androidforge_ui_bounds",
+            &json!({"session": "ses-1", "text": "Save"}),
+        )
+        .unwrap();
+        assert_eq!(
+            bounds,
+            vec![
+                "ui",
+                "bounds",
+                "--json",
+                "--session",
+                "ses-1",
+                "--text",
+                "Save"
+            ]
+        );
+
+        let eq = tool_argv(
+            "androidforge_ui_assert_bounds",
+            &json!({
+                "session": "ses-1",
+                "text": "Save",
+                "bottom_y": 300,
+                "tolerance": 2,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            eq,
+            vec![
+                "ui",
+                "assert-bounds",
+                "--json",
+                "--session",
+                "ses-1",
+                "--text",
+                "Save",
+                "--bottom-y",
+                "300",
+                "--tolerance",
+                "2"
+            ]
+        );
+
+        let gt = tool_argv(
+            "androidforge_ui_assert_bounds",
+            &json!({"session": "ses-1", "text": "Save", "bottom_y_gt": 299}),
+        )
+        .unwrap();
+        assert!(
+            gt.windows(2)
+                .any(|pair| pair[0] == "--bottom-y-gt" && pair[1] == "299")
+        );
+        let lt = tool_argv(
+            "androidforge_ui_assert_bounds",
+            &json!({"session": "ses-1", "text": "Save", "bottom_y_lt": 301}),
+        )
+        .unwrap();
+        assert!(
+            lt.windows(2)
+                .any(|pair| pair[0] == "--bottom-y-lt" && pair[1] == "301")
+        );
+
+        let wait = tool_argv(
+            "androidforge_ui_wait",
+            &json!({
+                "session": "ses-1",
+                "text": "Save",
+                "for_bounds_stable": true,
+                "stable_for": "1ms",
+                "timeout": "5s",
+            }),
+        )
+        .unwrap();
+        assert_eq!(wait[0], "ui");
+        assert_eq!(wait[1], "wait");
+        for flag in ["--for-bounds-stable", "--stable-for", "--timeout"] {
+            assert!(
+                wait.iter().any(|arg| arg == flag),
+                "missing {flag}: {wait:?}"
+            );
+        }
+        assert!(wait.windows(2).any(|pair| pair == ["--stable-for", "1ms"]));
+        assert!(wait.windows(2).any(|pair| pair == ["--timeout", "5s"]));
+    }
+
+    #[test]
     fn destructive_tools_require_confirmation() {
         let error = tool_argv(
             "androidforge_app_uninstall",
@@ -2889,6 +3735,135 @@ mod tests {
     }
 
     #[test]
+    fn e2_fixture_state_and_scenario_tools_map_to_cli_argv() {
+        let scenarios = tool_argv("androidforge_network_mock_scenarios", &json!({})).unwrap();
+        assert_eq!(scenarios, vec!["network", "mock", "scenarios", "--json"]);
+
+        assert!(
+            tool_argv("androidforge_fixture_apply", &json!({"name": "state-demo"})).is_err(),
+            "state mutation must require confirm=true"
+        );
+        let apply = tool_argv(
+            "androidforge_fixture_apply",
+            &json!({"name": "state-demo", "session": "ses-1", "confirm": true}),
+        )
+        .unwrap();
+        assert_eq!(apply[0], "fixture");
+        assert_eq!(apply[1], "apply");
+        assert_eq!(apply[2], "state-demo");
+        assert!(apply.contains(&"--yes".to_string()));
+
+        let reset = tool_argv(
+            "androidforge_fixture_reset",
+            &json!({"name": "state-demo", "session": "ses-1", "confirm": true}),
+        )
+        .unwrap();
+        assert_eq!(reset[1], "reset");
+        assert!(reset.contains(&"--yes".to_string()));
+
+        let served = tool_argv(
+            "androidforge_network_mock_serve",
+            &json!({"scenario": "offline", "port": 18081}),
+        )
+        .unwrap();
+        assert!(served.contains(&"--scenario".to_string()));
+        assert!(served.contains(&"offline".to_string()));
+    }
+
+    #[test]
+    fn frames_and_capture_tools_map_to_cli_commands() {
+        let frames = tool_argv(
+            "androidforge_diagnostics_frames",
+            &json!({
+                "package": "com.example",
+                "session": "ses-1",
+                "reset": true,
+                "duration": "5s",
+                "baseline": "frames/report.json",
+                "max_janky": 2.5,
+                "max_p99": 5.0,
+                "max_frame_ms": 10.0,
+            }),
+        )
+        .unwrap();
+        assert_eq!(frames[0], "diagnostics");
+        assert_eq!(frames[1], "frames");
+        assert_eq!(frames[2], "com.example");
+        for flag in [
+            "--reset",
+            "--duration",
+            "5s",
+            "--baseline",
+            "--max-janky",
+            "--max-p99",
+            "--max-frame-ms",
+        ] {
+            assert!(
+                frames.contains(&flag.to_string()),
+                "missing {flag} in {frames:?}"
+            );
+        }
+
+        let assert_color = tool_argv(
+            "androidforge_capture_assert_color",
+            &json!({
+                "rgb": "#1A73E8",
+                "session": "ses-1",
+                "at": "540,1200",
+                "tolerance": 8,
+            }),
+        )
+        .unwrap();
+        assert_eq!(assert_color[0], "capture");
+        assert_eq!(assert_color[1], "assert-color");
+        assert!(assert_color.contains(&"#1A73E8".to_string()));
+        assert!(assert_color.contains(&"--at".to_string()));
+        assert!(assert_color.contains(&"540,1200".to_string()));
+        assert!(assert_color.contains(&"--tolerance".to_string()));
+
+        let launch = tool_argv(
+            "androidforge_capture_launch",
+            &json!({
+                "package": "com.example",
+                "session": "ses-1",
+                "fps": 12,
+                "duration": "5s",
+                "expect_first_frame": true,
+                "no_splash": true,
+                "expected_color": "#1A73E8",
+                "color_sample": "dominant",
+                "tolerance": 8,
+                "ui_dump_package": true,
+            }),
+        )
+        .unwrap();
+        assert_eq!(launch[0], "capture");
+        assert_eq!(launch[1], "launch");
+        assert_eq!(launch[2], "com.example");
+        for flag in [
+            "--fps",
+            "12",
+            "--duration",
+            "--expect-first-frame",
+            "--no-splash",
+            "--expected-color",
+            "--color-sample",
+            "dominant",
+            "--tolerance",
+            "--ui-dump-package",
+        ] {
+            assert!(
+                launch.contains(&flag.to_string()),
+                "missing {flag} in {launch:?}"
+            );
+        }
+        assert!(
+            !launch.iter().any(|arg| arg.contains("allow-physical")),
+            "capture launch must not forward a physical mutation flag"
+        );
+    }
+
+    #[test]
     fn selector_arguments_are_forwarded() {
         let argv = tool_argv(
             "androidforge_ui_tap",
@@ -2907,6 +3882,69 @@ mod tests {
     }
 
     #[test]
+    fn physical_capability_flags_are_never_exposed_or_forwarded_by_mcp() {
+        let physical_keys = [
+            "allow_physical_mutation",
+            "allow_physical_app_control",
+            "allow_physical_data",
+            "allow_physical_network",
+            "allow_physical_install",
+            "allow_physical_input",
+        ];
+        for tool in tool_definitions() {
+            let name = tool["name"].as_str().unwrap_or_default();
+            let properties = &tool["inputSchema"]["properties"];
+            for key in physical_keys {
+                assert!(properties.get(key).is_none(), "{name} advertises {key}");
+            }
+        }
+
+        let mut arguments = json!({
+            "package": "com.example",
+            "confirm": true,
+            "allow_physical_mutation": true,
+            "allow_physical_app_control": true,
+            "allow_physical_data": true,
+            "allow_physical_network": true,
+            "allow_physical_install": true,
+            "allow_physical_input": true,
+        });
+        arguments["path"] = json!("backup.tar");
+        arguments["name"] = json!("fixture");
+        arguments["proxy"] = json!("http://127.0.0.1:8080");
+        for tool in [
+            "androidforge_app_launch",
+            "androidforge_app_force_stop",
+            "androidforge_app_uninstall",
+            "androidforge_app_data_import",
+            "androidforge_ui_tap",
+            "androidforge_network_proxy_set",
+            "androidforge_fixture_run",
+            "androidforge_diagnostics_performance",
+        ] {
+            let argv = tool_argv(tool, &arguments)
+                .unwrap_or_else(|error| panic!("{tool} should be dispatchable: {error}"));
+            assert!(
+                !argv
+                    .iter()
+                    .any(|argument| argument.starts_with("--allow-physical")),
+                "{tool} forwarded a physical flag: {argv:?}"
+            );
+        }
+
+        // A scoped flag must not bypass the existing confirm=true requirement.
+        let error = tool_argv(
+            "androidforge_app_force_stop",
+            &json!({"package": "com.example", "allow_physical_app_control": true}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("confirm=true"),
+            "scoped flag bypassed MCP confirmation: {error}"
+        );
+    }
+
+    #[test]
     fn report_prune_requires_confirmation_and_forwards_yes() {
         let error = tool_argv("androidforge_report_prune", &json!({})).unwrap_err();
         assert!(error.contains("confirm=true"), "{error}");
@@ -2918,6 +3956,209 @@ mod tests {
         assert_eq!(argv[0], "report");
         assert_eq!(argv[1], "prune");
         assert!(argv.contains(&"--yes".to_string()), "{argv:?}");
+    }
+
+    #[test]
+    fn report_scope_and_budget_flags_are_exposed_in_mcp() {
+        let definitions = tool_definitions();
+        let explain = definitions
+            .iter()
+            .find(|tool| tool["name"] == "androidforge_report_explain")
+            .expect("explain tool");
+        assert_eq!(explain["inputSchema"]["properties"]["tag"]["type"], "array");
+        assert_eq!(
+            explain["inputSchema"]["properties"]["since"]["type"],
+            "string"
+        );
+        let explain_argv = tool_argv(
+            "androidforge_report_explain",
+            &json!({
+                "run": "latest-failure",
+                "tag": ["release", "smoke"],
+                "since": "2026-01-01T00:00:00Z",
+                "session": "ses-1",
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            explain_argv.iter().filter(|arg| *arg == "--tag").count(),
+            2,
+            "{explain_argv:?}"
+        );
+        assert!(explain_argv.contains(&"release".to_string()));
+        assert!(explain_argv.contains(&"smoke".to_string()));
+        assert!(explain_argv.contains(&"--since".to_string()));
+        assert!(explain_argv.contains(&"2026-01-01T00:00:00Z".to_string()));
+
+        let compare = definitions
+            .iter()
+            .find(|tool| tool["name"] == "androidforge_report_compare")
+            .expect("compare tool");
+        for key in [
+            "tag",
+            "since",
+            "fail-on-regression",
+            "budget",
+            "max-startup-ms",
+            "max-jank-percent",
+            "max-p99-ms",
+            "max-frame-ms",
+            "max-apk-size-bytes",
+            "max-failed-tests",
+        ] {
+            assert!(
+                compare["inputSchema"]["properties"][key].is_object(),
+                "compare schema missing {key}: {compare}"
+            );
+        }
+        let compare_argv = tool_argv(
+            "androidforge_report_compare",
+            &json!({
+                "run": "current",
+                "baseline": "old",
+                "tag": ["release"],
+                "since": "30d",
+                "fail-on-regression": true,
+                "max-startup-ms": 600,
+            }),
+        )
+        .unwrap();
+        for flag in [
+            "--tag",
+            "--since",
+            "--fail-on-regression",
+            "--max-startup-ms",
+        ] {
+            assert!(compare_argv.contains(&flag.to_string()), "{compare_argv:?}");
+        }
+
+        let start = definitions
+            .iter()
+            .find(|tool| tool["name"] == "androidforge_run_start")
+            .expect("run start tool");
+        assert_eq!(start["inputSchema"]["properties"]["tag"]["type"], "array");
+        assert_eq!(start["inputSchema"]["properties"]["meta"]["type"], "array");
+        let start_argv = tool_argv(
+            "androidforge_run_start",
+            &json!({
+                "name": "smoke",
+                "tag": ["release"],
+                "meta": ["build=42"],
+            }),
+        )
+        .unwrap();
+        assert!(start_argv.contains(&"--tag".to_string()));
+        assert!(start_argv.contains(&"--meta".to_string()));
+        assert!(start_argv.contains(&"build=42".to_string()));
+    }
+
+    #[test]
+    fn scoped_export_and_retention_tools_map_to_cli_argv() {
+        let definitions = tool_definitions();
+        let app_data = definitions
+            .iter()
+            .find(|tool| tool["name"] == "androidforge_app_data")
+            .expect("app data tool");
+        for key in ["output", "allow_in_project", "overwrite"] {
+            assert!(
+                app_data["inputSchema"]["properties"][key].is_object(),
+                "app data tool is missing {key}"
+            );
+        }
+        let clean = definitions
+            .iter()
+            .find(|tool| tool["name"] == "androidforge_maintenance_clean")
+            .expect("maintenance clean tool");
+        assert_eq!(
+            clean["inputSchema"]["properties"]["keep_tag"]["type"],
+            "array"
+        );
+        assert!(
+            clean["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("destructive")
+        );
+        for key in ["keep_tag", "dry_run", "confirm"] {
+            assert!(
+                clean["inputSchema"]["properties"][key].is_object(),
+                "maintenance clean tool is missing {key}"
+            );
+        }
+
+        let export = tool_argv(
+            "androidforge_app_data",
+            &json!({
+                "action": "export",
+                "package": "com.example.app",
+                "session": "ses-1",
+                "output": "backup.tar",
+                "allow_in_project": true,
+                "overwrite": true,
+            }),
+        )
+        .unwrap();
+        assert!(
+            export
+                .windows(2)
+                .any(|pair| pair == ["--output", "backup.tar"])
+        );
+        assert!(export.contains(&"--allow-in-project".to_string()));
+        assert!(export.contains(&"--overwrite".to_string()));
+        assert!(!export.contains(&"--yes".to_string()));
+
+        let legacy = tool_argv(
+            "androidforge_app_data",
+            &json!({
+                "action": "export",
+                "package": "com.example.app",
+                "session": "ses-1",
+                "path": "legacy.tar",
+            }),
+        )
+        .unwrap();
+        assert!(legacy.contains(&"legacy.tar".to_string()));
+        assert!(!legacy.contains(&"--output".to_string()));
+
+        let error =
+            tool_argv("androidforge_maintenance_clean", &json!({"runs": true})).unwrap_err();
+        assert!(error.contains("confirm=true"), "{error}");
+        let tagged_preview = tool_argv(
+            "androidforge_maintenance_clean",
+            &json!({"runs": true, "keep_tag": ["release"]}),
+        )
+        .unwrap();
+        assert!(tagged_preview.contains(&"--runs".to_string()));
+        assert!(tagged_preview.contains(&"--keep-tag".to_string()));
+        assert!(!tagged_preview.contains(&"--yes".to_string()));
+
+        let applied = tool_argv(
+            "androidforge_maintenance_clean",
+            &json!({
+                "runs": true,
+                "keep_tag": ["release", "smoke"],
+                "keep_last": 3,
+                "older_than": "7d",
+                "confirm": true,
+            }),
+        )
+        .unwrap();
+        assert_eq!(applied.iter().filter(|arg| *arg == "--keep-tag").count(), 2);
+        assert!(applied.contains(&"release".to_string()));
+        assert!(applied.contains(&"smoke".to_string()));
+        assert!(applied.windows(2).any(|pair| pair == ["--keep-last", "3"]));
+        assert!(
+            applied
+                .windows(2)
+                .any(|pair| pair == ["--older-than", "7d"])
+        );
+        assert!(applied.contains(&"--yes".to_string()));
+        assert!(
+            !applied
+                .iter()
+                .any(|argument| argument.starts_with("--allow-physical")),
+            "retention must stay host-only: {applied:?}"
+        );
     }
 
     #[test]
@@ -3080,5 +4321,484 @@ mod tests {
         )
         .unwrap();
         assert!(argv.contains(&"--yes".to_string()));
+    }
+
+    #[test]
+    fn diagnostics_performance_schema_and_confirmation_contract() {
+        let tool = tool_definitions()
+            .into_iter()
+            .find(|tool| tool["name"] == "androidforge_diagnostics_performance")
+            .expect("diagnostics performance tool");
+        let properties = &tool["inputSchema"]["properties"];
+        assert_eq!(properties["min_frames"]["type"], "integer");
+        assert_eq!(properties["min_frames"]["default"], 30);
+        assert_eq!(properties["min_frames"]["minimum"], 1);
+        for key in ["wake", "no_screen_check", "cold", "confirm", "dry_run"] {
+            assert_eq!(properties[key]["type"], "boolean", "{key}");
+        }
+        assert_eq!(
+            properties["confirm"]["description"].as_str(),
+            Some("Required unless dry_run is true.")
+        );
+        for key in ["frame_window", "warmup", "settle", "timeout"] {
+            assert_eq!(properties[key]["type"], "string", "{key}");
+        }
+        for physical_key in [
+            "allow_physical_mutation",
+            "allow_physical_app_control",
+            "allow_physical_data",
+            "allow_physical_network",
+            "allow_physical_install",
+            "allow_physical_input",
+        ] {
+            assert!(
+                properties.get(physical_key).is_none(),
+                "diagnostics performance advertises {physical_key}"
+            );
+        }
+
+        let command = crate::commands::catalog::command_catalog()
+            .into_iter()
+            .find(|command| command.tool_name == "androidforge_diagnostics_performance")
+            .expect("catalog entry");
+        assert_eq!(command.safety, "device-mutation");
+
+        let error = tool_argv(
+            "androidforge_diagnostics_performance",
+            &json!({"session": "ses-1"}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "androidforge_diagnostics_performance requires confirm=true or dry_run=true"
+        );
+
+        let argv = tool_argv(
+            "androidforge_diagnostics_performance",
+            &json!({"session": "ses-1", "confirm": true}),
+        )
+        .unwrap();
+        assert_eq!(argv[0], "diagnostics");
+        assert_eq!(argv[1], "performance");
+        assert!(!argv.contains(&"--yes".to_string()), "{argv:?}");
+        assert!(!argv.contains(&"--wake".to_string()), "{argv:?}");
+        assert!(!argv.contains(&"--no-screen-check".to_string()), "{argv:?}");
+        assert!(
+            !argv.iter().any(|arg| arg.starts_with("--allow-physical")),
+            "diagnostics performance forwarded a physical flag: {argv:?}"
+        );
+
+        let dry = tool_argv(
+            "androidforge_diagnostics_performance",
+            &json!({"session": "ses-1", "dry_run": true}),
+        )
+        .unwrap();
+        assert!(dry.contains(&"--dry-run".to_string()), "{dry:?}");
+        assert!(
+            !dry.iter().any(|arg| arg.starts_with("--allow-physical")),
+            "dry-run diagnostics performance forwarded a physical flag: {dry:?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_performance_argv_forwards_guard_fields() {
+        let argv = tool_argv(
+            "androidforge_diagnostics_performance",
+            &json!({
+                "package": "com.example",
+                "activity": ".MainActivity",
+                "session": "ses-1",
+                "confirm": true,
+                "cold": true,
+                "settle": "1s",
+                "timeout": "30s",
+                "wake": true,
+                "no_screen_check": true,
+                "min_frames": 45,
+                "frame_window": "5s",
+                "warmup": "2s",
+            }),
+        )
+        .unwrap();
+        assert_eq!(argv[0], "diagnostics");
+        assert_eq!(argv[1], "performance");
+        assert_eq!(argv[2], "com.example");
+        for expected in [
+            ".MainActivity",
+            "--activity",
+            "--cold",
+            "--settle",
+            "1s",
+            "--timeout",
+            "30s",
+            "--wake",
+            "--no-screen-check",
+            "--min-frames",
+            "45",
+            "--frame-window",
+            "5s",
+            "--warmup",
+            "2s",
+            "--session",
+            "ses-1",
+            "--json",
+        ] {
+            assert!(
+                argv.iter().any(|argument| argument == expected),
+                "missing {expected} in {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_tool_is_host_only_and_maps_to_cli_argv() {
+        let tool = tool_definitions()
+            .into_iter()
+            .find(|tool| tool["name"] == "androidforge_build")
+            .expect("build tool");
+        let properties = tool["inputSchema"]["properties"].clone();
+        for key in [
+            "variant",
+            "module",
+            "timeout",
+            "expected_package",
+            "project",
+            "dry_run",
+        ] {
+            assert!(
+                properties.get(key).is_some_and(Value::is_object),
+                "build schema missing {key}"
+            );
+        }
+        for key in [
+            "install", "launch", "cold", "fresh", "session", "serial", "confirm",
+        ] {
+            assert!(properties.get(key).is_none(), "build tool exposes {key}");
+        }
+        let command = crate::commands::catalog::command_catalog()
+            .into_iter()
+            .find(|command| command.tool_name == "androidforge_build")
+            .expect("build catalog entry");
+        assert_eq!(command.safety, "read-only");
+
+        let argv = tool_argv(
+            "androidforge_build",
+            &json!({
+                "project": "A:/proj",
+                "variant": "debug",
+                "module": "app",
+                "timeout": "20m",
+                "expected_package": "com.example.app",
+                "dry_run": true,
+                "session": "ses-1",
+                "serial": "emulator-5554",
+                "install": true,
+                "launch": true,
+                "cold": true,
+            }),
+        )
+        .unwrap();
+        assert_eq!(argv[0], "build");
+        assert_eq!(argv[1], "--json");
+        for expected in [
+            "--project",
+            "A:/proj",
+            "--dry-run",
+            "--variant",
+            "debug",
+            "--module",
+            "app",
+            "--timeout",
+            "20m",
+            "--expected-package",
+            "com.example.app",
+        ] {
+            assert!(
+                argv.iter().any(|argument| argument == expected),
+                "missing {expected} in {argv:?}"
+            );
+        }
+        for forbidden in [
+            "--session",
+            "ses-1",
+            "--serial",
+            "emulator-5554",
+            "--install",
+            "--launch",
+            "--cold",
+        ] {
+            assert!(
+                !argv.iter().any(|argument| argument == forbidden),
+                "build argv leaked {forbidden}: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn app_install_confirmation_flags_are_in_schema_and_argv() {
+        let tool = tool_definitions()
+            .into_iter()
+            .find(|tool| tool["name"] == "androidforge_app_install")
+            .expect("app install tool");
+        for key in [
+            "wait_for_confirmation",
+            "confirm_text",
+            "confirmation_timeout",
+        ] {
+            assert!(
+                tool["inputSchema"]["properties"]
+                    .get(key)
+                    .is_some_and(Value::is_object),
+                "app install schema missing {key}"
+            );
+        }
+        let argv = tool_argv(
+            "androidforge_app_install",
+            &json!({
+                "apk": "app-debug.apk",
+                "session": "ses-1",
+                "wait_for_confirmation": true,
+                "confirm_text": ["Install", "Allow"],
+                "confirmation_timeout": "20s",
+            }),
+        )
+        .expect("app install argv");
+        for expected in [
+            "--wait-for-confirmation",
+            "--confirm-text",
+            "Install",
+            "Allow",
+            "--confirmation-timeout",
+            "20s",
+        ] {
+            assert!(
+                argv.iter().any(|argument| argument == expected),
+                "missing {expected} in {argv:?}"
+            );
+        }
+        for forbidden in ["--allow-physical-install", "--allow-physical-mutation"] {
+            assert!(
+                !argv.iter().any(|argument| argument == forbidden),
+                "install argv leaked {forbidden}: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scenario_tools_map_to_cli_argv_and_keep_physical_gates() {
+        let definitions = tool_definitions();
+        for name in [
+            "androidforge_scenario_run",
+            "androidforge_scenario_validate",
+        ] {
+            let tool = definitions
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            for physical in [
+                "allow_physical_mutation",
+                "allow_physical_app_control",
+                "allow_physical_data",
+                "allow_physical_network",
+                "allow_physical_install",
+                "allow_physical_input",
+            ] {
+                assert!(
+                    tool["inputSchema"]["properties"].get(physical).is_none(),
+                    "{name} advertises {physical}"
+                );
+            }
+        }
+
+        let validate = tool_argv(
+            "androidforge_scenario_validate",
+            &json!({"file": "smoke.toml", "session": "ses-1"}),
+        )
+        .expect("validate argv");
+        assert_eq!(
+            validate,
+            vec![
+                "scenario",
+                "validate",
+                "smoke.toml",
+                "--json",
+                "--session",
+                "ses-1"
+            ]
+        );
+
+        let error = tool_argv("androidforge_scenario_run", &json!({"file": "smoke.toml"}))
+            .expect_err("run needs confirm or dry_run");
+        assert!(error.contains("confirm=true"), "{error}");
+
+        let dry = tool_argv(
+            "androidforge_scenario_run",
+            &json!({"file": "smoke.toml", "dry_run": true, "repeat": 3, "session": "ses-1"}),
+        )
+        .expect("dry run argv");
+        assert_eq!(
+            dry,
+            vec![
+                "scenario",
+                "run",
+                "smoke.toml",
+                "--session",
+                "ses-1",
+                "--repeat",
+                "3",
+                "--dry-run",
+                "--json"
+            ]
+        );
+
+        let run = tool_argv(
+            "androidforge_scenario_run",
+            &json!({
+                "file": "smoke.json",
+                "confirm": true,
+                "repeat": 2,
+                "session": "ses-1",
+                "allow_physical_mutation": true,
+                "allow_physical_input": true,
+            }),
+        )
+        .expect("run argv");
+        assert_eq!(run[0], "scenario");
+        assert_eq!(run[1], "run");
+        assert_eq!(run[2], "smoke.json");
+        assert!(run.contains(&"--yes".to_string()));
+        assert!(run.windows(2).any(|pair| pair == ["--repeat", "2"]));
+        assert!(
+            !run.iter()
+                .any(|argument| argument.starts_with("--allow-physical")),
+            "scenario argv leaked a physical flag: {run:?}"
+        );
+    }
+
+    #[test]
+    fn devices_shell_mcp_tool_is_read_only_and_tap_forwards_coordinates() {
+        let tools = tool_definitions();
+        let shell = tools
+            .iter()
+            .find(|tool| tool["name"] == "androidforge_devices_shell")
+            .expect("device shell MCP tool");
+        assert!(
+            shell["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("--read-only")
+        );
+        for physical in [
+            "allow_physical_mutation",
+            "allow_physical_input",
+            "allow_physical_app_control",
+        ] {
+            assert!(
+                shell["inputSchema"]["properties"].get(physical).is_none(),
+                "device shell advertises {physical}"
+            );
+        }
+        let argv = tool_argv(
+            "androidforge_devices_shell",
+            &json!({
+                "session": "ses-1",
+                "command": ["dumpsys", "gfxinfo", "com.example"],
+                "deny": ["reset"],
+            }),
+        )
+        .expect("shell argv");
+        assert!(argv.contains(&"devices".to_string()));
+        assert!(argv.contains(&"shell".to_string()));
+        assert!(argv.contains(&"--read-only".to_string()));
+        assert!(argv.contains(&"--".to_string()));
+        assert!(argv.contains(&"dumpsys".to_string()));
+        assert!(argv.contains(&"reset".to_string()));
+        let separator = argv
+            .iter()
+            .position(|arg| arg == "--")
+            .expect("argument separator");
+        let json_flag = argv
+            .iter()
+            .position(|arg| arg == "--json")
+            .expect("json flag");
+        assert!(json_flag < separator, "argv: {argv:?}");
+        assert!(!argv.iter().any(|arg| arg.starts_with("--allow-physical")));
+
+        let tap = tool_argv(
+            "androidforge_devices_input_tap",
+            &json!({"session": "ses-1", "x": 540, "y": 1200}),
+        )
+        .expect("tap argv");
+        assert!(tap.contains(&"devices".to_string()));
+        assert!(tap.contains(&"input".to_string()));
+        assert!(tap.contains(&"tap".to_string()));
+        assert!(tap.contains(&"540".to_string()));
+        assert!(tap.contains(&"1200".to_string()));
+        assert!(!tap.iter().any(|arg| arg.starts_with("--allow-physical")));
+    }
+
+    #[test]
+    fn logcat_mcp_tools_forward_literal_redact_prefixes() {
+        let tools = tool_definitions();
+        for name in [
+            "androidforge_diagnostics_logcat_query",
+            "androidforge_diagnostics_logcat_watch",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            assert!(
+                tool["inputSchema"]["properties"]
+                    .get("redact_patterns")
+                    .is_some(),
+                "{name} does not advertise redact_patterns"
+            );
+            let argv = tool_argv(
+                name,
+                &json!({"session": "ses-1", "redact_patterns": ["AIza", "sk-"]}),
+            )
+            .expect("argv");
+            let flags = argv
+                .iter()
+                .filter(|arg| *arg == "--redact-patterns")
+                .count();
+            assert_eq!(flags, 2, "{argv:?}");
+            assert!(argv.contains(&"AIza".to_string()));
+            assert!(argv.contains(&"sk-".to_string()));
+        }
+    }
+
+    #[test]
+    fn new_read_only_tools_are_generated_without_physical_flags() {
+        let names = tool_definitions()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        for expected in [
+            "androidforge_ui_audit_a11y",
+            "androidforge_capture_baseline_save",
+            "androidforge_capture_baseline_update",
+            "androidforge_capture_baseline_compare",
+            "androidforge_capture_baseline_list",
+            "androidforge_capture_contrast",
+        ] {
+            assert!(names.contains(&expected.to_string()), "missing {expected}");
+        }
+        let catalog = crate::commands::catalog::command_catalog();
+        for path in [
+            "ui audit a11y",
+            "capture baseline save",
+            "capture baseline update",
+            "capture baseline compare",
+            "capture baseline list",
+            "capture contrast",
+        ] {
+            let command = catalog
+                .iter()
+                .find(|command| command.path == path)
+                .unwrap_or_else(|| panic!("missing catalog entry {path}"));
+            assert_eq!(command.safety, "read-only", "{path}");
+        }
     }
 }

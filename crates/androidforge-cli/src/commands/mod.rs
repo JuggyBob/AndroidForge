@@ -2,11 +2,14 @@ pub mod adb;
 pub mod agent;
 pub mod apk;
 pub mod app;
+pub mod artifacts;
 pub mod automation;
+pub mod build;
 pub mod bundle;
 pub mod catalog;
 pub mod common;
 pub mod context;
+pub mod device;
 pub mod devices;
 pub mod diagnostics;
 pub mod doctor;
@@ -18,27 +21,37 @@ pub mod observation;
 pub mod ocr;
 pub mod receipt;
 pub mod report;
+pub mod scenario;
 pub mod session;
 pub mod system;
 pub mod ui;
 pub mod visual;
+// Named-baseline API is staged ahead of its CLI subcommands in a later item.
+#[cfg_attr(not(test), allow(dead_code))]
+pub mod visual_baseline;
 
 use androidforge_core::error::Result;
 use androidforge_core::output::CommandSuccess;
 
 use crate::cli::{
-    AppCommand, AppDataCommand, CaptureCommand, Cli, Command, DevicesCommand, DiagnosticsCommand,
-    EmulatorCommand, FixtureCommand, HookCommand, ReportCommand, RunCommand, SessionCommand,
-    SnapshotCommand, TestCommand, UiCommand,
+    AppCommand, AppDataCommand, ArtifactsCommand, CaptureCommand, Cli, Command, DevicesCommand,
+    DiagnosticsCommand, EmulatorCommand, FixtureCommand, HookCommand, PortsCommand, ReportCommand,
+    RunCommand, ScenarioCommand, SessionCommand, SnapshotCommand, TestCommand, UiCommand,
 };
 use crate::context::CliContext;
 
 pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
     match &cli.command {
-        Command::Doctor { command } => match command {
-            Some(crate::cli::DoctorCommand::Fix(args)) => doctor::fix_plan(cli, args).await,
-            None => doctor::doctor(cli).await,
-        },
+        Command::Doctor { capacity, command } => {
+            if *capacity {
+                doctor::capacity(cli).await
+            } else {
+                match command {
+                    Some(crate::cli::DoctorCommand::Fix(args)) => doctor::fix_plan(cli, args).await,
+                    None => doctor::doctor(cli).await,
+                }
+            }
+        }
         Command::Context(args) => context::context(cli, args).await,
         Command::Agent { command } => agent::agent(cli, command).await,
         Command::Capabilities => doctor::capabilities(cli).await,
@@ -59,9 +72,18 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
             let ctx = CliContext::new(cli)?;
             devices::devices(&ctx, command).await
         }
+        Command::Artifacts { command } => match command {
+            ArtifactsCommand::ScanSecrets(args) => artifacts::scan_secrets_command(cli, args),
+        },
         Command::Avd { command } => {
             let ctx = CliContext::new(cli)?;
             session::avd(&ctx, command).await
+        }
+        Command::Ports {
+            command: PortsCommand::List,
+        } => {
+            let ctx = CliContext::new(cli)?;
+            session::ports(&ctx).await
         }
         Command::Emulator { command } => {
             let ctx = CliContext::new(cli)?;
@@ -73,8 +95,9 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
         }
         Command::App { command } => {
             let ctx = CliContext::new(cli)?;
-            app::app(&ctx, command).await
+            app::app(cli, &ctx, command).await
         }
+        Command::Build(args) => build::build(cli, args).await,
         Command::Apk {
             command: crate::cli::ApkCommand::Inspect { apk },
         } => {
@@ -163,6 +186,10 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
             let ctx = CliContext::new(cli)?;
             automation::conformance(&ctx, command).await
         }
+        Command::Scenario { command } => match command {
+            ScenarioCommand::Run(args) => scenario::run(cli, args).await,
+            ScenarioCommand::Validate(args) => scenario::validate(args),
+        },
         Command::Test { command } => {
             let ctx = CliContext::new(cli)?;
             automation::test(&ctx, command).await
@@ -184,10 +211,16 @@ pub async fn execute(cli: &Cli) -> Result<CommandSuccess> {
 
 pub fn canonical_name(command: &Command) -> String {
     match command {
-        Command::Doctor { command } => match command {
-            Some(crate::cli::DoctorCommand::Fix(_)) => "doctor.fix".to_string(),
-            None => "doctor".to_string(),
-        },
+        Command::Doctor { capacity, command } => {
+            if *capacity {
+                "doctor.capacity".to_string()
+            } else {
+                match command {
+                    Some(crate::cli::DoctorCommand::Fix(_)) => "doctor.fix".to_string(),
+                    None => "doctor".to_string(),
+                }
+            }
+        }
         Command::Context(_) => "context".to_string(),
         Command::Agent { command } => match command {
             crate::cli::AgentCommand::Brief => "agent.brief".to_string(),
@@ -201,16 +234,26 @@ pub fn canonical_name(command: &Command) -> String {
         Command::Init(_) => "init".to_string(),
         Command::Config { .. } => "config".to_string(),
         Command::Session { command } => format!("session.{}", session_name(command)),
+        Command::Devices {
+            command: crate::cli::DevicesCommand::Tag { command },
+        } => format!("devices.tag.{}", devices_tag_name(command)),
         Command::Devices { command } => format!("devices.{}", devices_name(command)),
+        Command::Artifacts { command } => match command {
+            ArtifactsCommand::ScanSecrets(_) => "artifacts.scan-secrets".to_string(),
+        },
         Command::Avd { command } => match command {
             crate::cli::AvdCommand::List => "avd.list".to_string(),
+            crate::cli::AvdCommand::Images => "avd.images".to_string(),
+            crate::cli::AvdCommand::Create(_) => "avd.create".to_string(),
             crate::cli::AvdCommand::Clone { .. } => "avd.clone".to_string(),
         },
+        Command::Ports { .. } => "ports.list".to_string(),
         Command::Emulator { command } => format!("emulator.{}", emulator_name(command)),
         Command::Snapshot { command } => format!("snapshot.{}", snapshot_name(command)),
         Command::App {
             command: app_command,
         } => format!("app.{}", app_name(app_command)),
+        Command::Build(_) => "build".to_string(),
         Command::Apk { command } => match command {
             crate::cli::ApkCommand::Inspect { .. } => "apk.inspect".to_string(),
             crate::cli::ApkCommand::Verify(_) => "apk.verify".to_string(),
@@ -236,6 +279,10 @@ pub fn canonical_name(command: &Command) -> String {
         Command::Hook { .. } => "hook.run".to_string(),
         Command::Fixture { command } => format!("fixture.{}", fixture_name(command)),
         Command::Conformance { .. } => "conformance.run".to_string(),
+        Command::Scenario { command } => match command {
+            ScenarioCommand::Run(_) => "scenario.run".to_string(),
+            ScenarioCommand::Validate(_) => "scenario.validate".to_string(),
+        },
         Command::Test { command } => match command {
             TestCommand::Maestro { .. } => "test.maestro".to_string(),
             TestCommand::Instrumentation { .. } => "test.instrumentation".to_string(),
@@ -277,6 +324,19 @@ fn devices_name(command: &DevicesCommand) -> &'static str {
         DevicesCommand::Connect(_) => "connect",
         DevicesCommand::Disconnect(_) => "disconnect",
         DevicesCommand::Health(_) => "health",
+        DevicesCommand::Scenario(_) => "scenario",
+        DevicesCommand::Tag { .. } => "tag",
+        DevicesCommand::Shell(_) => "shell",
+        DevicesCommand::Input { .. } => "input.tap",
+    }
+}
+
+fn devices_tag_name(command: &crate::cli::DevicesTagCommand) -> &'static str {
+    match command {
+        crate::cli::DevicesTagCommand::Add(_) => "add",
+        crate::cli::DevicesTagCommand::Remove(_) => "remove",
+        crate::cli::DevicesTagCommand::List { .. } => "list",
+        crate::cli::DevicesTagCommand::Clear { .. } => "clear",
     }
 }
 
@@ -338,6 +398,8 @@ fn ui_name(command: &UiCommand) -> &'static str {
         UiCommand::Clear(_) => "clear",
         UiCommand::Wait(_) => "wait",
         UiCommand::Assert(_) => "assert",
+        UiCommand::Bounds(_) => "bounds",
+        UiCommand::AssertBounds(_) => "assert-bounds",
         UiCommand::AssertNoText(_) => "assert-no-text",
         UiCommand::DismissOverlays(_) => "dismiss-overlays",
         UiCommand::Settle(_) => "settle",
@@ -349,6 +411,7 @@ fn ui_name(command: &UiCommand) -> &'static str {
         UiCommand::Keyevent(_) => "keyevent",
         UiCommand::HideKeyboard => "hide-keyboard",
         UiCommand::Focused => "focused",
+        UiCommand::Audit { .. } => "audit.a11y",
     }
 }
 
@@ -356,6 +419,18 @@ fn capture_name(command: &CaptureCommand) -> String {
     match command {
         CaptureCommand::Screenshot(_) => "capture.screenshot".to_string(),
         CaptureCommand::Frame(_) => "capture.frame".to_string(),
+        CaptureCommand::Launch(_) => "capture.launch".to_string(),
+        CaptureCommand::AssertColor(_) => "capture.assert-color".to_string(),
+        CaptureCommand::Baseline { command } => format!(
+            "capture.baseline.{}",
+            match command {
+                crate::cli::BaselineCommand::Save(_) => "save",
+                crate::cli::BaselineCommand::Update(_) => "update",
+                crate::cli::BaselineCommand::Compare(_) => "compare",
+                crate::cli::BaselineCommand::List => "list",
+            }
+        ),
+        CaptureCommand::Contrast(_) => "capture.contrast".to_string(),
         CaptureCommand::Record { command } => format!(
             "capture.record.{}",
             match command {
@@ -375,6 +450,7 @@ fn diagnostics_name(command: &DiagnosticsCommand) -> &'static str {
         DiagnosticsCommand::Crashes { .. } => "crashes",
         DiagnosticsCommand::Inspect(_) => "inspect",
         DiagnosticsCommand::Performance(_) => "performance",
+        DiagnosticsCommand::Frames(_) => "frames",
     }
 }
 
@@ -383,6 +459,8 @@ fn fixture_name(command: &FixtureCommand) -> &'static str {
         FixtureCommand::List => "list",
         FixtureCommand::Validate { .. } => "validate",
         FixtureCommand::Run(_) => "run",
+        FixtureCommand::Apply(_) => "apply",
+        FixtureCommand::Reset(_) => "reset",
     }
 }
 
@@ -546,6 +624,7 @@ impl NestedName for crate::cli::NetworkMockCommand {
     fn nested_name(&self) -> &'static str {
         match self {
             Self::Serve(_) => "serve",
+            Self::Scenarios => "scenarios",
         }
     }
 }

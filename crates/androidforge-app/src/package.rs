@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::apk::ApkInspector;
 use crate::install::{InstallOptions, InstallResult, InstalledPackage, install, installed_package};
 
+/// Upper bound for waiting on process state after `am force-stop` / launch.
+const FORCE_STOP_PID_TIMEOUT: Duration = Duration::from_secs(5);
+const PID_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -199,6 +203,10 @@ pub struct AppLaunch {
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_time_ms: Option<u64>,
+    /// PID observed after a verified force-stop/restart launch. Omitted for
+    /// ordinary launches so existing JSON consumers stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
     #[serde(default)]
     pub foreground: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -467,10 +475,60 @@ impl AppManager {
             data: None,
             status,
             total_time_ms,
+            pid: None,
             foreground,
             foreground_app,
             warnings,
         })
+    }
+
+    /// Force-stop an existing process, then launch the package and verify that
+    /// a genuinely new process came up. Used by `app launch --force-stop` for
+    /// bare-package launches (intent launches handle this in `start_intent`).
+    ///
+    /// When the app was never running, `force_stop` is a no-op and the first
+    /// observed PID is accepted, so a cold launch is not blocked.
+    pub async fn launch_with_force_stop(
+        &self,
+        serial: &str,
+        package: &str,
+        activity: Option<&str>,
+        wake: bool,
+    ) -> Result<AppLaunch> {
+        // Capture the old PIDs before stopping so an unchanged PID can be
+        // detected after the launch. An empty set means a cold launch.
+        let old_pids = self.pids(serial, package).await;
+        // The existing force-stop path waits a bounded time for old PIDs to
+        // disappear and fails if they do not.
+        self.force_stop(serial, package).await?;
+        let mut launch = self.launch(serial, package, activity, wake).await?;
+        let started = Instant::now();
+        let mut observed_pids = Vec::new();
+        while started.elapsed() < FORCE_STOP_PID_TIMEOUT {
+            observed_pids = self.pids(serial, package).await;
+            if let Some(pid) = new_pid_after(&old_pids, &observed_pids) {
+                launch.pid = Some(pid);
+                return Ok(launch);
+            }
+            tokio::time::sleep(PID_POLL_INTERVAL).await;
+        }
+        let reason = if observed_pids.is_empty() {
+            "no_process_after_launch"
+        } else {
+            "pid_unchanged_after_launch"
+        };
+        Err(ForgeError::new(
+            ErrorCode::CommandFailed,
+            format!("force-stop launch did not produce a new process for {package}"),
+        )
+        .with_context("package", serde_json::json!(package))
+        .with_context("old_pids", serde_json::json!(old_pids))
+        .with_context("observed_pids", serde_json::json!(observed_pids))
+        .with_context_string("reason", reason)
+        .with_suggestion(
+            "Inspect the app with `androidforge app status <package>` and retry the launch.",
+        )
+        .device(serial.to_string()))
     }
 
     pub async fn start_intent(&self, serial: &str, spec: &IntentSpec) -> Result<AppLaunch> {
@@ -586,6 +644,7 @@ impl AppManager {
             data: spec.data.clone(),
             status,
             total_time_ms,
+            pid: None,
             foreground,
             foreground_app,
             warnings,
@@ -697,11 +756,11 @@ impl AppManager {
             )
             .await?;
         let started = Instant::now();
-        while started.elapsed() < Duration::from_secs(5) {
+        while started.elapsed() < FORCE_STOP_PID_TIMEOUT {
             if self.pids(serial, package).await.is_empty() {
                 return Ok(());
             }
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(PID_POLL_INTERVAL).await;
         }
         let states = self.status(serial, package).await?;
         Err(ForgeError::new(
@@ -1087,6 +1146,15 @@ fn normalize_component(package: &str, activity: &str) -> String {
     }
 }
 
+/// Pick the first PID in `current` that was not part of `previous`.
+///
+/// `previous` is empty for a cold launch (or an app that was never running),
+/// in which case any observed PID counts as new. A process that kept its old
+/// PID after a force-stop/restart yields `None` so callers can fail loudly.
+fn new_pid_after(previous: &[u32], current: &[u32]) -> Option<u32> {
+    current.iter().copied().find(|pid| !previous.contains(pid))
+}
+
 fn find_value(text: &str, key: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();
@@ -1140,5 +1208,29 @@ mod tests {
             normalize_component("com.example", "com.example.MainActivity"),
             "com.example/com.example.MainActivity"
         );
+    }
+
+    #[test]
+    fn cold_launch_accepts_first_observed_pid() {
+        assert_eq!(new_pid_after(&[], &[4242]), Some(4242));
+        assert_eq!(new_pid_after(&[], &[4242, 4243]), Some(4242));
+    }
+
+    #[test]
+    fn unchanged_pid_is_rejected() {
+        assert_eq!(new_pid_after(&[4242], &[4242]), None);
+        assert_eq!(new_pid_after(&[4242, 4243], &[4243, 4242]), None);
+    }
+
+    #[test]
+    fn restarted_pid_is_detected_among_old_pids() {
+        assert_eq!(new_pid_after(&[4242], &[9001]), Some(9001));
+        assert_eq!(new_pid_after(&[4242, 4243], &[4242, 9001]), Some(9001));
+    }
+
+    #[test]
+    fn no_pid_yet_waits_for_process() {
+        assert_eq!(new_pid_after(&[4242], &[]), None);
+        assert_eq!(new_pid_after(&[], &[]), None);
     }
 }

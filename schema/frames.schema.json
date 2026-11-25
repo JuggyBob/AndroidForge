@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/frames.schema.json",
+  "title": "AndroidForge frame-timing evidence",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "package",
+    "serial",
+    "collected_at",
+    "reset_before_collection",
+    "sample"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "package": { "type": "string" },
+    "serial": { "type": "string" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string" },
+    "run_dir": { "type": "string" },
+    "reset_before_collection": { "type": "boolean" },
+    "sample": { "$ref": "#/$defs/sample" },
+    "comparison": { "$ref": "#/$defs/comparison" },
+    "baseline_source": { "type": "string" },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sample": {
+      "type": "object",
+      "required": ["sample_status"],
+      "properties": {
+        "total_frames": { "type": ["integer", "null"], "minimum": 0 },
+        "janky": { "type": ["integer", "null"], "minimum": 0 },
+        "janky_percent": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "janky_legacy": { "type": ["integer", "null"], "minimum": 0 },
+        "janky_legacy_percent": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "p50_ms": { "type": ["number", "null"], "minimum": 0 },
+        "p90_ms": { "type": ["number", "null"], "minimum": 0 },
+        "p95_ms": { "type": ["number", "null"], "minimum": 0 },
+        "p99_ms": { "type": ["number", "null"], "minimum": 0 },
+        "max_ms": { "type": ["number", "null"], "minimum": 0 },
+        "missed_vsync": { "type": ["integer", "null"], "minimum": 0 },
+        "slow_ui": { "type": ["integer", "null"], "minimum": 0 },
+        "deadline_missed": { "type": ["integer", "null"], "minimum": 0 },
+        "histogram": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/histogram_bucket" }
+        },
+        "window": { "$ref": "#/$defs/window" },
+        "sample_status": { "type": "string", "enum": ["ok", "insufficient", "unavailable", "unknown", ""] },
+        "unknown_reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "window": {
+      "type": "object",
+      "properties": {
+        "pid": { "type": ["integer", "null"], "minimum": 1 },
+        "package": { "type": ["string", "null"] },
+        "uptime_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "realtime_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "stats_since_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "raw_excerpt": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "histogram_bucket": {
+      "type": "object",
+      "required": ["start_ms", "end_ms", "count"],
+      "properties": {
+        "start_ms": { "type": "number", "minimum": 0 },
+        "end_ms": { "type": "number", "minimum": 0 },
+        "count": { "type": "integer", "minimum": 0 },
+        "percent": { "type": ["number", "null"], "minimum": 0, "maximum": 100 }
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object",
+      "required": ["comparable", "regression"],
+      "properties": {
+        "comparable": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "deltas": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/metric_delta" }
+        },
+        "regression": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "metric_delta": {
+      "type": "object",
+      "required": ["metric", "status"],
+      "properties": {
+        "metric": { "type": "string", "enum": ["jank_percent", "p99_ms", "max_ms"] },
+        "baseline": { "type": ["number", "null"] },
+        "current": { "type": ["number", "null"] },
+        "delta": { "type": ["number", "null"] },
+        "status": { "$ref": "#/$defs/delta_status" }
+      },
+      "additionalProperties": false
+    },
+    "delta_status": {
+      "type": "string",
+      "enum": ["pass", "regression", "unknown"]
+    }
+  }
+}

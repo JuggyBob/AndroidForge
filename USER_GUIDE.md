@@ -53,7 +53,7 @@ androidforge tools uninstall maestro --yes --json
 - `tools install` requires `--yes` because it downloads about 350 MB. `--dry-run` prints the URL, hash
   and target without downloading.
 
-Maestro remains **best-effort/optional** in the 1.0 line. The installer pins one tested version; a
+Maestro remains **best-effort/optional** in the 1.1 line. The installer pins one tested version; a
 manually installed copy on `PATH` is still detected through `[maestro].binary`, `[sdk].maestro` or
 `ANDROIDFORGE_MAESTRO`.
 
@@ -81,6 +81,13 @@ for context, observations, diffs, receipts, `agent test`, `report explain` and p
 `--output-profile full` to override a compact default. Defaults can also come from `[agent] profile`
 in `.androidforge/project.toml` or `ANDROIDFORGE_PROFILE=full|compact|brief`. `--max-items` and
 `--max-text-chars` control the caps.
+
+For line-oriented consumers, add `--jsonl` (implies `--json`) to emit one minified JSON object per
+line; `scenario run` also writes one short iteration line before the final envelope. `--fields a,b,c`
+keeps only those top-level keys of `result` and never removes envelope fields; envelope trimming
+remains `--output-profile compact|brief`. `--stats` adds one JSON stats line to stderr with the exact
+stdout byte count, line count and `ceil(bytes/4)` token estimate; stdout stays parseable and `--quiet`
+does not suppress stats. These flags are CLI-only and are never MCP tool arguments.
 
 Refs and observation tokens are 12 hex characters by default. Common aliases are `ui o/d/t/w`,
 `app i/l`, `diagnostics perf`, `report why`, `agent b` and `context ctx`; selector aliases include
@@ -124,6 +131,8 @@ androidforge ui observe --session <ID> --json
 androidforge ui observe --session <ID> --package com.example.app --json
 androidforge ui observe --session <ID> --since obs-... --json
 androidforge ui observe --session <ID> --full --json
+androidforge ui observe --session <ID> --semantics --json
+androidforge ui observe --session <ID> --semantics --full --json
 androidforge ui diff --session <ID> --from obs-... --json
 androidforge ui diff --session <ID> --from obs-... --full --json
 ```
@@ -132,7 +141,12 @@ Default observations contain interactive `actionable` nodes, non-interactive `co
 foreground package/activity, display and visible text. Each node includes `clickable` and `enabled`;
 `token` is the preferred 12-hex observation token and `id` is a backward-compatible alias.
 `actionable_total`/`actionable_truncated` and `context_total`/`context_truncated` state whether the
-compact view was capped. `--full` returns the complete parsed hierarchy plus all nodes. Observation
+compact view was capped. `--full` returns the complete parsed hierarchy plus all nodes. Add
+`--semantics` for a bounded (64-node) semantic view of the full hierarchy: it carries Compose test
+tags as `test_tag` while leaving `resource_id` unchanged, adds `semantics_total`/
+`semantics_truncated`, and gives those nodes stable refs usable by `ui tap --ref`. Omitting the flag
+leaves the observation unchanged. Compose test tags can also be selected directly with
+`--test-tag <tag>` on `ui tap` and `ui assert`. Observation
 tokens are session-scoped, boot-id-scoped, kept in the local AndroidForge state directory and expire
 after 24 hours or the per-session retention limit. The retention limit is
 `[storage] observation_retention` (default 20, range 2-1000); eviction is oldest-first and never
@@ -167,6 +181,7 @@ androidforge report bundle latest --output .\evidence.zip --json
 androidforge report bundle latest-failure --output .\failure-evidence.zip --json
 androidforge report bundle latest --dry-run --json
 androidforge report bundle latest --markdown --json
+androidforge report bundle latest-failure --tag smoke --since 7d --json
 ```
 
 Recurrence memory derives `new`, `recurring`, `regressed` or `unknown` from existing local reports.
@@ -174,6 +189,10 @@ A passing run counts as resolution only when it exercised the same project/scena
 Bundles include a redacted summary, explanation, reproduction argv, evidence excerpts, bounded logcat,
 hierarchy XML, checksums and an exclusion list. Screenshots, recordings and full raw logs are opt-in.
 ZIPs are written atomically and reopened for checksum verification before success is reported.
+`latest` and `latest-failure` selection can be narrowed with repeatable `--tag` (all tags must be
+present), the global `--session` / `--serial`, and `--since` (an RFC3339 instant or a relative
+duration such as `7d`, `2h` or `500ms`). `report list` and the compare baseline selector accept the
+same filters, so a smoke bundle cannot accidentally pick up an untagged or older run.
 
 ### APK resolution and comparison
 
@@ -214,6 +233,38 @@ Resolution never runs Gradle. It selects the newest valid APK and reports the ma
 SHA-256 and certificate. Equal timestamps with different content are an ambiguity error. An explicit
 `--apk` wins over `--variant`. `--only-if-changed` skips only when package, version code, base APK hash
 and every split SHA-256 prove equivalence; unknown split identity installs rather than silently skipping.
+
+### Build, install and launch in one command
+
+`androidforge build` runs the explicit argv configured for a variant and then resolves the produced
+APK. It never infers a command or interprets a shell string. Build alone is host-side: it needs no
+session and touches no device.
+
+```powershell
+androidforge build --variant debug --json
+androidforge build --variant debug --module app --timeout 20m --expected-package com.example.app --json
+androidforge build --variant debug --install --only-if-changed --session <ID> --json
+androidforge build --variant debug --launch --activity .MainActivity --session <ID> --json
+androidforge build --variant debug --cold --session <ID> --json
+```
+
+- `--variant` defaults to `[build].default_variant`; `--module` narrows APK resolution;
+  `--timeout` overrides `[build].timeout_secs` (for example `20m`).
+- `--install` reuses `app install` and its identity checks. `--fresh` requires `--yes`, cannot be
+  combined with `--only-if-changed`, and `--downgrade` / `--no-verify` forward to the install
+  options. Physical devices still require `--allow-physical-install` (or the superset).
+- `--launch` implies install and reuses `app launch`, gated by `Risk::AppControl` (physical devices
+  require `--allow-physical-app-control`). `--activity` requires `--launch` or `--cold`.
+- `--cold` implies launch and uses `AppManager::launch_with_force_stop` even when `--activity` is
+  given, so the launch verifies a genuinely new PID instead of reusing the old force-stop path.
+- Global `--dry-run` executes nothing: no build process, no session lookup, no device contact and
+  no log artifact. Install/launch flags become planning records in the result.
+- A successful result adds a `build` object alongside `apk` (the resolved APK), `install` and
+  `launch` when those were requested. Failures use `E_BUILD_*` codes with structured context
+  (`classification`, `failed_task`, `first_error`, `log_path`, `log_sha256`, `argv`, `exit_code`).
+- `E_BUILD_OUTPUT_TOO_LARGE` is reserved for the rare case where bounded output capture removed the
+  only failure marker and left a generic non-zero exit; ordinary log truncation is a warning with a
+  retained head and tail.
 
 ### Stable element references
 
@@ -289,6 +340,7 @@ androidforge report explain latest --json
 androidforge report explain latest-failure --json
 androidforge report explain <RUN_ID> --full --json
 androidforge report explain <RUN_ID> --markdown
+androidforge report explain latest --tag release --tag smoke --since 2026-01-01T00:00:00Z --json
 ```
 
 Explanations are deterministic and offline. They include category, stable error code, confidence,
@@ -296,7 +348,9 @@ curated evidence, alternatives, exact `argv` next actions, a stable fingerprint 
 `latest` is the newest completed run in this project; `latest-failure` is the newest failed, partial,
 cancelled, interrupted or abandoned run. `report bundle` uses the same selection. Both are strictly
 scoped to the project's recorded root, so a newer run from another app is never selected.
-`report list --all` lists runs across stores; run commands from `project_root` or pass `--project`.
+Repeatable `--tag` and `--since` narrow `latest`/`latest-failure` further; the applied filter is
+returned as `result.scope`. Explicit run ids bypass latest-selection filters. `report list --all`
+lists runs across stores; run commands from `project_root` or pass `--project`.
 
 ### Read-only repair planning
 
@@ -318,9 +372,10 @@ androidforge tools schema --format openai --json
 ```
 
 `mcp serve` is a local stdio JSON-RPC server. It writes only protocol lines to stdout; logs go to
-stderr. It exposes the same 192 tools as `tools schema`, shells out to the same CLI and requires
-`confirm=true` for destructive tools. Raw `adb`, `run exec` and generated long-running server entries
-are deliberately excluded; the curated mock-server tool remains bounded by `max_requests`/`duration`.
+stderr. It exposes the same tools as `tools schema` (count measured per batch), shells out to the same
+CLI and requires `confirm=true` for destructive tools. Raw `adb`, `run exec` and generated
+long-running server entries are deliberately excluded; the curated mock-server tool remains bounded
+by `max_requests`/`duration` unless a built-in scenario supplies its own bounds.
 Physical-device mutation cannot be self-approved from MCP arguments. There is no HTTP
 listener, account or key. `tools catalog --json` exposes the complete command catalog, and
 `androidforge://catalog` serves it as an MCP resource. Use `tools schema` to feed the same catalog to
@@ -537,14 +592,56 @@ androidforge devices restore --session <ID> --json
 
 Preparation records previous values. `devices restore`, `session release` and `session stop` restore only what AndroidForge changed. Use `--keep-prepared` if you deliberately want to keep test settings.
 
+One device setting at a time is available through the typed scenario API:
+
+```powershell
+androidforge devices scenario --night yes --session <ID> --json
+androidforge devices scenario --locale fr-FR --session <ID> --json
+androidforge devices scenario --font 1.15 --session <ID> --json
+androidforge devices scenario --network offline --session <ID> --json
+androidforge devices scenario --network offline --dry-run --json
+```
+
+Exactly one flag is accepted. Night/locale/font changes reuse `DevicePreparer` and record their
+previous values in the session; network changes reuse the named network profiles and their restore
+recorder. Settings changes require `--allow-physical-data` on a physical device, network changes
+require `--allow-physical-network`, and a dry run only prints a plan with `will_mutate: false`.
+
+Host-only tags label serials for matrix planning. They never contact a device:
+
+```powershell
+androidforge devices tag add --serial emulator-5554 --tag nightly --json
+androidforge devices tag list --json
+androidforge devices tag remove --serial emulator-5554 --tag nightly --json
+androidforge devices tag clear --serial emulator-5554 --json
+androidforge agent matrix --device tag:nightly --flow conformance --dry-run --json
+```
+
+Tags are lowercase safe tokens. `--device tag:<name>` resolves to concrete serials deterministically,
+and a serial that is also passed with `--serial` is counted once.
+
 ## 6. Emulators and snapshots
 
 ```powershell
 androidforge avd list --json
+androidforge avd images --json
+androidforge doctor --capacity --json
+androidforge avd create androidforge_test --image "system-images;android-35;google_apis;x86_64" --device pixel_7 --dry-run --json
+androidforge avd create androidforge_test --image "system-images;android-35;google_apis;x86_64" --device pixel_7 --yes --json
+androidforge ports list --json
 androidforge emulator start --avd androidforge_test --port 5560 --headless --json
 androidforge emulator status --serial emulator-5560 --json
 androidforge emulator stop --session <ID> --json
 ```
+
+`avd images` is a read-only inventory of installed SDK system images. `avd create` is a host-side
+mutation: `--dry-run` prints the exact `avdmanager` argv and executes nothing, and a real run requires
+explicit `--yes`; an existing AVD is never overwritten. `doctor --capacity` reports host RAM, commit
+and disk readings with their sources plus conservative per-AVD commit estimates; unknown values are
+`null`/unknown with a reason, never a fabricated zero. `ports list` maps every conventional console
+port to its ADB and gRPC ports, shows free/allocated/occupied state and attaches active-session
+owner/session/AVD metadata from session files. `emulator status` adds console/ADB/gRPC ports,
+owner/session and a conservative `capacity_warning` while keeping the existing fields.
 
 - New emulators are headless by default. Use `--windowed` only when a human needs to watch.
 - `--port` is an even console port; ADB uses port + 1. Automatic allocation starts at the conventional
@@ -585,6 +682,8 @@ androidforge session stop --session ses-... --owner MyAgent --json
 `session use` writes `.androidforge/current-session` for the project. `ANDROIDFORGE_SESSION` is the environment alternative. `session release` releases ownership and restores prepared settings; `session stop` also stops an emulator the session owns, or an attached emulator with `--attached`. `session release --stop` stops an owned emulator; attached emulators additionally require `--stop-attached`. If you release an owned emulator without stopping it, the released tombstone can still be stopped with `session stop --session <ID>` as long as no new session owns the device. `session list --active` hides released, failed and abandoned tombstones. `session list --mine` filters to the current owner (`ANDROIDFORGE_OWNER`, or the OS user), and `--owner <name>` selects an explicit owner. Each list entry carries a `classification` (`active`, `busy`, `stale`, `released`, `failed`, `abandoned`), its heartbeat age and a `reason` so tombstones are never mistaken for live sessions.
 
 `session gc --reclaim --dry-run` is the safe preview. It reports `would_reclaim`, leaves every session file untouched, and prints the exact command to apply the change. Reclaim never touches a session with a current heartbeat or another owner's live operation.
+
+`session gc --forget-terminal` releases device locks left by failed/released/abandoned tombstones without deleting their history. It is dry-run by default when the flag is used: preview `would_forget` first, then apply with the same flags plus `--owner <OWNER>` or `--force`. `--owner` (or `ANDROIDFORGE_OWNER`) must match the recorded owner unless `--force` is passed. Live sessions and locks belonging to another session are always refused, even with `--force`.
 
 `session status` and `session inspect` report the heartbeat and advisory lease. There is no standalone `session heartbeat` subcommand; use `session status --session <ID> --json` when an agent needs a liveness sample.
 
@@ -674,6 +773,8 @@ The result includes package, versionName, versionCode, local APK SHA-256, instal
 `--dry-run` inspects the APK locally and reports its package/version/hash/certificate plus the planned
 fresh, downgrade, package and certificate constraints without installing.
 
+Some OEM skins answer their own "allow installation" prompt before `adb install` returns, leaving `INSTALL_FAILED_USER_RESTRICTED`. `--wait-for-confirmation` opts into watching that dialog through the audited UIAutomator snapshot path. If a single unambiguous confirm button is found, AndroidForge taps it through `UiManager` identity validation and retries the install once; a second failure is returned as-is. Repeatable `--confirm-text <label>` overrides the built-in localized label list, and `--confirmation-timeout` bounds the wait (default 15s). Auto-denial, an ambiguous dialog or a timeout fail with `E_INSTALL_FAILED` carrying the exact observed dialog text, candidate buttons and a stable `reason`. The normal `Risk::Install` gate and all identity checks are unchanged; without the flag this path is never entered.
+
 A signing mismatch is `E_INSTALL_SIGNATURE_MISMATCH`, listing both certificates and the installed version. AndroidForge never auto-uninstalls. To replace the app and delete its data:
 
 ```powershell
@@ -729,10 +830,25 @@ AndroidForge protects physical devices by default. Data-changing commands such a
 `app uninstall`, `app clear-data`, `app file-push`, `app data-restore`, `permissions grant|revoke`,
 `appops set|reset`, `doze force`, `standby set`, `battery unplug|reset`, `network` changes,
 `time set|restore`, `notifications clear` and `jobs run|cancel` return
-`E_PHYSICAL_DEVICE_MUTATION_BLOCKED` on a physical device unless `--allow-physical-mutation` is passed.
-Emulators do not need the flag. `--dry-run` remains available and shows `requires_physical_mutation`
-without changing anything. This is a safety guard, not authentication; a deliberate test can still
-opt in.
+`E_PHYSICAL_DEVICE_MUTATION_BLOCKED` on a physical device without an explicit opt-in. Emulators do
+not need a flag. `--dry-run` remains available and shows `requires_physical_mutation` without
+changing anything. This is a safety guard, not authentication; a deliberate test can still opt in.
+
+Opt-ins are scoped, so granting one capability never grants another:
+
+| Flag | Physical-device capability it grants |
+| --- | --- |
+| `--allow-physical-app-control` | `app launch`, `app force-stop`, `app broadcast`, `app service`, `app kill` and explicit intents |
+| `--allow-physical-data` | app-private data operations (`clear-data`, `file-push`, `data import/restore/reset/seed`), fixture/hook/conformance/test runs, permissions/AppOps/Doze/standby/battery/time changes, and device prepare/restore/snapshot |
+| `--allow-physical-network` | airplane mode, Wi-Fi, mobile data, proxy, network profiles/restore, `adb reverse` mappings and `network mock serve --reverse` |
+| `--allow-physical-install` | `app install` and `app uninstall` |
+| `--allow-physical-input` | input injection (`ui tap`, `ui long-press`, `ui drag`, `ui text`, `ui clear`, `ui scroll`, `ui scroll-to`, `ui swipe`, `ui back`, `ui home`, `ui keyevent`, `ui hide-keyboard`, `ui dismiss-overlays`, `notifications tap`) |
+
+`--allow-physical-mutation` remains the superset and grants every risk above; it preserves the
+existing behavior for callers that use it. For example, `--allow-physical-input` still blocks a
+data change, and `--allow-physical-data` still blocks an install. MCP never exposes or forwards any
+of these flags: mutating MCP tools still require `confirm=true` and cannot self-approve a physical
+device operation.
 
 ```powershell
 androidforge app file-push .\seed.json files/seed.json --package com.example.app.debug --session <ID> --json
@@ -744,13 +860,25 @@ Remote paths are relative to the app's private data directory and may not contai
 ### App data fixtures
 
 ```powershell
+# Safe default: writes under the managed artifacts/export area.
+androidforge app data export com.example.app --session <ID> --json
+# Explicit destination (named flag or legacy positional path).
+androidforge app data export com.example.app --output .\data.tar --session <ID> --json
 androidforge app data export com.example.app .\data.tar --session <ID> --json
+# In-project destination and replacing an existing archive are explicit opt-ins.
+androidforge app data export com.example.app --output .\data.tar --allow-in-project --overwrite --session <ID> --json
 androidforge app data import com.example.app .\data.tar --session <ID> --yes --json
 androidforge app data reset com.example.app --baseline .\seeded.tar --backup-current .\before.tar --session <ID> --yes --json
 androidforge app data seed com.example.app --file .\fixture.db --remote databases/app.db --session <ID> --yes --json
 ```
 
-`app data export` and `app data import` use `run-as` and therefore require a debuggable build; a non-debuggable package fails with `E_APP_NOT_DEBUGGABLE` and a clear suggestion. `app data import` always captures a pre-import archive into the run before restoring, so an overwrite is recoverable. `app data reset` clears app data, optionally saves `--backup-current`, then restores `--baseline`. `app data seed` writes one file to a path relative to the app-private data directory. Import, reset and seed require `--yes`; physical devices additionally require `--allow-physical-mutation`. Use `--dry-run` to preview all paths.
+`app data export` resolves its destination before touching the device: the default lives under
+`<artifacts_dir>/export`, outside the project's source tree. An explicit destination inside the
+project root is refused unless `--allow-in-project` is passed; an existing file is refused unless
+`--overwrite` is passed; `..` traversal is always refused. `--dry-run` reports `source`
+(`default`/`explicit`), `in_project`, and `in_export_area` so the chosen path can be audited.
+
+`app data export` and `app data import` use `run-as` and therefore require a debuggable build; a non-debuggable package fails with `E_APP_NOT_DEBUGGABLE` and a clear suggestion. `app data import` always captures a pre-import archive into the run before restoring, so an overwrite is recoverable. `app data reset` clears app data, optionally saves `--backup-current`, then restores `--baseline`. `app data seed` writes one file to a path relative to the app-private data directory. Import, reset and seed require `--yes`; physical devices additionally require `--allow-physical-data` (or the superset `--allow-physical-mutation`). Use `--dry-run` to preview all paths.
 
 ## 10. UI work
 
@@ -767,6 +895,35 @@ androidforge ui find --session <ID> --text "Continue" --region 0,800,1080,1600 -
 androidforge ui find --session <ID> --text "Continue" --ocr-fallback --json
 androidforge ui focused --session <ID> --json
 ```
+
+Read-only geometry checks reuse the same semantic selectors:
+
+```powershell
+androidforge ui bounds --session <ID> --text "Save" --json
+androidforge ui assert-bounds --session <ID> --text "Save" --bottom-y 300 --tolerance 2 --json
+androidforge ui assert-bounds --session <ID> --resource-id com.example:id/save --bottom-y-gt 800 --json
+androidforge ui assert-bounds --session <ID> --content-desc "Save changes" --bottom-y-lt 500 --json
+androidforge ui wait --session <ID> --text "Save" --for-bounds-stable --stable-for 2s --timeout 15 --json
+```
+
+`ui audit a11y` is a read-only audit of one hierarchy dump. It reports missing accessible names, tiny touch targets and duplicate labels, with effective options, bounded findings and severity/rule counts:
+
+```powershell
+androidforge ui audit a11y --session <ID> --json
+androidforge ui audit a11y --session <ID> --density 2.75 --min-touch-target-dp 48 --json
+androidforge ui audit a11y --session <ID> --contrast --text-rgb #FFFFFF --json
+```
+
+`--contrast` captures one screenshot (host-only `screencap -p`) and samples the majority background behind each visible text node, merging low-contrast findings into the same report. `--large-text` applies the WCAG 3:1 exception; `--text-rgb` supplies the known text colour because UIAutomator does not expose it. The `--no-content-descriptions`, `--no-touch-targets` and `--no-duplicate-labels` flags disable individual rules. Findings are deterministic and capped by `--max-findings`/`--max-nodes`.
+
+`ui bounds` resolves one selector through a single hierarchy dump and returns all eight
+integer fields (`left`, `top`, `right`, `bottom`, `width`, `height`, `center_x`, `center_y`).
+`ui assert-bounds` compares `bottom_y` with `--bottom-y` (equality within `--tolerance`,
+default 0), `--bottom-y-gt` (`bottom_y > expected + tolerance`) or `--bottom-y-lt`
+(`bottom_y < expected - tolerance`); the three value flags are mutually exclusive. A failed
+comparison is `E_UI_ASSERTION_FAILED` with `expected`, `actual`, `tolerance`, `relation`,
+`passed` and the full comparison in its error context. All three commands are read-only:
+they never inject input and never require a physical-device consent flag.
 
 Actions:
 
@@ -807,7 +964,7 @@ androidforge ui assert-no-text --session <ID> --contains "Loading" --timeout 5 -
 androidforge ui scroll-to --session <ID> --text "Settings" --json
 ```
 
-`--for-text-gone` polls visible text and content descriptions until every supplied string is absent; on timeout it reports every lingering match with bounds. `--for-idle` waits for one byte-identical hierarchy dump; `--for-stable` requires the hierarchy hash to remain unchanged for `--stable-for` (default 2s). These modes are mutually exclusive with selectors and `--not-exists`.
+`--for-text-gone` polls visible text and content descriptions until every supplied string is absent; on timeout it reports every lingering match with bounds. `--for-idle` waits for one byte-identical hierarchy dump; `--for-stable` requires the hierarchy hash to remain unchanged for `--stable-for` (default 2s). These modes are mutually exclusive with selectors and `--not-exists`. `--for-bounds-stable` instead re-resolves a semantic selector on every poll and succeeds when the same bounds persist for `--stable-for`; a lost or ambiguous element fails closed. It requires a selector, rejects `--ref`/`--not-exists`, and is mutually exclusive with the other wait modes. `ui assert --for-bounds-stable` runs the same check with the shorter default assertion timeout.
 
 Rules:
 
@@ -837,12 +994,32 @@ Rules:
 androidforge capture screenshot --session <ID> --label before --json
 androidforge capture screenshot --session <ID> --compare .\baseline.png --json
 androidforge capture screenshot --session <ID> --compare .\baseline.png --region 0,120,1080,900 --max-diff-ratio 0.002 --diff-output .\diff.png --json
+androidforge capture assert-color --session <ID> --rgb #1A73E8 --at 540,1200 --tolerance 8 --json
+androidforge capture assert-color --session <ID> --rgb #FFFFFF --region 0,0,1080,200 --majority --json
+androidforge capture launch com.example.app --session <ID> --fps 10 --duration 5s --expect-first-frame --no-splash --expected-color #1A73E8 --json
 androidforge capture record start --session <ID> --time-limit 30 --json
 androidforge capture record status --session <ID> --json
 androidforge capture record stop --session <ID> --json
 ```
 
 Screenshots include dimensions, display size, timestamp and SHA-256. With `--compare`, AndroidForge decodes both PNGs, limits comparison to `--region x1,y1,x2,y2` when supplied, applies an optional per-channel `--diff-threshold`, and reports changed pixels, ratio, mean channel delta and the changed bounding box. The check fails with `E_UI_ASSERTION_FAILED` when the ratio exceeds `--max-diff-ratio`; a diff visualization is stored as a run artifact. Baselines may be a direct path or a path relative to the artifact directory. Recordings are MP4, no audio, and Android caps standard `screenrecord` at 180 seconds. A recording started inside a caller-owned run does not finalize that run on stop.
+
+`capture assert-color` takes a fresh screenshot with `exec-out screencap -p` (host-only, no device file) and checks one colour against `--rgb #RRGGBB`. By default it samples the image centre; `--at x,y` selects one device pixel, and `--region x,y,w,h` samples that rectangle (average colour, or the most frequent colour with `--majority`). `--tolerance` is the inclusive maximum per-channel difference (default 16). Success returns `actual`, `expected`, `tolerance` and `max_channel_delta`; a mismatch is `E_UI_ASSERTION_FAILED` with the same structured values. `--dry-run` needs no device session and changes nothing.
+
+`capture contrast` uses the same host-only screenshot sampling for a WCAG text/background check. `--rgb` is the text colour; the background comes from `--at x,y` (one pixel), `--region x,y,w,h` (majority, or average without `--majority`), or the whole image when neither is given. `--threshold` overrides the default 4.5:1 (3:1 with `--large-text`). A failure is `E_UI_ASSERTION_FAILED` with the ratio, threshold, sampled colours and an a11y finding in its context.
+
+Named baselines keep a validated name and a per project/run manifest under the artifact directory:
+
+```powershell
+androidforge capture baseline save --name home_screen --session <ID> --json
+androidforge capture baseline update --name home_screen --session <ID> --json
+androidforge capture baseline compare --name home_screen --max-diff-ratio 0.002 --json
+androidforge capture baseline list --json
+```
+
+`save` refuses an existing name; `update` replaces it deliberately. `--source <png>` saves a local PNG instead of capturing a fresh screenshot, and `compare --current <png>` does the same for the current side. Compare uses `compare_png` with the optional `--region x1,y1,x2,y2`, `--diff-threshold` and `--diff-output`; a mismatch is `E_UI_ASSERTION_FAILED` carrying the baseline entry and the complete diff metrics. These commands are host-side (read-only in the catalog): they never change device state.
+
+`capture launch` deliberately launches the package, then samples bounded screencap frames (no video decoder, no device temp file) to find the first frame whose focus or `--ui-dump-package` hierarchy matches the package. `--fps` (1-30) and `--duration` (e.g. `5s`) bound the sample. `--expect-first-frame`, `--no-splash` and `--expected-color` with `--color-sample centre|dominant` and `--tolerance` are explicit assertions; a failure is `E_UI_ASSERTION_FAILED` carrying the observed values. Every sampled PNG is written to the run as `capture-launch/frame-NNNN.png`. On a physical device the launch follows the existing scoped `--allow-physical-app-control` consent rule; no new mutation flag is added.
 
 ### Logcat
 
@@ -853,12 +1030,19 @@ androidforge diagnostics logcat watch --session <ID> --crash --anr --timeout 30s
 androidforge diagnostics logcat start --session <ID> --package com.example.app --json
 androidforge diagnostics logcat status --session <ID> --json
 androidforge diagnostics logcat stop --session <ID> --json
+# Redact suspected tokens before printing, NDJSON emission or storage:
+androidforge diagnostics logcat peek --session <ID> --redact-patterns AIza,sk-,ghp_,AKIA --json
 ```
 
 One-shot tails are bounded. `query` returns structured threadtime records filtered by package,
 level, time and regex. `watch` streams raw NDJSON events (`log`, `crash`, `anr`) and stops at
 `--timeout` or `--max-events`. Continuous capture runs on-device with `[diagnostics].logcat_max_seconds`
 and `max_log_bytes` caps. AndroidForge never clears the global buffer by default.
+
+`--redact-patterns` is repeatable and comma-separated. Each value is a **literal prefix**, not a regex:
+`sk-` redacts the whole following token to `[REDACTED]`. It applies to `tail`, `peek`, `query`, `watch`
+and `start`; for `start` the prefixes are persisted and applied by `stop` before captured text is
+registered, so the background capture needs no new trust. Without the flag output is unchanged.
 
 ### Diagnostics collection
 
@@ -876,9 +1060,14 @@ androidforge diagnostics inspect activity --session <ID> --json
 ```powershell
 androidforge diagnostics performance com.example.app --session <ID> --json
 androidforge diagnostics performance com.example.app --cold --settle 2s --session <ID> --json
+androidforge diagnostics performance com.example.app --no-screen-check --min-frames 60 --frame-window 5s --warmup 2s --session <ID> --json
 ```
 
-`diagnostics performance` measures each dimension explicitly and writes `performance/report.json`:
+`diagnostics performance` measures each dimension explicitly and writes `performance/report.json`.
+Because startup timing requires launching the app (`am start -W`, and `am force-stop` with `--cold`),
+measurement on a physical device requires `--allow-physical-app-control` (or the
+`--allow-physical-mutation` superset), just like `capture launch` and `app launch`. Emulators need no
+grant, and `--dry-run` neither requires consent nor touches the device. The catalog classifies `diagnostics performance` as `device-mutation` (whereas `diagnostics frames` stays read-only), and MCP requires `confirm=true` unless `dry_run=true`; MCP never forwards physical capability flags, so the physical grant above is required on the CLI side:
 
 - startup from `am start -W` (`TotalTime`, `WaitTime`, `ThisTime`, status and activity);
 - jank from `dumpsys gfxinfo` after a pre-launch reset (frames, janky frames/percent, percentiles,
@@ -891,6 +1080,38 @@ androidforge diagnostics performance com.example.app --cold --settle 2s --sessio
 Force-stopping preserves app data. `--settle` controls the delay before post-launch sampling (default
 2s), and `--timeout` bounds each device command. Values that the device does not report are `null` with
 an `unknown_reason`, and the command exits 10 when evidence is partial. Nothing is estimated.
+
+The screen-on preflight is **on by default**: a sleeping display makes jank and startup evidence
+invalid, so measurement fails with `E_SCREEN_OFF` instead of reporting misleading numbers. Use
+`--no-screen-check` to skip that preflight when you accept sleeping-display evidence. Waking the
+device is a separate, explicit screen-state opt-in via `--wake` only; it is never implicit, including
+with `--cold`, and the app-control grant never implies it.
+
+A jank percentage is reported only when the sample contains at least `--min-frames` rendered frames
+(default 30). Below that floor the sample is `insufficient`: `jank.janky_percent` is `null`,
+`jank.sample_status` is `insufficient`, `jank.comparable` is `false` and a comparison reason plus a
+warning explain the shortfall. An absent gfxinfo frame count is `unavailable`, not zero; a stale or
+PID-mismatched CPU sample is likewise rejected rather than reported as a percentage. `--frame-window`
+records an explicit sampling window (for example `5s`) and `--warmup` adds a delay before frame
+sampling; both are opt-in and make samples easier to compare across runs.
+
+### Frame reports and baselines
+
+```powershell
+androidforge diagnostics frames com.example.app --session <ID> --json
+androidforge diagnostics frames com.example.app --session <ID> --reset --duration 5s --json
+androidforge diagnostics frames com.example.app --session <ID> --reset --duration 5s --baseline .\runs\old\frames\report.json --max-janky 2 --max-p99 5 --max-frame-ms 10 --json
+```
+
+`diagnostics frames` collects `dumpsys gfxinfo <package>` once and writes `frames/report.json` as a
+run artifact. `--reset` clears gfxinfo counters first and `--duration` waits for an explicit sampling
+window before collection; without a reset the window is unknown and is not inferred. The report keeps
+frame counts, janky/legacy counters, p50/p90/p95/p99, max frame time, a bounded histogram and a
+verbatim header excerpt. Counters the device does not print stay `null` with a warning, never zero.
+With `--baseline`, the two reports are compared on jank percentage points, p99 and max frame time using
+`--max-janky`, `--max-p99` and `--max-frame-ms` as allowed increases (default 0, so any increase is a
+regression). A comparable regression is `E_PERFORMANCE_REGRESSION` (exit 11) with structured deltas;
+partial or non-comparable evidence exits 10. `--dry-run` prints the plan without a device.
 ### Notifications, jobs, alarms, system state
 
 ```powershell
@@ -934,6 +1155,9 @@ androidforge network reverse remove tcp:8080 --session <ID> --json
 androidforge network reverse clear --session <ID> --json
 androidforge network mock serve --session <ID> --port 8080 --route 'GET /health=200:{"ok":true}' --route 'POST /login=401' --reverse --max-requests 2 --json
 androidforge network mock serve --session <ID> --port 8443 --routes .\routes.json --tls-cert .\cert.pem --tls-key .\key.pem --duration 30s --json
+androidforge network mock scenarios --json
+androidforge network mock serve --scenario newer-release --port 8080 --json
+androidforge network mock serve --scenario offline --port 8080 --json
 ```
 
 Reverse mappings are per device and recorded in the session; `clear` removes them all. `network mock serve` binds loopback by default and never exposes the listener to the LAN. Routes are exact method/path matches (`*` is a wildcard), configured inline as `METHOD /path=STATUS[:BODY]` or with a JSON file:
@@ -942,7 +1166,7 @@ Reverse mappings are per device and recorded in the session; `clear` removes the
 {"routes":[{"method":"GET","path":"/api/user","status":200,"headers":{"content-type":"application/json"},"body":"{\"name\":\"Ada\"}"}]}
 ```
 
-Pass `--reverse` to add and later remove `adb reverse tcp:PORT tcp:PORT` automatically. `--max-requests` or `--duration` bounds non-interactive runs; otherwise stop with Ctrl+C. Every request appends method, path, query, redacted headers, bounded body preview and SHA-256, status, matched route, duration and peer to an NDJSON artifact. Authorization, proxy-authorization, cookie, set-cookie and API-key headers are redacted. TLS is a local certificate/key pair only: Android must trust the certificate through its own user-CA/network-security configuration. AndroidForge never claims public CA trust and does not install a CA.
+Pass `--reverse` to add and later remove `adb reverse tcp:PORT tcp:PORT` automatically. This device half remains gated by `--allow-physical-network` (or `--allow-physical-mutation`) on a physical device. Named scenarios are read-only to list with `network mock scenarios --json` and are always loopback-only, bounded, redacted and host-only: `--reverse` is rejected with a scenario. `--scenario offline` deliberately creates no listener and changes no host proxy/profile setting; the other built-ins (`newer-release`, `bad-digest`, `no-APK`) serve fixture-controlled routes from the scenario catalog. An optional `--routes` file can override the built-in payloads. `--max-requests` or `--duration` bounds non-interactive raw runs; otherwise stop with Ctrl+C. Every request appends method, path, query, redacted headers, bounded body preview and SHA-256, status, matched route, duration and peer to an NDJSON artifact. Authorization, proxy-authorization, cookie, set-cookie and API-key headers are redacted. TLS is a local certificate/key pair only: Android must trust the certificate through its own user-CA/network-security configuration. AndroidForge never claims public CA trust and does not install a CA.
 
 ## 12. Runs and reports
 
@@ -950,6 +1174,7 @@ For a multi-step flow:
 
 ```powershell
 androidforge run start --session <ID> --name smoke --json
+androidforge run start --name smoke --tag release --tag smoke --meta build=1.2.3 --meta branch=main --json
 # subsequent commands with --session <ID> join the active run
 androidforge app install .\app-debug.apk --session <ID> --json
 androidforge ui assert --session <ID> --text "Welcome" --json
@@ -957,6 +1182,7 @@ androidforge run end --session <ID> --json
 androidforge report show latest --json
 androidforge report path latest --json
 androidforge report list --json
+androidforge report list --tag release --since 7d --json
 ```
 
 `run end` derives the run status from its steps. Any failed step makes the run `failed`, prints the
@@ -966,6 +1192,33 @@ active pointer when that run is the session's active run, so a later command sta
 of appending to a finished one; a stale pointer to a finished run is ignored and cleared. A run that
 did not install inherits the build identity observed in the session; if none is known it reads the
 installed package/version once and marks hash/certificate verification false.
+
+`run start --tag` attaches repeatable labels and `--meta KEY=VALUE` attaches repeatable string
+metadata to `report.json` and `metadata.json`. Keys accept letters, digits, `_`, `-` and `.` (at most
+64 characters) and values are limited to 1024 characters; keys that look like secrets (`password`,
+`token`, `api_key`, `credential`, and similar) are rejected because metadata is stored in reports.
+`report list --tag` and `--since` use the same filters as `latest` selection. Reports written before
+1.1.0 have no `tags`/`meta` fields and remain readable; they behave as untagged.
+
+### Compare budgets
+
+```powershell
+androidforge report compare <RUN_ID> --json
+androidforge report compare <RUN_ID> --max-startup-ms 600 --max-jank-percent 10 --json
+androidforge report compare <RUN_ID> --max-p99-ms 50 --max-apk-size-bytes 2000000 --max-failed-tests 0 --json
+androidforge report compare <RUN_ID> --budget '{"startup_delta_ms":100,"jank_percent_delta":2}' --json
+androidforge report compare <RUN_ID> --max-startup-ms 600 --fail-on-regression --json
+```
+
+Without a budget, `report compare` keeps the original behavior: structural differences and
+performance deltas are reported, but no threshold is evaluated. Adding any `--budget` or `--max-*`
+flag evaluates `budget_checks` and adds `budget`, `budget_passed` and `budget_violations` to the
+result; missing metrics are skipped rather than failed. `--fail-on-regression` turns any violation
+into `E_PERFORMANCE_REGRESSION` (exit 11) with the full comparison and `budget_violations` under
+`error.context`. The convenience flags cover absolute ceilings; the `--budget` JSON object also
+supports delta ceilings and named metrics. `--max-p99-ms` and `--max-frame-ms` both map to the
+`max_frame_ms` budget because p99/longest-frame evidence shares one canonical metric; use `--budget`
+when both need independent checks. Baseline selection can be narrowed with `--tag` and `--since`.
 
 ### Checkpoints, resume and events
 
@@ -1025,6 +1278,12 @@ artifacts with reasons. Text is redacted; pairing codes are removed explicitly. 
 are opt-in. The original run directory is never modified. The ZIP is written atomically and reopened to
 verify every payload checksum before success is reported. `--dry-run` is the inclusion preview.
 
+`--redact-secrets` forces text redaction even when `[redaction].enabled` or `[diagnostics].redact` is
+false. After assembly, every text payload is rescanned; if a suspected secret remains, the command
+returns `E_UNSUPPORTED_OPERATION` (exit 3) with counts and categories only and writes no output file.
+The manifest records `redact_secrets` and safe `secret_scan` counts. Binary screenshots and recordings
+are **not pixel-redacted**; only explicitly included as files with their own checksums.
+
 For one existing script:
 
 ```powershell
@@ -1033,6 +1292,34 @@ androidforge run exec --session <ID> --name legacy-flow --capture-screen --captu
 ```
 
 The script receives `ANDROIDFORGE_SESSION`, `ANDROIDFORGE_SERIAL`, `ANDROIDFORGE_PACKAGE`, `ANDROIDFORGE_RUN_ID`, `ANDROIDFORGE_ARTIFACTS`, `ANDROIDFORGE_ADB`, `ANDROIDFORGE_ROOT`, `ANDROIDFORGE_PROJECT`, `ANDROIDFORGE_EXE` and `ANDROIDFORGE_PHASE`. It can call `androidforge` recursively and its steps join the same report.
+
+### Safe artifact inspection and narrow device commands
+
+```powershell
+androidforge artifacts scan-secrets --project . --json
+androidforge artifacts scan-secrets --path .\\.artifacts --json
+# Read-only shell: conservative allowlist; no physical-device grant:
+androidforge devices shell --read-only --session <ID> --json -- dumpsys gfxinfo com.example
+androidforge devices shell --read-only --allow "cmd package" --deny "package list" --session <ID> --json -- cmd package path com.example
+# Exact coordinates use the gated input path (Risk::Input on physical devices):
+androidforge devices input tap 540 1200 --session <ID> --json
+# The 1.0.0 `device` alias still works for every devices subcommand:
+androidforge device list --json
+androidforge device shell --read-only --session <ID> --json -- getprop ro.build.version.release
+```
+
+`devices` is the canonical command; `device` is the retained 1.0.0 alias, and JSON `command` values
+stay canonical (`devices.list`, `devices.shell`, `devices.input.tap`). `artifacts scan-secrets` is
+host-only and read-only; it never resolves a session or contacts a device, and its findings never
+contain matched values. `devices shell --read-only` requires every command prefix to match an allowlist
+(a conservative default list covers common diagnostics) and no deny prefix; it rejects mutating tokens
+such as `reset`, `set` and `clear`, and also checks whole-command shapes: bare `date`, `date -u`/`--utc`
+and one `+FORMAT`, or exactly `wm size`/`wm density`. `date <digits>`, `date -s`, `wm size WxH` and
+`wm density N` are refused before ADB. `devices shell` without `--read-only` requires the master
+`--allow-physical-mutation` only, never a scoped flag. Both shell forms record the exact argv,
+truncation and redaction flags in a run step. `devices input tap` uses `UiManager::tap_xy`, keeps the
+existing narrow physical-input consent gate and returns the device display size. `--dry-run` prints the
+exact argv or coordinates and resolves no device.
 
 Import Gradle/JUnit XML without replacing Gradle:
 
@@ -1053,12 +1340,32 @@ androidforge report prune --older-than 30d --keep-last 20 --dry-run --json
 androidforge report prune --older-than 30d --keep-last 20 --yes --json
 ```
 
+### Maintenance and tag-aware retention
+
+`maintenance` is host-only: it never needs a device session or a physical-consent flag.
+
+```powershell
+androidforge maintenance summary --json
+androidforge maintenance clean --runs --keep-tag release --json
+androidforge maintenance clean --runs --older-than 30d --keep-last 10 --keep-tag release --yes --json
+androidforge maintenance clean --sessions --dry-run --json
+```
+
+`maintenance clean` is destructive. `--yes` is required to delete; `--dry-run` previews the plan.
+Using `--keep-tag` without `--yes` automatically becomes a dry run. `--keep-tag` is repeatable and
+protects any run carrying one of the listed tags (OR semantics), on top of `--older-than` and
+`--keep-last`. Running runs, runs with an active pointer, and unreadable or unsafe run directories
+are always kept. The result retains the legacy `runs` summary and adds an additive, versioned
+`retention` plan with every deletion, every protected run and the reason for each decision.
+
 ## 13. Fixtures, hooks and conformance
 
 ```powershell
 androidforge --project .\examples\DiscountHunter fixture list --json
 androidforge --project .\examples\DiscountHunter fixture validate smoke --json
 androidforge --project .\examples\DiscountHunter fixture run smoke --session <ID> --json
+androidforge --project .\examples\DiscountHunter fixture apply state-demo --session <ID> --json
+androidforge --project .\examples\DiscountHunter fixture reset state-demo --yes --session <ID> --json
 androidforge --project .\examples\DiscountHunter hook list --json
 androidforge --project .\examples\DiscountHunter hook run check-deals --session <ID> --json
 androidforge --project .\examples\DiscountHunter conformance run --session <ID> --json
@@ -1067,6 +1374,16 @@ androidforge --project .\examples\DiscountHunter conformance run --session <ID> 
 Use `--dry-run` to inspect a fixture plan and `--yes` for destructive steps. Fixtures never run
 automatically. Hooks are explicit debug triggers; do not guess a JobScheduler ID when the app has no
 deterministic hook.
+
+A fixture may declare a `state` block (`prefs`, `history`, `installed_version`). It is debug-only:
+AndroidForge writes through `run-as` and refuses non-debuggable apps. `fixture apply` and
+`fixture reset` are explicit aliases that dispatch **only** the `apply_state` / `reset_state`
+actions; no other fixture step runs through them. `--dry-run` validates the pack and reports the
+planned action without contacting a device or writing app data. Real runs pass data-mutation
+consent to the fixture core only after the physical-device gate accepts the emulator or
+`--allow-physical-data` / `--allow-physical-mutation`; `fixture reset` additionally requires
+`--yes`. Use `--package` when the adapter has no package. AndroidForge never roots the device, and
+`history` uses a host argv writer rather than parsing app-specific protobuf.
 
 A hook can declare a `verify` postcondition. For example, a non-exported debug receiver can be
 reached with `run_as = true`; the verification command then reads app state before/after and requires
@@ -1093,6 +1410,33 @@ certificate) and `flow_checks` parsed from the flow script's final JSON `checks`
 checks appear in the conformance step's details in `report.json`; the flow exit code still decides
 pass/fail. Local install preflight failures (expected package or certificate) skip the full device
 evidence bundle because no device state changed.
+
+### Declarative scenarios
+
+`scenario` is an allowlisted, repeatable wrapper over the audited operations above. A manifest is a
+versioned list of steps (`launch`, `tap`, `text`, `wait`, `assert`, `bounds`, `color`, `screenshot`,
+`fixture_apply`, `fixture_reset`, `install`). JSON (`.json` or a JSON body) and TOML are both
+accepted; unknown step kinds such as `shell`/`adb` are rejected before any device work.
+
+```powershell
+androidforge scenario validate .\smoke.toml --json
+androidforge scenario run .\smoke.toml --dry-run --json
+androidforge scenario run .\smoke.toml --session <ID> --yes --allow-physical-input --json
+androidforge scenario run .\smoke.json --repeat 3 --session <ID> --yes --json
+```
+
+`scenario validate` is read-only. `scenario run --dry-run` builds the plan only: it dispatches no
+step, needs no session and requires no consent. A real run requires `--yes` for any manifest with a
+device-mutating step, plus the narrow physical flag for each risk the scenario exercises
+(`--allow-physical-app-control` for launch, `--allow-physical-input` for tap/text,
+`--allow-physical-data` for fixtures, `--allow-physical-install` for install). Emulators need no
+physical flag. Physical capability flags are never exposed or forwarded over MCP.
+
+Each step maps to its existing audited operation and appears as a step in the current run's
+`report.json` (screenshots are attached as run artifacts). `on_error = "continue"` records a failed
+step and keeps going; the default `"fail"` skips the rest of that iteration. Repeats are aggregated
+into a pass rate, duration mean/variance/stddev and a flake summary built by the existing flaky
+analysis helper. Exit code is 1 when any step fails.
 
 ## 14. Raw ADB
 
@@ -1138,7 +1482,7 @@ Fixture/conformance processes also receive the documented `ANDROIDFORGE_*` contr
 | `E_UNSUPPORTED_OPERATION` | Read the reason/alternatives; check `capabilities --json`. |
 | Doctor says `degraded` | A warning such as unavailable Maestro or disk-free measurement, not necessarily a failure. Read `checks`. |
 | Desktop says CLI offline | Run `doctor`; set the CLI path in Settings or put `androidforge.exe` beside the desktop/on `PATH`. |
-| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the aligned `0.9.2` pair or a compatible release. |
+| Desktop refuses the CLI schema | The desktop and CLI are version-mismatched; use the matching `1.1.0` pair or a compatible release. |
 | Desktop has no `Cancel` button | Session lifecycle operations are not cancellable. Run installs/fixtures/conformance/hooks to use cancellation. |
 
 ## 17. Safety checklist for agents

@@ -1,5 +1,30 @@
+//! Fixture packs: imperative steps plus optional declarative app state.
+//!
+//! ## Declarative state (debug-only)
+//!
+//! `state` is applied and reset by the `apply_state` / `reset_state` actions.
+//! Every path is relative to the app's private data directory and is bounded
+//! (no absolute paths, `..`, control characters or backslashes). State is only
+//! available for debuggable applications, through the same `run-as` primitives
+//! used by `app data seed`, `app data export` and `app data import`.
+//!
+//! - `prefs` is a UTF-8 key/value file: one `key=value` per line, `#` comments,
+//!   keys limited to `[A-Za-z0-9_.-]+`, values without newlines or control
+//!   characters, emitted in sorted key order. It is a fixture-owned file, not
+//!   an Android `SharedPreferences` XML file.
+//! - `history` is opaque: a user-supplied argv command (never a shell string)
+//!   receives a bounded count and writes a payload file. AndroidForge does not
+//!   parse DataStore protobuf; the script is the writer contract.
+//! - `installed_version` either asserts the package-manager version or stamps
+//!   a fixture-owned version file. Both modes refuse non-debuggable apps with
+//!   `E_APP_NOT_DEBUGGABLE`.
+//!
+//! Mutation requires explicit consent at the execution boundary via
+//! `run_fixture_with_data_policy(..., allow_data_mutation)`; core never infers
+//! consent from the device kind.
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use androidforge_app::{AppFiles, AppManager, AppOps, InstallOptions, Permissions};
@@ -17,6 +42,18 @@ use serde::{Deserialize, Serialize};
 
 const FIXTURE_VERSION: u32 = 1;
 
+/// Upper bound for `state.history.count` so a declared fixture cannot request
+/// an unbounded amount of generated state.
+pub const MAX_FIXTURE_HISTORY_COUNT: u32 = 1000;
+/// Maximum number of path components in a declared app-private state path.
+pub const MAX_FIXTURE_STATE_PATH_COMPONENTS: usize = 8;
+/// Maximum length of a declared app-private state path.
+pub const MAX_FIXTURE_STATE_PATH_LEN: usize = 240;
+/// Default app-private path for the generated prefs key/value file.
+pub const DEFAULT_FIXTURE_PREFS_PATH: &str = "files/androidforge/fixture-prefs.txt";
+/// Default app-private path for the generated installed-version stamp.
+pub const DEFAULT_FIXTURE_VERSION_PATH: &str = "files/androidforge/installed-version.txt";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureManifest {
@@ -31,6 +68,8 @@ pub struct FixtureManifest {
     pub requires_confirmation: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub vars: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<FixtureState>,
     #[serde(default)]
     pub steps: Vec<FixtureStep>,
     #[serde(skip)]
@@ -39,6 +78,79 @@ pub struct FixtureManifest {
 
 fn default_version() -> u32 {
     FIXTURE_VERSION
+}
+
+fn default_fixture_prefs_path() -> String {
+    DEFAULT_FIXTURE_PREFS_PATH.to_string()
+}
+
+fn default_fixture_version_path() -> String {
+    DEFAULT_FIXTURE_VERSION_PATH.to_string()
+}
+
+/// Declarative, debug-only app state. Applied by `apply_state` and removed by
+/// `reset_state`; every part is optional and independently validated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefs: Option<FixturePrefsState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<FixtureHistoryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<FixtureInstalledVersionState>,
+}
+
+/// Simple UTF-8 key/value file written through the debug-only `run-as` path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixturePrefsState {
+    #[serde(default = "default_fixture_prefs_path")]
+    pub path: String,
+    pub values: BTreeMap<String, String>,
+}
+
+/// Bounded, opaque history seeding through a user-supplied argv command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureHistoryState {
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixtureInstalledVersionMode {
+    Assert,
+    Set,
+}
+
+impl FixtureInstalledVersionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Assert => "assert",
+            Self::Set => "set",
+        }
+    }
+}
+
+/// Assert a version against the package manager, or stamp it into app-private
+/// state. Both modes require a debuggable application.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureInstalledVersionState {
+    pub mode: FixtureInstalledVersionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_code: Option<i64>,
+    #[serde(default = "default_fixture_version_path")]
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,6 +331,18 @@ pub enum FixtureAction {
         package: Option<String>,
         path: String,
     },
+    /// Apply the manifest's declarative `state` (debug-only, requires explicit
+    /// data-mutation consent at the execution boundary).
+    ApplyState {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package: Option<String>,
+    },
+    /// Remove the files created by the manifest's declarative `state`
+    /// (debug-only, requires explicit data-mutation consent).
+    ResetState {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package: Option<String>,
+    },
 }
 
 impl FixtureAction {
@@ -244,12 +368,17 @@ impl FixtureAction {
             Self::Script { .. } => "script",
             Self::BackupAppData { .. } => "backup-app-data",
             Self::RestoreAppData { .. } => "restore-app-data",
+            Self::ApplyState { .. } => "apply_state",
+            Self::ResetState { .. } => "reset_state",
         }
     }
 
     pub fn is_destructive(&self) -> bool {
         match self {
-            Self::Uninstall { .. } | Self::ClearData { .. } | Self::RestoreAppData { .. } => true,
+            Self::Uninstall { .. }
+            | Self::ClearData { .. }
+            | Self::RestoreAppData { .. }
+            | Self::ResetState { .. } => true,
             Self::Install { fresh, .. } => *fresh,
             _ => false,
         }
@@ -546,6 +675,9 @@ fn validate_manifest_report(
     if manifest.steps.is_empty() {
         warnings.push("fixture has no steps".to_string());
     }
+    if let Some(state) = &manifest.state {
+        validate_fixture_state_report(state, "state", errors);
+    }
     let mut names = BTreeSet::new();
     for (index, step) in manifest.steps.iter().enumerate() {
         let label = step.name.clone().unwrap_or_else(|| format!("step-{index}"));
@@ -607,6 +739,25 @@ fn validate_manifest_report(
                     ));
                 }
             }
+            FixtureAction::ApplyState { .. } | FixtureAction::ResetState { .. } => {
+                if manifest.state.is_none() {
+                    errors.push(format!(
+                        "{label}: {} needs a declarative state block",
+                        step.action.kind()
+                    ));
+                }
+                if config.debug_package().is_none() {
+                    warnings.push(format!(
+                        "{label}: {} has no package; provide package in the step or set [project].package",
+                        step.action.kind()
+                    ));
+                }
+                if step.action.is_destructive() && !manifest.requires_confirmation {
+                    warnings.push(format!(
+                        "{label}: destructive step is present; fixture run will require --yes"
+                    ));
+                }
+            }
             FixtureAction::Uninstall { .. }
             | FixtureAction::ClearData { .. }
             | FixtureAction::RestoreAppData { .. }
@@ -621,6 +772,639 @@ fn validate_manifest_report(
     }
 }
 
+/// Validate declarative state without touching a device.
+pub fn validate_fixture_state_report(state: &FixtureState, prefix: &str, errors: &mut Vec<String>) {
+    if let Some(prefs) = &state.prefs {
+        if prefs.values.is_empty() {
+            errors.push(format!("{prefix}.prefs.values cannot be empty"));
+        }
+        if let Err(error) = validate_state_path(&prefs.path) {
+            errors.push(format!("{prefix}.prefs.path: {error}"));
+        }
+        for (key, value) in &prefs.values {
+            if !valid_pref_key(key) {
+                errors.push(format!(
+                    "{prefix}.prefs key '{key}' must match [A-Za-z0-9_.-]+"
+                ));
+            }
+            if value.chars().any(char::is_control) || value.contains('\n') || value.contains('\r') {
+                errors.push(format!(
+                    "{prefix}.prefs value for '{key}' contains a control character"
+                ));
+            }
+        }
+    }
+    if let Some(history) = &state.history {
+        if history.count > MAX_FIXTURE_HISTORY_COUNT {
+            errors.push(format!(
+                "{prefix}.history.count must be {MAX_FIXTURE_HISTORY_COUNT} or less"
+            ));
+        }
+        validate_command_argv(
+            &history.command,
+            &format!("{prefix}.history.command"),
+            errors,
+        );
+        if let Some(file) = &history.file
+            && let Err(error) = validate_state_path(file)
+        {
+            errors.push(format!("{prefix}.history.file: {error}"));
+        }
+        for (key, value) in &history.env {
+            if !valid_env_name(key) {
+                errors.push(format!("{prefix}.history.env has an invalid name '{key}'"));
+            }
+            if value.chars().any(char::is_control) {
+                errors.push(format!(
+                    "{prefix}.history.env value for '{key}' contains a control character"
+                ));
+            }
+        }
+    }
+    if let Some(version) = &state.installed_version {
+        if version.version_name.is_none() && version.version_code.is_none() {
+            errors.push(format!(
+                "{prefix}.installed_version needs version_name or version_code"
+            ));
+        }
+        if let Some(name) = &version.version_name
+            && (name.trim().is_empty() || name.chars().any(char::is_control))
+        {
+            errors.push(format!(
+                "{prefix}.installed_version.version_name is invalid"
+            ));
+        }
+        if version.mode == FixtureInstalledVersionMode::Set
+            && let Err(error) = validate_state_path(&version.path)
+        {
+            errors.push(format!("{prefix}.installed_version.path: {error}"));
+        }
+    }
+}
+
+/// App-private state paths are relative, shallow, bounded and shell-safe.
+pub fn validate_state_path(path: &str) -> std::result::Result<String, String> {
+    if path.is_empty() {
+        return Err("path cannot be empty".to_string());
+    }
+    if path.len() > MAX_FIXTURE_STATE_PATH_LEN {
+        return Err(format!("path exceeds {MAX_FIXTURE_STATE_PATH_LEN} bytes"));
+    }
+    if path.chars().any(char::is_control) || path.contains('\\') {
+        return Err("path contains a control character or backslash".to_string());
+    }
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return Err("path must be relative to the app data directory".to_string());
+    }
+    let mut clean = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("path may not contain '..' or an absolute prefix".to_string());
+            }
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        return Err("path cannot be empty".to_string());
+    }
+    if clean.components().count() > MAX_FIXTURE_STATE_PATH_COMPONENTS {
+        return Err(format!(
+            "path has more than {MAX_FIXTURE_STATE_PATH_COMPONENTS} components"
+        ));
+    }
+    // App-private paths always use forward slashes, even on Windows hosts.
+    Ok(clean.to_string_lossy().replace('\\', "/"))
+}
+
+/// A script command is an argv array; shell strings are never accepted.
+pub fn validate_command_argv(command: &[String], prefix: &str, errors: &mut Vec<String>) {
+    if command.is_empty() {
+        errors.push(format!("{prefix} cannot be empty"));
+        return;
+    }
+    for (index, arg) in command.iter().enumerate() {
+        if arg.is_empty() {
+            errors.push(format!("{prefix}[{index}] cannot be empty"));
+        }
+        if arg.chars().any(char::is_control) {
+            errors.push(format!("{prefix}[{index}] contains a control character"));
+        }
+    }
+}
+
+fn valid_pref_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 128
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Render the documented prefs key/value format deterministically.
+pub fn serialize_fixture_prefs(values: &BTreeMap<String, String>) -> String {
+    let mut text = String::from("# AndroidForge fixture prefs (debug-only, key=value)\n");
+    for (key, value) in values {
+        text.push_str(key);
+        text.push('=');
+        text.push_str(value);
+        text.push('\n');
+    }
+    text
+}
+
+/// A resolved, validated declarative state. No device calls are made while
+/// planning, so this shape is directly testable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FixtureStatePlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefs: Option<PlannedFixturePrefs>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<PlannedFixtureHistory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<PlannedFixtureInstalledVersion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedFixturePrefs {
+    pub path: String,
+    pub contents: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedFixtureHistory {
+    pub count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedFixtureInstalledVersion {
+    pub mode: FixtureInstalledVersionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_code: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+fn resolve_state_path(
+    value: &str,
+    vars: &BTreeMap<String, String>,
+    project_root: &Path,
+) -> Result<String> {
+    let resolved = resolve_template(value, vars, project_root)?;
+    validate_state_path(&resolved).map_err(ForgeError::invalid_argument)
+}
+
+/// Resolve templates and validate bounds before any device mutation.
+pub fn plan_fixture_state(
+    state: &FixtureState,
+    vars: &BTreeMap<String, String>,
+    project_root: &Path,
+) -> Result<FixtureStatePlan> {
+    let mut errors = Vec::new();
+    validate_fixture_state_report(state, "state", &mut errors);
+    if !errors.is_empty() {
+        return Err(
+            ForgeError::new(ErrorCode::FixtureInvalid, "fixture state is invalid")
+                .with_context("errors", serde_json::to_value(&errors).unwrap_or_default()),
+        );
+    }
+    let prefs = state
+        .prefs
+        .as_ref()
+        .map(|prefs| -> Result<PlannedFixturePrefs> {
+            Ok(PlannedFixturePrefs {
+                path: resolve_state_path(&prefs.path, vars, project_root)?,
+                contents: serialize_fixture_prefs(&prefs.values),
+            })
+        })
+        .transpose()?;
+    let history = state
+        .history
+        .as_ref()
+        .map(|history| -> Result<PlannedFixtureHistory> {
+            let command = history
+                .command
+                .iter()
+                .map(|arg| resolve_template(arg, vars, project_root))
+                .collect::<Result<Vec<_>>>()?;
+            let mut argv_errors = Vec::new();
+            validate_command_argv(&command, "state.history.command", &mut argv_errors);
+            if !argv_errors.is_empty() {
+                return Err(ForgeError::invalid_argument(argv_errors.join("; ")));
+            }
+            let env = history
+                .env
+                .iter()
+                .map(|(key, value)| Ok((key.clone(), resolve_template(value, vars, project_root)?)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            Ok(PlannedFixtureHistory {
+                count: history.count,
+                file: history
+                    .file
+                    .as_ref()
+                    .map(|file| resolve_state_path(file, vars, project_root))
+                    .transpose()?,
+                command,
+                env,
+            })
+        })
+        .transpose()?;
+    let installed_version = state
+        .installed_version
+        .as_ref()
+        .map(|version| -> Result<PlannedFixtureInstalledVersion> {
+            let path = match version.mode {
+                FixtureInstalledVersionMode::Set => {
+                    Some(resolve_state_path(&version.path, vars, project_root)?)
+                }
+                FixtureInstalledVersionMode::Assert => None,
+            };
+            Ok(PlannedFixtureInstalledVersion {
+                mode: version.mode,
+                version_name: version
+                    .version_name
+                    .as_ref()
+                    .map(|name| resolve_template(name, vars, project_root))
+                    .transpose()?,
+                version_code: version.version_code,
+                path,
+            })
+        })
+        .transpose()?;
+    Ok(FixtureStatePlan {
+        prefs,
+        history,
+        installed_version,
+    })
+}
+
+/// Exact `adb shell` argv used to remove files created by `apply_state`.
+/// Paths are deduplicated and re-validated even though planning already did so.
+pub fn fixture_state_reset_commands(plan: &FixtureStatePlan, package: &str) -> Vec<Vec<String>> {
+    let mut paths = BTreeSet::new();
+    if let Some(prefs) = &plan.prefs {
+        paths.insert(prefs.path.clone());
+    }
+    if let Some(history) = &plan.history
+        && let Some(file) = &history.file
+    {
+        paths.insert(file.clone());
+    }
+    if let Some(version) = &plan.installed_version
+        && version.mode == FixtureInstalledVersionMode::Set
+        && let Some(path) = &version.path
+    {
+        paths.insert(path.clone());
+    }
+    paths
+        .into_iter()
+        .filter(|path| validate_state_path(path).is_ok())
+        .map(|path| {
+            vec![
+                "run-as".to_string(),
+                package.to_string(),
+                "rm".to_string(),
+                "-f".to_string(),
+                path,
+            ]
+        })
+        .collect()
+}
+
+/// Consent is never inferred by core. The CLI must pass `true` only for an
+/// emulator or after its physical-data risk check.
+pub fn require_fixture_data_mutation(allow_data_mutation: bool) -> Result<()> {
+    if allow_data_mutation {
+        Ok(())
+    } else {
+        Err(ForgeError::new(
+            ErrorCode::PhysicalDeviceMutationBlocked,
+            "fixture declarative state mutates app-private data without explicit consent",
+        )
+        .with_suggestion(
+            "The CLI must opt in with allow_data_mutation=true after its physical-data risk check.",
+        )
+        .with_suggestion(
+            "On physical devices use --allow-physical-data or --allow-physical-mutation.",
+        ))
+    }
+}
+
+pub fn require_fixture_debuggable(debuggable: bool, package: &str, serial: &str) -> Result<()> {
+    if debuggable {
+        Ok(())
+    } else {
+        Err(ForgeError::new(
+            ErrorCode::AppNotDebuggable,
+            format!("fixture state requires a debuggable application; {package} is not debuggable"),
+        )
+        .with_suggestion("Install a debuggable build before applying fixture state.")
+        .with_suggestion("AndroidForge never roots a device to reach app-private data.")
+        .device(serial.to_string()))
+    }
+}
+
+/// Everything a device-backed state operation needs, supplied by the caller.
+#[derive(Debug, Clone, Copy)]
+pub struct FixtureStateExecution<'a> {
+    pub app: &'a AppManager,
+    pub serial: &'a str,
+    pub package: &'a str,
+    pub cwd: &'a Path,
+    pub timeout: Duration,
+    pub trace: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FixtureStateOutcome {
+    pub action: String,
+    pub debuggable: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+async fn state_debuggable(execution: &FixtureStateExecution<'_>) -> Result<bool> {
+    let files = AppFiles::new(execution.app.adb.clone());
+    let debuggable = files
+        .is_debuggable(execution.serial, execution.package)
+        .await?;
+    require_fixture_debuggable(debuggable, execution.package, execution.serial)?;
+    Ok(debuggable)
+}
+
+/// Apply declarative state. Requires explicit data-mutation consent and a
+/// debuggable application; never parses DataStore protobuf itself.
+pub async fn apply_fixture_state(
+    execution: &FixtureStateExecution<'_>,
+    plan: &FixtureStatePlan,
+    allow_data_mutation: bool,
+    run: &mut RunContext,
+    index: usize,
+) -> Result<FixtureStateOutcome> {
+    require_fixture_data_mutation(allow_data_mutation)?;
+    let debuggable = state_debuggable(execution).await?;
+    let files = AppFiles::new(execution.app.adb.clone());
+    let mut paths = Vec::new();
+    let mut notes = Vec::new();
+
+    if let Some(prefs) = &plan.prefs {
+        let local = run.write_bytes(
+            &format!("fixtures/state/{:03}-prefs.txt", index + 1),
+            prefs.contents.as_bytes(),
+        )?;
+        let transfer = files
+            .push(
+                execution.serial,
+                execution.package,
+                &local,
+                &prefs.path,
+                false,
+            )
+            .await?;
+        notes.push(format!(
+            "prefs hash verified: {}",
+            transfer.remote_hash_verified
+        ));
+        paths.push(prefs.path.clone());
+    }
+
+    if let Some(history) = &plan.history {
+        let relative = format!("fixtures/state/{:03}-history.bin", index + 1);
+        let output = run.dir.join(&relative);
+        if let Some(parent) = output.parent() {
+            ensure_dir(parent)?;
+        }
+        let mut argv = history.command.clone();
+        let program = argv.remove(0);
+        let mut spec = CommandSpec::new(program)
+            .args(argv)
+            .cwd(execution.cwd.to_path_buf())
+            .timeout(execution.timeout)
+            .trace(execution.trace)
+            .hide_window(true)
+            .env("ANDROIDFORGE_FIXTURE_STATE_MODE", "apply")
+            .env(
+                "ANDROIDFORGE_FIXTURE_HISTORY_COUNT",
+                history.count.to_string(),
+            )
+            .env(
+                "ANDROIDFORGE_FIXTURE_HISTORY_OUTPUT",
+                output.to_string_lossy(),
+            )
+            .env("ANDROIDFORGE_SERIAL", execution.serial)
+            .env("ANDROIDFORGE_PACKAGE", execution.package)
+            .env("ANDROIDFORGE_ADB", execution.app.adb.adb.to_string_lossy());
+        if let Some(file) = &history.file {
+            spec = spec.env("ANDROIDFORGE_FIXTURE_HISTORY_FILE", file);
+        }
+        for (key, value) in &history.env {
+            spec = spec.env(key, value);
+        }
+        let result = androidforge_process::Runner::new(execution.trace)
+            .run(spec)
+            .await;
+        let stdout = result
+            .as_ref()
+            .map(|output| output.stdout_text())
+            .unwrap_or_default();
+        let stderr = result
+            .as_ref()
+            .map(|output| output.stderr_text())
+            .unwrap_or_default();
+        run.write_text_artifact(
+            &format!("logs/fixture-{:03}-history.stdout.txt", index + 1),
+            "command_output",
+            Some("Fixture history writer stdout"),
+            &stdout,
+        )?;
+        if !stderr.is_empty() {
+            run.write_text_artifact(
+                &format!("logs/fixture-{:03}-history.stderr.txt", index + 1),
+                "command_output",
+                Some("Fixture history writer stderr"),
+                &stderr,
+            )?;
+        }
+        let result = result.map_err(|error| {
+            ForgeError::new(ErrorCode::FixtureFailed, error.to_string())
+                .with_context_string("stdout", stdout.chars().take(4000).collect::<String>())
+                .with_context_string("stderr", stderr.chars().take(4000).collect::<String>())
+        })?;
+        if !result.success {
+            return Err(ForgeError::new(
+                ErrorCode::FixtureFailed,
+                format!("fixture history writer exited with {:?}", result.exit_code),
+            )
+            .with_context_string("stdout", stdout.chars().take(4000).collect::<String>())
+            .with_context_string("stderr", stderr.chars().take(4000).collect::<String>()));
+        }
+        notes.push(format!("history writer seeded count {}", history.count));
+        if let Some(file) = &history.file {
+            if !output.is_file() {
+                return Err(ForgeError::new(
+                    ErrorCode::FileNotFound,
+                    "history writer did not produce its output file",
+                )
+                .with_context_string("expected", output.to_string_lossy().into_owned()));
+            }
+            files
+                .push(execution.serial, execution.package, &output, file, false)
+                .await?;
+            paths.push(file.clone());
+        }
+    }
+
+    if let Some(version) = &plan.installed_version {
+        match version.mode {
+            FixtureInstalledVersionMode::Assert => {
+                let states = execution
+                    .app
+                    .status(execution.serial, execution.package)
+                    .await?;
+                require_fixture_debuggable(states.debuggable, execution.package, execution.serial)?;
+                if !states.installed {
+                    return Err(ForgeError::new(
+                        ErrorCode::PackageNotFound,
+                        format!("package {} is not installed", execution.package),
+                    )
+                    .device(execution.serial.to_string()));
+                }
+                if let Some(expected) = &version.version_name
+                    && states.version_name.as_deref() != Some(expected.as_str())
+                {
+                    return Err(ForgeError::new(
+                        ErrorCode::FixtureFailed,
+                        "installed version_name does not match the fixture",
+                    )
+                    .with_context_string("expected", expected.clone())
+                    .with_context_string(
+                        "actual",
+                        states
+                            .version_name
+                            .clone()
+                            .unwrap_or_else(|| "null".to_string()),
+                    ));
+                }
+                if let Some(expected) = version.version_code
+                    && states.version_code != Some(expected)
+                {
+                    return Err(ForgeError::new(
+                        ErrorCode::FixtureFailed,
+                        "installed version_code does not match the fixture",
+                    )
+                    .with_context_string("expected", expected.to_string())
+                    .with_context_string(
+                        "actual",
+                        states
+                            .version_code
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
+                    ));
+                }
+                notes.push(format!(
+                    "asserted name={:?} code={:?}",
+                    states.version_name, states.version_code
+                ));
+            }
+            FixtureInstalledVersionMode::Set => {
+                let path = version
+                    .path
+                    .as_deref()
+                    .unwrap_or(DEFAULT_FIXTURE_VERSION_PATH);
+                let mut stamp = String::new();
+                if let Some(name) = &version.version_name {
+                    stamp.push_str("version_name=");
+                    stamp.push_str(name);
+                    stamp.push('\n');
+                }
+                if let Some(code) = version.version_code {
+                    stamp.push_str("version_code=");
+                    stamp.push_str(&code.to_string());
+                    stamp.push('\n');
+                }
+                let local = run.write_bytes(
+                    &format!("fixtures/state/{:03}-version.txt", index + 1),
+                    stamp.as_bytes(),
+                )?;
+                files
+                    .push(execution.serial, execution.package, &local, path, false)
+                    .await?;
+                paths.push(path.to_string());
+                notes.push("installed-version stamp written through run-as".to_string());
+            }
+        }
+    }
+
+    Ok(FixtureStateOutcome {
+        action: "apply_state".to_string(),
+        debuggable,
+        paths,
+        notes,
+    })
+}
+
+/// Remove only the app-private files declared by the fixture state plan.
+pub async fn reset_fixture_state(
+    execution: &FixtureStateExecution<'_>,
+    plan: &FixtureStatePlan,
+    allow_data_mutation: bool,
+    run: &mut RunContext,
+    index: usize,
+) -> Result<FixtureStateOutcome> {
+    require_fixture_data_mutation(allow_data_mutation)?;
+    let debuggable = state_debuggable(execution).await?;
+    let mut removed = Vec::new();
+    for args in fixture_state_reset_commands(plan, execution.package) {
+        let path = args.last().cloned().unwrap_or_default();
+        execution
+            .app
+            .adb
+            .shell_args(
+                execution.serial,
+                &args,
+                Some(execution.timeout),
+                Some(1024 * 1024),
+            )
+            .await?;
+        removed.push(path);
+    }
+    run.write_text_artifact(
+        &format!("logs/fixture-{:03}-state-reset.json", index + 1),
+        "fixture_state_reset",
+        Some("App-private fixture state files removed"),
+        &serde_json::to_string_pretty(&removed).unwrap_or_default(),
+    )?;
+    Ok(FixtureStateOutcome {
+        action: "reset_state".to_string(),
+        debuggable,
+        paths: removed.clone(),
+        notes: vec![format!("removed {} state file(s)", removed.len())],
+    })
+}
+
+/// Backward-compatible entry point. Declarative state is refused because core
+/// does not infer consent; CLI wiring should call
+/// `run_fixture_with_data_policy` after its physical-data check.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_fixture(
     config: &ForgeConfig,
@@ -630,6 +1414,23 @@ pub async fn run_fixture(
     paths: &ForgePaths,
     run: &mut RunContext,
     options: &FixtureRunOptions,
+) -> Result<FixtureRunResult> {
+    run_fixture_with_data_policy(config, session, app, ui, paths, run, options, false).await
+}
+
+/// Run a fixture with an explicit data-mutation capability decision. Callers
+/// must compute `allow_data_mutation` from the device kind and their scoped
+/// physical-risk flags; core never assumes consent.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_fixture_with_data_policy(
+    config: &ForgeConfig,
+    session: &Session,
+    app: &AppManager,
+    ui: &UiManager,
+    paths: &ForgePaths,
+    run: &mut RunContext,
+    options: &FixtureRunOptions,
+    allow_data_mutation: bool,
 ) -> Result<FixtureRunResult> {
     let manifest = load_fixture(config, &options.name)?;
     let started = Instant::now();
@@ -711,7 +1512,18 @@ pub async fn run_fixture(
         while attempts <= step.retries {
             attempts += 1;
             match execute_step(
-                config, &serial, app, ui, paths, run, options, &env, step, index,
+                config,
+                &serial,
+                app,
+                ui,
+                paths,
+                run,
+                options,
+                &env,
+                manifest.state.as_ref(),
+                allow_data_mutation,
+                step,
+                index,
             )
             .await
             {
@@ -813,6 +1625,7 @@ pub async fn run_fixture(
                         run,
                         options,
                         &env,
+                        allow_data_mutation,
                         &mut warnings,
                     )
                     .await;
@@ -862,6 +1675,8 @@ async fn execute_step(
     run: &mut RunContext,
     options: &FixtureRunOptions,
     env: &BTreeMap<String, String>,
+    state: Option<&FixtureState>,
+    allow_data_mutation: bool,
     step: &FixtureStep,
     index: usize,
 ) -> Result<StepExecution> {
@@ -1227,6 +2042,49 @@ async fn execute_step(
                 .await?;
             details = serde_json::to_value(&transfer).unwrap_or_default();
         }
+        FixtureAction::ApplyState { package } => {
+            let package = package_or_config(package, config)?;
+            let declared = state.ok_or_else(|| {
+                ForgeError::new(
+                    ErrorCode::FixtureInvalid,
+                    "apply_state needs a declarative state block",
+                )
+            })?;
+            let plan = plan_fixture_state(declared, &vars, &config.paths.project_root)?;
+            let execution = FixtureStateExecution {
+                app,
+                serial,
+                package: &package,
+                cwd: &config.paths.project_root,
+                timeout,
+                trace: options.trace,
+            };
+            let outcome =
+                apply_fixture_state(&execution, &plan, allow_data_mutation, run, index).await?;
+            details = serde_json::to_value(&outcome).unwrap_or_default();
+        }
+        FixtureAction::ResetState { package } => {
+            ensure_confirmed(options, "reset-state")?;
+            let package = package_or_config(package, config)?;
+            let declared = state.ok_or_else(|| {
+                ForgeError::new(
+                    ErrorCode::FixtureInvalid,
+                    "reset_state needs a declarative state block",
+                )
+            })?;
+            let plan = plan_fixture_state(declared, &vars, &config.paths.project_root)?;
+            let execution = FixtureStateExecution {
+                app,
+                serial,
+                package: &package,
+                cwd: &config.paths.project_root,
+                timeout,
+                trace: options.trace,
+            };
+            let outcome =
+                reset_fixture_state(&execution, &plan, allow_data_mutation, run, index).await?;
+            details = serde_json::to_value(&outcome).unwrap_or_default();
+        }
     }
     let _ = paths;
     Ok(StepExecution { artifacts, details })
@@ -1242,6 +2100,7 @@ async fn run_cleanup_steps(
     run: &mut RunContext,
     options: &FixtureRunOptions,
     env: &BTreeMap<String, String>,
+    allow_data_mutation: bool,
     warnings: &mut Vec<String>,
 ) {
     let Ok(manifest) = load_fixture(config, &options.name) else {
@@ -1258,7 +2117,18 @@ async fn run_cleanup_steps(
             .clone()
             .unwrap_or_else(|| format!("cleanup step {}", index + 1));
         if let Err(error) = execute_step(
-            config, serial, app, ui, paths, run, options, env, step, index,
+            config,
+            serial,
+            app,
+            ui,
+            paths,
+            run,
+            options,
+            env,
+            manifest.state.as_ref(),
+            allow_data_mutation,
+            step,
+            index,
         )
         .await
         {
@@ -1501,6 +2371,14 @@ fn describe_action(action: &FixtureAction) -> String {
         FixtureAction::Script { command, .. } => format!("script {}", command.join(" ")),
         FixtureAction::BackupAppData { path, .. } => format!("backup-app-data {path}"),
         FixtureAction::RestoreAppData { path, .. } => format!("restore-app-data {path}"),
+        FixtureAction::ApplyState { package } => format!(
+            "apply_state {}",
+            package.as_deref().unwrap_or("<project package>")
+        ),
+        FixtureAction::ResetState { package } => format!(
+            "reset_state {}",
+            package.as_deref().unwrap_or("<project package>")
+        ),
     }
 }
 
@@ -1567,5 +2445,351 @@ mod tests {
             }
             .is_destructive()
         );
+        assert!(FixtureAction::ResetState { package: None }.is_destructive());
+        assert!(!FixtureAction::ApplyState { package: None }.is_destructive());
+        assert_eq!(
+            FixtureAction::ApplyState { package: None }.kind(),
+            "apply_state"
+        );
+        assert_eq!(
+            FixtureAction::ResetState { package: None }.kind(),
+            "reset_state"
+        );
+    }
+
+    fn state_manifest_json() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "name": "state-demo",
+            "state": {
+                "prefs": {
+                    "path": "files/androidforge/fixture-prefs.txt",
+                    "values": {"onboarding_done": "true", "last_tab": "home"}
+                },
+                "history": {
+                    "count": 12,
+                    "file": "files/androidforge/history.bin",
+                    "command": ["${PROJECT_ROOT}/fixtures/write-history", "--count", "12"],
+                    "env": {"WRITER_MODE": "fixture"}
+                },
+                "installed_version": {
+                    "mode": "assert",
+                    "version_name": "1.2.3",
+                    "version_code": 12
+                }
+            },
+            "steps": [
+                {"name": "apply", "action": {"type": "apply_state"}},
+                {
+                    "name": "reset",
+                    "phase": "cleanup",
+                    "action": {"type": "reset_state", "package": "com.example.app"}
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn parses_declarative_state_from_json_and_toml() {
+        let json = state_manifest_json().to_string();
+        let manifest = parse_fixture_text(Path::new("fixture.json"), &json).unwrap();
+        let state = manifest.state.as_ref().expect("state");
+        assert_eq!(state.prefs.as_ref().unwrap().values.len(), 2);
+        assert_eq!(state.history.as_ref().unwrap().count, 12);
+        assert_eq!(
+            state.installed_version.as_ref().unwrap().mode,
+            FixtureInstalledVersionMode::Assert
+        );
+        assert_eq!(manifest.steps[0].action.kind(), "apply_state");
+        assert_eq!(manifest.steps[1].action.kind(), "reset_state");
+
+        let toml = r#"
+version = 1
+name = "state-toml"
+[state.prefs]
+path = "files/androidforge/prefs.txt"
+[state.prefs.values]
+onboarding_done = "true"
+[state.history]
+count = 3
+command = ["fixtures/write-history", "--count", "3"]
+[state.installed_version]
+mode = "set"
+version_code = 7
+[[steps]]
+name = "apply"
+[steps.action]
+type = "apply_state"
+"#;
+        let manifest = parse_fixture_text(Path::new("fixture.toml"), toml).unwrap();
+        let state = manifest.state.as_ref().expect("state");
+        assert_eq!(state.history.as_ref().unwrap().command.len(), 3);
+        assert_eq!(
+            state.installed_version.as_ref().unwrap().mode,
+            FixtureInstalledVersionMode::Set
+        );
+        assert_eq!(manifest.steps[0].action.kind(), "apply_state");
+    }
+
+    #[test]
+    fn rejects_unknown_fields_at_every_level() {
+        let mut manifest = state_manifest_json();
+        manifest["unexpected"] = serde_json::json!(true);
+        assert!(parse_fixture_text(Path::new("fixture.json"), &manifest.to_string()).is_err());
+
+        let mut manifest = state_manifest_json();
+        manifest["state"]["prefs"]["unexpected"] = serde_json::json!(true);
+        assert!(parse_fixture_text(Path::new("fixture.json"), &manifest.to_string()).is_err());
+
+        let mut manifest = state_manifest_json();
+        manifest["state"]["history"]["unexpected"] = serde_json::json!(true);
+        assert!(parse_fixture_text(Path::new("fixture.json"), &manifest.to_string()).is_err());
+
+        let mut manifest = state_manifest_json();
+        manifest["state"]["installed_version"]["unexpected"] = serde_json::json!(true);
+        assert!(parse_fixture_text(Path::new("fixture.json"), &manifest.to_string()).is_err());
+
+        let mut manifest = state_manifest_json();
+        manifest["steps"][0]["action"]["unexpected"] = serde_json::json!(true);
+        assert!(parse_fixture_text(Path::new("fixture.json"), &manifest.to_string()).is_err());
+    }
+
+    #[test]
+    fn fixture_schema_accepts_state_and_rejects_unknown_fields() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/fixture.schema.json");
+        let text = std::fs::read_to_string(&path).expect("read fixture schema");
+        let schema: serde_json::Value = serde_json::from_str(&text).expect("parse fixture schema");
+        jsonschema::meta::validate(&schema).expect("fixture schema is not valid draft 2020-12");
+        let validator = jsonschema::validator_for(&schema).expect("compile fixture schema");
+        let valid = state_manifest_json();
+        assert!(validator.is_valid(&valid), "schema rejected {valid:#}");
+
+        let mut unknown = state_manifest_json();
+        unknown["state"]["history"]["unexpected"] = serde_json::json!(1);
+        assert!(!validator.is_valid(&unknown));
+
+        let mut bad_mode = state_manifest_json();
+        bad_mode["state"]["installed_version"]["mode"] = serde_json::json!("bogus");
+        assert!(!validator.is_valid(&bad_mode));
+
+        let mut shell_string = state_manifest_json();
+        shell_string["state"]["history"]["command"] = serde_json::json!("python writer.py");
+        assert!(!validator.is_valid(&shell_string));
+
+        let mut unbounded = state_manifest_json();
+        unbounded["state"]["history"]["count"] = serde_json::json!(1001);
+        assert!(!validator.is_valid(&unbounded));
+
+        let mut empty_prefs = state_manifest_json();
+        empty_prefs["state"]["prefs"]["values"] = serde_json::json!({});
+        assert!(!validator.is_valid(&empty_prefs));
+
+        let mut no_version = state_manifest_json();
+        let installed = no_version["state"]["installed_version"]
+            .as_object_mut()
+            .unwrap();
+        installed.remove("version_name");
+        installed.remove("version_code");
+        assert!(!validator.is_valid(&no_version));
+    }
+
+    #[test]
+    fn prefs_format_is_sorted_and_documented() {
+        let mut values = BTreeMap::new();
+        values.insert("z_last".to_string(), "true".to_string());
+        values.insert("a_first".to_string(), "one=two".to_string());
+        assert_eq!(
+            serialize_fixture_prefs(&values),
+            "# AndroidForge fixture prefs (debug-only, key=value)\na_first=one=two\nz_last=true\n"
+        );
+
+        let mut errors = Vec::new();
+        let state = FixtureState {
+            prefs: Some(FixturePrefsState {
+                path: DEFAULT_FIXTURE_PREFS_PATH.to_string(),
+                values: BTreeMap::from([("bad key".to_string(), "value".to_string())]),
+            }),
+            ..FixtureState::default()
+        };
+        validate_fixture_state_report(&state, "state", &mut errors);
+        assert!(errors.iter().any(|error| error.contains("must match")));
+    }
+
+    #[test]
+    fn state_paths_are_bounded_and_relative() {
+        assert_eq!(
+            validate_state_path("files/./state.json").unwrap(),
+            "files/state.json"
+        );
+        for bad in [
+            "",
+            "/data/data/com.example",
+            "files/../../state.json",
+            "files\\state.json",
+            "files/state\n.json",
+            &"a/".repeat(100),
+        ] {
+            assert!(
+                validate_state_path(bad).is_err(),
+                "accepted bad path: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn history_command_is_argv_not_a_shell_string() {
+        let shell: std::result::Result<FixtureHistoryState, _> =
+            serde_json::from_str(r#"{"count":1,"command":"python writer.py"}"#);
+        assert!(shell.is_err(), "a shell string must not parse as a command");
+
+        let state = FixtureState {
+            history: Some(FixtureHistoryState {
+                count: 2,
+                file: Some("files/history.bin".to_string()),
+                command: vec![
+                    "${PROJECT_ROOT}/fixtures/write-history".to_string(),
+                    "--count".to_string(),
+                    "2".to_string(),
+                ],
+                env: BTreeMap::new(),
+            }),
+            ..FixtureState::default()
+        };
+        let plan = plan_fixture_state(&state, &BTreeMap::new(), Path::new("C:/proj")).unwrap();
+        assert_eq!(
+            plan.history.as_ref().unwrap().command,
+            vec![
+                "C:/proj/fixtures/write-history".to_string(),
+                "--count".to_string(),
+                "2".to_string(),
+            ]
+        );
+
+        let mut errors = Vec::new();
+        validate_command_argv(&[], "command", &mut errors);
+        validate_command_argv(&["ok".to_string(), "".to_string()], "command", &mut errors);
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn plans_state_without_a_device() {
+        let manifest: FixtureManifest = serde_json::from_value(state_manifest_json()).unwrap();
+        let plan = plan_fixture_state(
+            manifest.state.as_ref().unwrap(),
+            &BTreeMap::new(),
+            Path::new("C:/proj"),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.prefs.as_ref().unwrap().path,
+            "files/androidforge/fixture-prefs.txt"
+        );
+        assert_eq!(plan.history.as_ref().unwrap().count, 12);
+        assert_eq!(
+            plan.installed_version.as_ref().unwrap().mode,
+            FixtureInstalledVersionMode::Assert
+        );
+        assert!(plan.installed_version.as_ref().unwrap().path.is_none());
+    }
+
+    #[test]
+    fn validation_refuses_invalid_bounds_and_missing_version_fields() {
+        let state = FixtureState {
+            history: Some(FixtureHistoryState {
+                count: MAX_FIXTURE_HISTORY_COUNT + 1,
+                file: Some("/abs".to_string()),
+                command: vec!["writer".to_string()],
+                env: BTreeMap::new(),
+            }),
+            installed_version: Some(FixtureInstalledVersionState {
+                mode: FixtureInstalledVersionMode::Set,
+                version_name: None,
+                version_code: None,
+                path: "files/../../version".to_string(),
+            }),
+            ..FixtureState::default()
+        };
+        let mut errors = Vec::new();
+        validate_fixture_state_report(&state, "state", &mut errors);
+        assert!(errors.iter().any(|e| e.contains("count must be")));
+        assert!(errors.iter().any(|e| e.contains("history.file")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("version_name or version_code"))
+        );
+        assert!(errors.iter().any(|e| e.contains("installed_version.path")));
+        assert!(plan_fixture_state(&state, &BTreeMap::new(), Path::new("C:/proj")).is_err());
+
+        assert!(
+            serde_json::from_str::<FixtureInstalledVersionState>(
+                r#"{"mode":"unknown","version_code":1}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn data_mutation_consent_is_explicit() {
+        assert!(require_fixture_data_mutation(true).is_ok());
+        let error = require_fixture_data_mutation(false).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PhysicalDeviceMutationBlocked);
+    }
+
+    #[test]
+    fn debug_only_refusal_is_explicit() {
+        assert!(require_fixture_debuggable(true, "com.example", "emulator-5554").is_ok());
+        let error = require_fixture_debuggable(false, "com.example", "emulator-5554").unwrap_err();
+        assert_eq!(error.code(), ErrorCode::AppNotDebuggable);
+        assert!(error.message().contains("not debuggable"));
+    }
+
+    #[test]
+    fn reset_removes_only_declared_paths_deduplicated() {
+        let state = FixtureState {
+            prefs: Some(FixturePrefsState {
+                path: "files/shared.txt".to_string(),
+                values: BTreeMap::from([("k".to_string(), "v".to_string())]),
+            }),
+            history: Some(FixtureHistoryState {
+                count: 1,
+                file: Some("files/history.bin".to_string()),
+                command: vec!["writer".to_string()],
+                env: BTreeMap::new(),
+            }),
+            installed_version: Some(FixtureInstalledVersionState {
+                mode: FixtureInstalledVersionMode::Set,
+                version_name: Some("1.0".to_string()),
+                version_code: None,
+                path: "files/shared.txt".to_string(),
+            }),
+        };
+        let plan = plan_fixture_state(&state, &BTreeMap::new(), Path::new("C:/proj")).unwrap();
+        let commands = fixture_state_reset_commands(&plan, "com.example");
+        assert_eq!(
+            commands,
+            vec![
+                vec![
+                    "run-as".to_string(),
+                    "com.example".to_string(),
+                    "rm".to_string(),
+                    "-f".to_string(),
+                    "files/history.bin".to_string(),
+                ],
+                vec![
+                    "run-as".to_string(),
+                    "com.example".to_string(),
+                    "rm".to_string(),
+                    "-f".to_string(),
+                    "files/shared.txt".to_string(),
+                ],
+            ]
+        );
+        for command in &commands {
+            assert!(
+                !command.iter().any(|arg| arg.contains(' ')),
+                "shell string in argv"
+            );
+        }
     }
 }

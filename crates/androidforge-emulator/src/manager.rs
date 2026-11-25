@@ -12,7 +12,7 @@ use androidforge_process::{
 use serde::{Deserialize, Serialize};
 
 use crate::avd::list_avds;
-use crate::port::allocate_port;
+use crate::port::{GRPC_PORT_OFFSET, allocate_port};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartedEmulator {
@@ -40,6 +40,109 @@ pub struct EmulatorStatus {
     pub boot_completed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<Device>,
+    /// Console port chosen for this emulator (`emulator-<port>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_port: Option<u16>,
+    /// Console port + 1, used by ADB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adb_port: Option<u16>,
+    /// Console port + 3000 when representable; `None` when no gRPC port exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Conservative commit/RAM warning; absent when capacity is unknown or
+    /// sufficient. Never contains a fabricated measurement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_warning: Option<String>,
+}
+
+/// Read-only host capacity snapshot used by status warnings. Unknown values
+/// stay `None`; callers (doctor --capacity) supply the measured values.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapacitySnapshot {
+    pub available_ram_bytes: Option<u64>,
+    pub available_commit_bytes: Option<u64>,
+}
+
+impl CapacitySnapshot {
+    pub fn is_unknown(&self) -> bool {
+        self.available_ram_bytes.is_none() && self.available_commit_bytes.is_none()
+    }
+}
+
+/// Optional context for an enriched status. Existing callers can keep using
+/// `status(serial, pid)`; CLI wiring supplies owner/session/capacity later.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StatusContext<'a> {
+    pub owner: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    /// Configured AVD RAM in MiB, when known.
+    pub avd_ram_mb: Option<u32>,
+    pub capacity: Option<&'a CapacitySnapshot>,
+}
+
+/// Purely derived status fields, testable without a device.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StatusMetadata {
+    pub console_port: Option<u16>,
+    pub adb_port: Option<u16>,
+    pub grpc_port: Option<u16>,
+    pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub capacity_warning: Option<String>,
+}
+
+/// Extract the console port from an `emulator-<even port>` serial.
+pub fn console_port_from_serial(serial: &str) -> Option<u16> {
+    let port = serial.strip_prefix("emulator-")?;
+    if port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let port = port.parse::<u16>().ok()?;
+    (port >= 1024 && port.is_multiple_of(2)).then_some(port)
+}
+
+/// Build a conservative commit warning only from known values. No warning is
+/// produced when capacity or AVD RAM is unknown.
+pub fn capacity_warning(
+    avd_ram_mb: Option<u32>,
+    capacity: Option<&CapacitySnapshot>,
+) -> Option<String> {
+    let ram_mb = avd_ram_mb?;
+    let capacity = capacity?;
+    let estimate = u64::from(ram_mb).saturating_mul(1024 * 1024);
+    if capacity
+        .available_commit_bytes
+        .is_some_and(|available| estimate > available)
+    {
+        return Some(format!(
+            "configured AVD RAM ({ram_mb} MiB) exceeds available commit; starting may fail"
+        ));
+    }
+    if capacity
+        .available_ram_bytes
+        .is_some_and(|available| estimate > available)
+    {
+        return Some(format!(
+            "configured AVD RAM ({ram_mb} MiB) exceeds available physical RAM; performance may degrade"
+        ));
+    }
+    None
+}
+
+pub fn status_metadata(serial: &str, context: &StatusContext<'_>) -> StatusMetadata {
+    let console_port = console_port_from_serial(serial);
+    StatusMetadata {
+        console_port,
+        adb_port: console_port.and_then(|port| port.checked_add(1)),
+        grpc_port: console_port.and_then(|port| port.checked_add(GRPC_PORT_OFFSET)),
+        owner: context.owner.map(str::to_string),
+        session_id: context.session_id.map(str::to_string),
+        capacity_warning: capacity_warning(context.avd_ram_mb, context.capacity),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,6 +415,19 @@ impl EmulatorManager {
     }
 
     pub async fn status(&self, serial: &str, pid: Option<u32>) -> Result<EmulatorStatus> {
+        self.status_with_context(serial, pid, StatusContext::default())
+            .await
+    }
+
+    /// Enriched status with caller-supplied session ownership and host
+    /// capacity. This is core data only; no CLI flags are wired here.
+    pub async fn status_with_context(
+        &self,
+        serial: &str,
+        pid: Option<u32>,
+        context: StatusContext<'_>,
+    ) -> Result<EmulatorStatus> {
+        let metadata = status_metadata(serial, &context);
         let process_alive = pid.map(process_exists).unwrap_or(false);
         let device = match self.adb.inspect(serial).await {
             Ok(device) => Some(device),
@@ -347,6 +463,12 @@ impl EmulatorManager {
                 .map(|device| device.state.as_str().to_string()),
             boot_completed: device.as_ref().and_then(|device| device.boot_completed),
             device: device.map(|device| device.compact()),
+            console_port: metadata.console_port,
+            adb_port: metadata.adb_port,
+            grpc_port: metadata.grpc_port,
+            owner: metadata.owner,
+            session_id: metadata.session_id,
+            capacity_warning: metadata.capacity_warning,
         })
     }
 
@@ -631,6 +753,76 @@ mod tests {
     fn snapshot_names_are_restricted() {
         assert!(validate_snapshot_name("clean-install_1").is_ok());
         assert!(validate_snapshot_name("../bad").is_err());
+    }
+
+    #[test]
+    fn status_ports_and_owner_come_from_serial_and_context() {
+        let capacity = CapacitySnapshot {
+            available_ram_bytes: Some(32 * 1024 * 1024 * 1024),
+            available_commit_bytes: Some(64 * 1024 * 1024 * 1024),
+        };
+        let context = StatusContext {
+            owner: Some("agent-a"),
+            session_id: Some("ses-1"),
+            avd_ram_mb: Some(2048),
+            capacity: Some(&capacity),
+        };
+        let metadata = status_metadata("emulator-5556", &context);
+        assert_eq!(metadata.console_port, Some(5556));
+        assert_eq!(metadata.adb_port, Some(5557));
+        assert_eq!(metadata.grpc_port, Some(8556));
+        assert_eq!(metadata.owner.as_deref(), Some("agent-a"));
+        assert_eq!(metadata.session_id.as_deref(), Some("ses-1"));
+        assert_eq!(metadata.capacity_warning, None);
+    }
+
+    #[test]
+    fn console_port_parsing_rejects_non_emulator_serials() {
+        assert_eq!(console_port_from_serial("emulator-5554"), Some(5554));
+        assert_eq!(console_port_from_serial("emulator-5555"), None);
+        assert_eq!(console_port_from_serial("emulator-1024"), Some(1024));
+        assert_eq!(console_port_from_serial("emulator-1000"), None);
+        assert_eq!(console_port_from_serial("0123456789012345"), None);
+        assert_eq!(console_port_from_serial("emulator-abc"), None);
+        assert_eq!(console_port_from_serial("usb-device"), None);
+    }
+
+    #[test]
+    fn capacity_warning_is_conservative_when_unavailable() {
+        let unknown = CapacitySnapshot::default();
+        assert!(unknown.is_unknown());
+        assert_eq!(capacity_warning(Some(8192), Some(&unknown)), None);
+        assert_eq!(capacity_warning(None, None), None);
+        let tight = CapacitySnapshot {
+            available_ram_bytes: Some(1024 * 1024 * 1024),
+            available_commit_bytes: Some(1024 * 1024 * 1024),
+        };
+        let warning = capacity_warning(Some(4096), Some(&tight)).unwrap();
+        assert!(warning.contains("exceeds available commit"));
+    }
+
+    #[test]
+    fn status_serialization_keeps_new_fields_optional() {
+        let status = EmulatorStatus {
+            serial: "emulator-5554".to_string(),
+            avd: None,
+            pid: None,
+            process_alive: false,
+            adb_state: None,
+            boot_completed: None,
+            device: None,
+            console_port: Some(5554),
+            adb_port: Some(5555),
+            grpc_port: Some(8554),
+            owner: Some("agent-a".to_string()),
+            session_id: None,
+            capacity_warning: None,
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["console_port"], 5554);
+        assert_eq!(json["owner"], "agent-a");
+        assert!(json.get("session_id").is_none());
+        assert!(json.get("capacity_warning").is_none());
     }
 
     #[test]

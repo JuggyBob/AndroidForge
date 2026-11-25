@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-adb"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-core",
  "androidforge-process",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-app"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-automation"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -233,6 +233,7 @@ dependencies = [
  "androidforge-diagnostics",
  "androidforge-process",
  "androidforge-ui",
+ "jsonschema",
  "regex",
  "serde",
  "serde_json",
@@ -243,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -279,12 +280,13 @@ dependencies = [
 
 [[package]]
 name = "androidforge-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-process",
  "chrono",
  "fs2",
  "hex",
+ "jsonschema",
  "regex",
  "serde",
  "serde_json",
@@ -298,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-desktop"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "eframe",
@@ -322,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-diagnostics"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-app",
@@ -330,6 +332,7 @@ dependencies = [
  "androidforge-process",
  "androidforge-ui",
  "chrono",
+ "png",
  "regex",
  "serde",
  "serde_json",
@@ -339,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-emulator"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
@@ -352,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "androidforge-process"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "tempfile",
  "thiserror 2.0.21",
@@ -361,15 +364,16 @@ dependencies = [
 
 [[package]]
 name = "androidforge-test-support"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "androidforge-ui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "androidforge-adb",
  "androidforge-core",
  "androidforge-process",
+ "png",
  "regex",
  "roxmltree",
  "serde",

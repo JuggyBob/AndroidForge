@@ -6,10 +6,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status: Stable](https://img.shields.io/badge/status-stable-green.svg)](#project-status)
 
-> **Stable `v1.0.0`.** AndroidForge is usable today for emulator-driven development and agent
+> **Stable `v1.1.0`.** AndroidForge is usable today for emulator-driven development and agent
 > workflows. Windows is the tested host; physical-device Maestro flows, instrumentation, snapshot
 > restore and root-only operations are not yet fully validated. Read [Project status](#project-status)
-> and the [v1.0.0 release notes](docs/release-notes/v1.0.0.md) before relying on it.
+> and the [v1.1.0 release notes](docs/release-notes/v1.1.0.md) before relying on it.
 
 AndroidForge is a local-first Rust toolkit: a single native CLI for automation plus an optional native
 desktop cockpit for humans. The CLI gives an AI coding agent a reliable way to acquire an Android
@@ -65,15 +65,18 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 
 | Area | What AndroidForge provides |
 | --- | --- |
-| Devices | ADB discovery, `devices list/inspect/wait/health`, wireless pair/connect/disconnect, preparation and restore |
-| Emulators | AVD listing, safe port allocation, headless start, boot wait, status, stop, snapshots |
+| Devices | ADB discovery, `devices list/inspect/wait/health`, wireless pair/connect/disconnect, preparation and restore, scoped `devices shell --read-only`, gated `devices input tap`, host tags and `ports list` |
+| Emulators | AVD listing/images/creation, safe port allocation, headless start, boot wait, status, stop, snapshots, `doctor --capacity` |
 | Sessions | Claim/attach/release/stop/restart, owner guards, heartbeats, stale-session GC, `list --mine --active` classification and safe dry-run reclaim |
 | APKs | `aapt2`/`apksigner` inspection, signature and package checks, split APK/`.apks` identity and install verification |
 | Apps | Launch, status with live version/hash expectations, force-stop, uninstall, clear data, file push/pull and verified app-data export/import/reset/seed for debuggable builds |
-| UI | Hierarchy dump/find/assert/tap/text/clear/back/scroll/settle/wait, configurable long-press and drag holds, mid-gesture captures, text-absence/idle/stability waits, semantic selectors and stable refs |
-| Evidence | Screenshots with baseline/region comparison, before/after tap captures, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
-| Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, reverse mappings and local HTTP/TLS mocks, time, startup/jank/memory/CPU evidence |
-| Automation | Versioned fixtures, hooks with postconditions, conformance manifests, JUnit import |
+| Build | Explicit argv-array `build` variants, bounded/redacted logs, APK identity verification, `--install`/`--launch`/`--cold`, dry-run |
+| Scenarios | JSON/TOML scenario files, audited step mapping, `--repeat`, per-step policy, pass rate and duration variance |
+| UI | Hierarchy dump/find/assert/tap/text/clear/back/scroll/settle/wait, bounds/`assert-bounds`, `--for-bounds-stable`, `ui audit a11y`, `ui observe --semantics`, configurable long-press and drag holds, mid-gesture captures, stable refs |
+| Evidence | Screenshots with named baseline/region comparison, `capture launch` first-frame analysis, `capture contrast`, before/after tap captures, screen recording, logcat, crashes/ANRs, dumpsys, artifact manifests |
+| Diagnostics | Notifications, channels, jobs, alarms, permissions, AppOps, Doze, battery, network, reverse mappings and local HTTP/TLS mocks, time, startup/jank/memory/CPU evidence, frame percentiles and launch recording |
+| Evidence security | `artifacts scan-secrets`, opt-in logcat prefix redaction, forced bundle secret refusal, binary-media disclosure |
+| Automation | Versioned fixtures with declarative state, hooks with postconditions, conformance manifests, JSON/TOML scenarios, network mock scenarios, JUnit import |
 | Agent context | `context`, `agent brief`, compact observations/diffs, stable refs, action receipts, postconditions and exact next-action argv |
 | Diagnosis | Deterministic failure categories, confidence, evidence, stable fingerprints, recurrence memory, `report explain/history/recurrences` and diagnostic bundles |
 | Orchestration | Idempotent and waitable `session ensure`, read-only `doctor fix --plan`, transparent `agent test`, APK resolution, `--only-if-changed` and parallel `agent matrix` |
@@ -81,7 +84,7 @@ If you are wiring an agent, start with [AGENT_GUIDE.md](AGENT_GUIDE.md) and
 | Analysis | Failure triage, compatible run comparison, flaky-step analysis, copyable Markdown/JSON reports |
 | Storage safety | Dry-run cleanup previews, terminal-only pruning, active-session protection, stale-session GC |
 | Integration | Raw ADB passthrough, external `run --` scripts, project adapters, JSON schemas, optional pinned Maestro installer |
-| Agent output | `full`, `compact` and `brief` JSON profiles, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
+| Agent output | `full`, `compact` and `brief` JSON profiles, `--jsonl` streaming, `--fields` result trimming, `--stats` byte/token counts, env/config defaults, minification, explicit caps/counts, one-line summaries and short next commands |
 
 ## Screenshots
 
@@ -94,6 +97,36 @@ environment-validation state visible when they were captured. See
 ![Ownership](docs/screenshots/v1.0.0/04-ownership.png)
 
 ![Failure triage](docs/screenshots/v1.0.0/05-triage.png)
+
+## What is new in v1.1.0
+
+**Verification primitives and safer agent evidence.** v1.1.0 is an additive release: the envelope
+and report schema stay at `1`, existing commands keep their behaviour, and the `device` alias for
+`devices` is retained.
+
+- **Build and install in one audited command:** `build` runs an explicit argv-array build config,
+  bounds and redacts logs, verifies the produced APK identity, and can `--install`, `--launch`, or
+  `--cold` launch through the fixed force-stop path. `--dry-run` executes nothing.
+- **Frame, launch and layout evidence:** `diagnostics frames` (jank percentiles, missed vsync and a
+  stored-baseline regression gate), `capture launch` (first app frame, splash colours), `ui bounds` /
+  `ui assert-bounds`, `ui wait --for-bounds-stable`, `capture assert-color`, `capture contrast`,
+  `ui audit a11y` and named `capture baseline save/update/compare`.
+- **Deterministic test state:** declarative fixture `prefs`/`history`/`installed_version` state with
+  explicit data consent, network mock scenarios (`newer-release`, `offline`, `bad-digest`, `no-APK`),
+  device night/locale/font/network scenarios, AVD `images`/`create`, `doctor --capacity`, `ports list`
+  and host device tags.
+- **Scenario files and flake reporting:** `scenario run/validate` accepts JSON or TOML, maps steps to
+  audited operations, supports `--repeat`, per-step error policy, pass rate and duration variance.
+  YAML is intentionally not supported.
+- **Safety and supply chain:** `artifacts scan-secrets`, `diagnostics logcat --redact-patterns`,
+  `report bundle --redact-secrets` (refuses to write an unredacted bundle), scoped physical
+  capability flags, `devices shell --read-only` with allow/deny prefixes, and gated `devices input tap`.
+- **Reporting and agent output:** run tags/metadata, `--session`/`--tag`/`--since` selectors, report
+  budgets, retention `--keep-tag`, scoped `app data export`, `--jsonl`/`--fields`/`--stats`, and
+  `ui observe --semantics` with Compose `testTag`/`test-tag` selectors.
+- **Measured surface:** 219 catalog commands, 221 MCP tools and 38/38 schemas in the 1.1.0 build.
+  The host gate, packaged-binary hashes and physical-device campaigns are recorded in
+  [VERIFICATION.md](VERIFICATION.md) and the [v1.1.0 release notes](docs/release-notes/v1.1.0.md).
 
 ## What is new in v1.0.0
 
@@ -156,7 +189,7 @@ The two standalone EXEs are the exact binaries bundled in the ZIPs and installer
 cockpit requires that adjacency. The desktop searches for the CLI beside itself, then a configured path,
 then the development build, then `PATH`. Open Settings to point at a different CLI or workspace.
 
-Both executables follow the same `1.0.0` version line. The desktop requires an exact CLI version match and refuses a CLI whose version or JSON schema it does not understand rather than guessing.
+Both executables follow the same `1.1.0` version line. The desktop requires an exact CLI version match and refuses a CLI whose version or JSON schema it does not understand rather than guessing.
 
 > **Unsigned binaries.** The release assets are intentionally unsigned. Windows SmartScreen may warn on first launch. AndroidForge does not include a code-signing certificate or claim a verified publisher identity. Verify the published SHA-256 checksums before running downloaded files.
 
@@ -379,18 +412,46 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Project status
 
-**Stable `v1.0.0`.** The final host gate passed: fmt and strict clippy clean, `cargo test --workspace
---locked` 392 passed / 0 failed across 27 suites (including 4 new unreadable-lock tests), clean
-`cargo deny` and release build; CLI and desktop both report `1.0.0`, with 191 catalog commands, 192
-MCP tools and 31/31 schemas. The final package passed checksum, installer metadata, bundled notices/fonts
-and silent install/uninstall verification. On the approved POCO X4 GT / HyperOS 2 /
-Android 14 (API 34) device, the packaged CLI completed an in-place IronPulse 5.1.0 → 5.1.2 upgrade
-(`content_different`, same certificate, data preserved) with passing live verification, UI observation
-and evidence capture. On REDMAGIC 10 Pro / RedMagicOS 11.0.6_EU / Android 16 (API 36), the same CLI
-passed 8/8 zero-touch read-only checks with identical before/after package, settings and `getprop`/`df`
-state; no session was created. REDMAGIC UI automation and all device actions are **NOT RUN** by the
-zero-touch rule. Final asset hashes are recorded in the
-[v1.0.0 release notes](docs/release-notes/v1.0.0.md). See [VERIFICATION.md](VERIFICATION.md).
+**`v1.1.0` — release gate complete for the supported scope.** The full-workspace gate passed:
+`cargo fmt --all -- --check` clean, strict workspace clippy clean, `cargo test --locked --workspace`
+784 passed / 0 failed across 29 suites, and `cargo deny check advisories bans licenses sources`
+passed (advisories/bans/licenses/sources ok; duplicate and advisory-not-detected warnings only).
+Two final safety fixes — physical `diagnostics performance` now requires `Risk::AppControl`, and the
+command is catalog/MCP `device-mutation` with MCP `confirm=true` unless `dry_run=true` — were followed
+by a post-fix CLI gate of **375 passed / 0 failed** (bin 244, cli 91, frames 3, safety 22, schema 15),
+clean CLI clippy and passing cargo-deny. The 1.1.0 build exposes 219 catalog commands, 221 MCP tools
+and 38/38 schemas, and the CLI reports `androidforge 1.1.0`.
+
+On the user-approved POCO X4 GT / Android 14 (API 34), a delegated read-only campaign passed 12/12
+steps with no mutations and no NOT RUN (CalcSuite 3.1.0 foreground, bounds/`assert-bounds`, a11y
+audit; session released and artifacts cleaned), and a delegated approved mutation campaign passed
+`app launch --force-stop --allow-physical-app-control`, `devices input tap --allow-physical-input` and
+`ui back --allow-physical-input` with its session released. Packaged assets were verified: CLI ZIP
+`92bf048f0d0e022fbb947ba351314c5ff98ade4d45cc9d1a4b177133f8225a0b`, desktop ZIP
+`7a8d2325aa416f701fbf27fc42cb3f926889a63359153a6c7174acf6a4157c90`, installer
+`71dc973b084349d5c5676e96d3ca62971d566a166459bf3f627d287cc3b9ca5e` (`FileVersion` /
+`ProductVersion` 1.1.0), CLI EXE `6e49c9f995c35a2b5968fc2b5615677179b532663d590166b54742c5de852aa4`
+and desktop EXE `977cf28495aacb14f381af747c96add619ad9ae8147f707365e4ab4f227d24ad`, all matching
+`dist/SHA256SUMS.txt`; the Scoop hash tracks the desktop ZIP.
+
+**NOT RUN:** physical `diagnostics performance` (not approved), the device night-mode scenario (not
+approved), silent install/uninstall (installed Desktop release directory untouched), standalone
+`run repeat --count`, cross-device geometry/colour comparison and a v1.1.0 screenshot gallery. See
+[VERIFICATION.md](VERIFICATION.md) and the [v1.1.0 release notes](docs/release-notes/v1.1.0.md).
+
+**Historical v1.0.0 campaign evidence (not v1.1.0 validation).** The v1.0.0 host gate passed with
+fmt and strict clippy clean, `cargo test --workspace --locked` 392 passed / 0 failed across 27 suites
+(including 4 new unreadable-lock tests), clean `cargo deny` and release build; CLI and desktop both
+reported `1.0.0`, with 191 catalog commands, 192 MCP tools and 31/31 schemas. The final v1.0.0
+package passed checksum, installer metadata, bundled notices/fonts and silent install/uninstall
+verification. On the approved POCO X4 GT / HyperOS 2 / Android 14 (API 34) device, the packaged CLI
+completed an in-place IronPulse 5.1.0 → 5.1.2 upgrade (`content_different`, same certificate, data
+preserved) with passing live verification, UI observation and evidence capture. On REDMAGIC 10 Pro /
+RedMagicOS 11.0.6_EU / Android 16 (API 36), the same CLI passed 8/8 zero-touch read-only checks with
+identical before/after package, settings and `getprop`/`df` state; no session was created. REDMAGIC
+UI automation and all device actions were **NOT RUN** by the zero-touch rule. Final v1.0.0 asset
+hashes are recorded in the [v1.0.0 release notes](docs/release-notes/v1.0.0.md).
+
 Earlier releases remain in the history
 below: v0.12.0 closes the IronPulse 5.1.2 truth and automation gaps: live install metadata,
 byte-truthful `--only-if-changed`, verification commands, configurable gestures and waits, app-data
@@ -468,9 +529,11 @@ Validated:
 
 Not yet validated:
 
-- Physical devices and vendor ROMs (MIUI, Samsung, etc.). v0.9.4 adds a safe real-device harness and
-  records a Xiaomi HyperOS read-only pass. Physical-device debug install was blocked by
-  `INSTALL_FAILED_USER_RESTRICTED`; emulator coverage is not a substitute for vendor install testing.
+- Other physical devices and vendor ROMs (Samsung, etc.) beyond the approved POCO X4 GT scope.
+  v0.9.4 adds a safe real-device harness and records a Xiaomi HyperOS read-only pass; the v1.1.0
+  campaigns are recorded in [Project status](#project-status). Physical-device debug install was
+  blocked by `INSTALL_FAILED_USER_RESTRICTED`; emulator coverage is not a substitute for vendor
+  install testing.
 - Real Tesseract accuracy. OCR fallback was verified end-to-end with a deterministic local test engine
   and a missing-engine failure path; the default `tesseract` binary was not installed on the
   verification host, so recognition quality is engine- and language-data-dependent.
@@ -497,6 +560,7 @@ that was not exercised is not claimed as verified.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — crates, data flow, locking, process and report model
 - [desktop/README.md](desktop/README.md) - building and testing the native desktop cockpit
 - [docs/screenshots/v1.0.0/README.md](docs/screenshots/v1.0.0/README.md) - v1.0.0 desktop UI gallery (five captures; Setup/Overview show the environment-validation state)
+- [docs/release-notes/v1.1.0.md](docs/release-notes/v1.1.0.md) - v1.1.0 verification primitives, safety and additive surface
 - [docs/release-notes/v1.0.0.md](docs/release-notes/v1.0.0.md) - v1.0.0 first stable release, breaking changes and validation checklist
 - [docs/release-notes/v0.12.0.md](docs/release-notes/v0.12.0.md) - v0.12.0 release notes
 - [docs/release-notes/v0.13.0.md](docs/release-notes/v0.13.0.md) - v0.13.0 optional Maestro, tool database and MCP surface

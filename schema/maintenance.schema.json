@@ -63,6 +63,67 @@
       },
       "additionalProperties": false
     },
+    "retention_artifact": {
+      "type": "object",
+      "required": ["path", "bytes"],
+      "properties": {
+        "path": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "retention_deletion": {
+      "type": "object",
+      "required": ["run_id", "path", "relative_path", "bytes", "reason", "artifacts"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "path": { "type": "string" },
+        "relative_path": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/retention_artifact" } }
+      },
+      "additionalProperties": false
+    },
+    "retention_keep": {
+      "type": "object",
+      "required": ["run_id", "reason"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "retention_plan": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "dry_run",
+        "older_than_seconds",
+        "keep_last",
+        "keep_tags",
+        "deletions",
+        "kept_runs",
+        "reclaimed_bytes",
+        "deferred",
+        "requires_confirmation",
+        "executed"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "dry_run": { "type": "boolean" },
+        "older_than_seconds": { "type": "integer", "minimum": 0 },
+        "keep_last": { "type": "integer", "minimum": 0 },
+        "keep_tags": { "type": "array", "items": { "type": "string" } },
+        "deletions": { "type": "array", "items": { "$ref": "#/$defs/retention_deletion" } },
+        "kept_runs": { "type": "array", "items": { "$ref": "#/$defs/retention_keep" } },
+        "reclaimed_bytes": { "type": "integer", "minimum": 0 },
+        "deferred": { "type": "integer", "minimum": 0 },
+        "requires_confirmation": { "type": "boolean" },
+        "executed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "clean": {
       "type": "object",
       "required": ["dry_run", "older_than_seconds", "keep_last"],
@@ -104,6 +165,12 @@
             "removed_bytes": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
+        },
+        "retention": {
+          "anyOf": [
+            { "$ref": "#/$defs/retention_plan" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false

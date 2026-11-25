@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://androidforge.local/schema/visual-baseline.schema.json",
+  "title": "AndroidForge named screenshot baseline",
+  "description": "A saved baseline record or a per project/run manifest of named screenshot baselines.",
+  "$defs": {
+    "baseline": {
+      "type": "object",
+      "required": [
+        "name",
+        "sha256",
+        "width",
+        "height",
+        "created_at",
+        "source_path",
+        "path",
+        "size_bytes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "created_at": { "type": "string", "minLength": 1 },
+        "source_path": { "type": "string", "minLength": 1 },
+        "path": {
+          "type": "string",
+          "minLength": 5,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\.png$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 33554432
+        }
+      },
+      "additionalProperties": false
+    },
+    "manifest": {
+      "type": "object",
+      "required": ["schema_version", "project", "run_id", "updated_at", "baselines"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "project": { "type": "string" },
+        "run_id": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "baselines": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/baseline" },
+          "maxItems": 256
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/baseline" },
+    { "$ref": "#/$defs/manifest" }
+  ]
+}

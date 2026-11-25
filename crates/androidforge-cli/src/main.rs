@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::time::Instant;
 
 use androidforge_core::error::{ErrorCode, ForgeError};
-use androidforge_core::output::{OutputOptions, emit_error, emit_success};
+use androidforge_core::output::{OutputOptions, emit_error, emit_success, write_stats};
 use clap::Parser;
 use clap::error::ErrorKind;
 use commands::canonical_name;
@@ -37,10 +37,14 @@ fn main() {
 
 async fn run() -> i32 {
     let raw_args: Vec<OsString> = std::env::args_os().collect();
-    let json_requested = raw_args.iter().any(|arg| arg == "--json");
+    let json_requested = raw_args
+        .iter()
+        .any(|arg| arg == "--json" || arg == "--jsonl");
+    let jsonl_requested = raw_args.iter().any(|arg| arg == "--jsonl");
+    let stats_requested = raw_args.iter().any(|arg| arg == "--stats");
     let args = preprocess(raw_args);
     let started = Instant::now();
-    let cli = match cli::Cli::try_parse_from(&args) {
+    let mut cli = match cli::Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(error) => {
             let kind = error.kind();
@@ -71,8 +75,15 @@ async fn run() -> i32 {
             forge = forge
                 .with_suggestion("Run `androidforge --help` or `androidforge <command> --help`.");
             if json_requested {
+                let mut options = OutputOptions::new(true, false);
+                if jsonl_requested {
+                    options = options.with_jsonl();
+                }
+                if stats_requested {
+                    options = options.with_stats();
+                }
                 let _ = emit_error(
-                    OutputOptions::new(true, false),
+                    options,
                     command,
                     &forge,
                     started.elapsed().as_millis() as u64,
@@ -82,6 +93,9 @@ async fn run() -> i32 {
                 );
             } else {
                 eprintln!("{error}");
+                if stats_requested {
+                    write_stats(0, 0);
+                }
             }
             return forge.exit_code();
         }
@@ -127,11 +141,57 @@ async fn run() -> i32 {
             }
         };
     }
+    // `--jsonl` implies `--json` for every downstream command, not just for
+    // the final envelope writer.
+    if cli.jsonl {
+        cli.json = true;
+    }
     let command_name = canonical_name(&cli.command);
     let plan = compact::resolve(&cli);
-    let mut output = OutputOptions::new(cli.json, cli.quiet);
+    let mut output = OutputOptions::new(cli.json || cli.jsonl, cli.quiet);
+    if cli.jsonl {
+        output = output.with_jsonl();
+    }
+    if cli.stats {
+        output = output.with_stats();
+    }
+    let requested_fields = cli.fields.as_ref().map(|fields| {
+        fields
+            .split(',')
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    });
     if plan.is_compact() {
         output = output.with_profile(plan.profile.as_str());
+    }
+    if let Some(keys) = requested_fields {
+        if keys.is_empty() {
+            // Fail closed before dispatch: an empty keep-set would otherwise
+            // trim every successful result to `{}` and hide command output.
+            let error = ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "--fields requires at least one result key",
+            )
+            .command(command_name.clone())
+            .with_suggestion("--fields result-key[,result-key...]".to_string())
+            .with_suggestion(
+                "Use --output-profile compact|brief to trim the envelope instead of result keys."
+                    .to_string(),
+            );
+            let _ = emit_error(
+                output,
+                &command_name,
+                &error,
+                started.elapsed().as_millis() as u64,
+                None,
+                None,
+                None,
+            );
+            return error.exit_code();
+        }
+        output = output.with_fields(keys);
     }
     match commands::execute(&cli).await {
         Ok(mut success) => {
@@ -273,6 +333,8 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
     while index < args.len() {
         let arg = args[index].to_string_lossy();
         if arg == "--json"
+            || arg == "--jsonl"
+            || arg == "--stats"
             || arg == "--trace"
             || arg == "--dry-run"
             || arg == "--yes"
@@ -282,6 +344,8 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
             || arg == "--brief"
             || arg == "--compact"
             || arg.starts_with("--json=")
+            || arg.starts_with("--jsonl=")
+            || arg.starts_with("--stats=")
             || arg.starts_with("--trace=")
             || arg.starts_with("--dry-run=")
             || arg.starts_with("--yes=")
@@ -298,6 +362,7 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
                 | "--output-profile"
                 | "--max-items"
                 | "--max-text-chars"
+                | "--fields"
         ) {
             index += 2;
             continue;
@@ -309,6 +374,7 @@ fn top_level_command_index(args: &[OsString]) -> Option<usize> {
             || arg.starts_with("--output-profile=")
             || arg.starts_with("--max-items=")
             || arg.starts_with("--max-text-chars=")
+            || arg.starts_with("--fields=")
         {
             index += 1;
             continue;

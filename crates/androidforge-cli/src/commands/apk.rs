@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use androidforge_app::{
-    ApkArtifact, ApkArtifactKind, ApkInfo, SplitApk, compare, inspect_installed,
+    ApkArtifact, ApkArtifactKind, ApkInfo, ApkInspector, SplitApk, compare, inspect_installed,
 };
+use androidforge_core::config::ForgeConfigFile;
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use serde::{Deserialize, Serialize};
@@ -121,7 +122,27 @@ pub async fn resolve_variant(
     variant: &str,
     module: Option<&str>,
 ) -> Result<ApkResolution> {
-    let build = &ctx.config.file.build;
+    resolve_variant_with(
+        &ctx.config.file,
+        &ctx.paths.project_root,
+        &ctx.inspector(),
+        variant,
+        module,
+    )
+    .await
+}
+
+/// CLI-independent core of [`resolve_variant`]. The host-side build engine
+/// calls this directly so a built APK is resolved with exactly the same
+/// deterministic patterns, rejection rules and inspector as `apk resolve`.
+pub(crate) async fn resolve_variant_with(
+    config: &ForgeConfigFile,
+    root: &Path,
+    inspector: &ApkInspector,
+    variant: &str,
+    module: Option<&str>,
+) -> Result<ApkResolution> {
+    let build = &config.build;
     let configured = find_variant_config(&build.variants, variant);
     let mut explicit_patterns = configured
         .map(|(_, patterns)| patterns.clone())
@@ -151,7 +172,6 @@ pub async fn resolve_variant(
         .with_suggestion("Add [build.variants] to .androidforge/project.toml."));
     }
 
-    let root = &ctx.paths.project_root;
     let mut files = BTreeSet::new();
     collect_files(root, 0, &mut files)?;
     let mut matched: BTreeMap<PathBuf, String> = BTreeMap::new();
@@ -191,7 +211,6 @@ pub async fn resolve_variant(
         return Err(error);
     }
 
-    let inspector = ctx.inspector();
     let mut valid: Vec<(ResolvedApk, ApkInfo, SystemTime)> = Vec::new();
     let mut rejected = Vec::new();
     let mut inspected = 0usize;
@@ -216,7 +235,7 @@ pub async fn resolve_variant(
                     format!("could not read {}: {error}", path.display()),
                 )
             })?;
-        match ApkArtifact::load(&inspector, &path).await {
+        match ApkArtifact::load(inspector, &path).await {
             Ok(artifact) => {
                 let info = artifact.base.clone();
                 let relative = path

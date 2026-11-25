@@ -1,0 +1,13 @@
+Applications Graphics Acceleration Info:
+Uptime: 98765 Realtime: 98765
+
+** Graphics info for pid 4321 [com.example] **
+
+Total frames rendered: 60
+Janky frames: 6 (10.00%)
+Janky frames legacy: 4 (6.67%)
+50th percentile: 10ms
+90th percentile: 18ms
+Number Missed Vsync: 1
+Number Slow UI thread: 2
+Number Frame deadline missed: 0

@@ -4,7 +4,7 @@
 //! redacted, size-bounded, checksummed and named by AndroidForge; source paths
 //! are never used directly as ZIP entry names.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -12,10 +12,12 @@ use androidforge_core::diagnosis::{DiagnosticExplanation, explain_report};
 use androidforge_core::error::{ErrorCode, ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::recurrence::{build_history, find_fingerprint_in_project};
+use androidforge_core::redact::Redactor;
 use androidforge_core::run::RunReport;
 use androidforge_core::util::{
     ensure_dir, now_rfc3339, read_json, sha256_hex, short_id, write_atomic,
 };
+use androidforge_diagnostics::{SECRET_SCAN_MAX_BYTES, SECRET_SCAN_MAX_FINDINGS, scan_secrets};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,6 +31,10 @@ const HIERARCHY_LIMIT: u64 = 512 * 1024;
 const LOGCAT_EXCERPT_LIMIT: u64 = 256 * 1024;
 const LOGCAT_FULL_LIMIT: u64 = 5 * 1024 * 1024;
 const MEDIA_LIMIT: u64 = 10 * 1024 * 1024;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleEntry {
@@ -49,6 +55,18 @@ pub struct ExcludedItem {
     pub size_bytes: Option<u64>,
 }
 
+/// Safe scan counts recorded when `--redact-secrets` was requested. Never
+/// contains a matched value, only category labels and counts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BundleSecretScan {
+    pub files_scanned: usize,
+    pub files_skipped_binary: usize,
+    pub files_truncated: usize,
+    pub findings_total: usize,
+    pub truncated: bool,
+    pub kinds: BTreeMap<String, usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleManifest {
     pub schema_version: u32,
@@ -60,6 +78,12 @@ pub struct BundleManifest {
     pub project_root: String,
     pub source_run_dir: String,
     pub redaction_enabled: bool,
+    /// Additive: present only when `--redact-secrets` was passed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub redact_secrets: bool,
+    /// Additive: safe counts for the post-redaction refusal check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_scan: Option<BundleSecretScan>,
     pub format: String,
     pub entries: Vec<BundleEntry>,
     pub excluded: Vec<ExcludedItem>,
@@ -79,9 +103,14 @@ struct Payload {
 
 pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result<CommandSuccess> {
     let format = bundle_format(args)?;
+    let scope = crate::commands::report::resolve_report_scope(
+        ctx,
+        Some(&args.tags),
+        args.since.as_deref(),
+    )?;
     let dir = match args.run.as_str() {
-        "latest" => crate::commands::report::resolve_latest_run_dir(ctx, false)?,
-        "latest-failure" => crate::commands::report::resolve_latest_run_dir(ctx, true)?,
+        "latest" => crate::commands::report::resolve_latest_run_dir(ctx, false, &scope)?,
+        "latest-failure" => crate::commands::report::resolve_latest_run_dir(ctx, true, &scope)?,
         _ => resolve_run(ctx, &args.run)?,
     };
     let report: RunReport = read_json(&dir.join("report.json"))?;
@@ -91,8 +120,15 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
     let recurrence =
         find_fingerprint_in_project(&history, &explanation.fingerprint, &report.project_root)
             .cloned();
-    let redactor = ctx.redactor();
-    let redaction_enabled = ctx.config.file.redaction.enabled && ctx.config.file.diagnostics.redact;
+    // --redact-secrets forces redaction even when both config switches are off.
+    // Without the flag the configured redactor and manifest value are unchanged.
+    let redactor = if args.redact_secrets {
+        Redactor::new(true, &[], &ctx.config.file.redaction.patterns)
+    } else {
+        ctx.redactor()
+    };
+    let redaction_enabled = args.redact_secrets
+        || ctx.config.file.redaction.enabled && ctx.config.file.diagnostics.redact;
 
     let mut warnings = Vec::new();
     let mut excluded = Vec::new();
@@ -418,6 +454,14 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
     }
     payloads = kept;
 
+    // Refuse before any output is written. Because this check runs ahead of
+    // every write path, an unredactable payload leaves no partial bundle behind.
+    let secret_scan = if args.redact_secrets {
+        Some(scan_bundle_payloads(&payloads)?)
+    } else {
+        None
+    };
+
     let entries = payloads
         .iter()
         .map(|payload| BundleEntry {
@@ -430,7 +474,7 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
         .collect::<Vec<_>>();
 
     if ctx.dry_run {
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "dry_run": true,
             "run_id": report.run_id,
             "format": format,
@@ -443,6 +487,15 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
             "warnings": warnings,
             "would_write": format == "zip",
         });
+        if args.redact_secrets
+            && let Some(object) = result.as_object_mut()
+        {
+            object.insert("redact_secrets".to_string(), serde_json::json!(true));
+            object.insert(
+                "secret_scan".to_string(),
+                serde_json::to_value(&secret_scan)?,
+            );
+        }
         let human = format!(
             "Bundle preview for {}: {} payload(s), {} bytes, {} excluded. No files were written.\n",
             report.run_id,
@@ -463,6 +516,8 @@ pub async fn bundle_command(ctx: &CliContext, args: &ReportBundleArgs) -> Result
         project_root: report.project_root.clone(),
         source_run_dir: dir.to_string_lossy().into_owned(),
         redaction_enabled,
+        redact_secrets: args.redact_secrets,
+        secret_scan,
         format: format.clone(),
         entries,
         excluded,
@@ -812,6 +867,62 @@ fn redact_text(redactor: &androidforge_core::redact::Redactor, bytes: &[u8]) -> 
     (redacted.into_bytes(), changed)
 }
 
+/// Scan the assembled text payloads after redaction. Binary payloads (for
+/// example screenshots and recordings) are disclosed as not scanned: their
+/// pixel content is never text-redacted and cannot be safely rewritten here.
+fn scan_bundle_payloads(payloads: &[Payload]) -> Result<BundleSecretScan> {
+    let mut report = BundleSecretScan::default();
+    let mut affected = BTreeSet::new();
+    for payload in payloads {
+        let Ok(text) = std::str::from_utf8(&payload.bytes) else {
+            report.files_skipped_binary += 1;
+            continue;
+        };
+        report.files_scanned += 1;
+        if text.len() > SECRET_SCAN_MAX_BYTES {
+            report.files_truncated += 1;
+            report.truncated = true;
+        }
+        let bounded = &text[..text.len().min(SECRET_SCAN_MAX_BYTES)];
+        let findings = scan_secrets(bounded);
+        if findings.len() >= SECRET_SCAN_MAX_FINDINGS {
+            report.truncated = true;
+        }
+        if !findings.is_empty() {
+            affected.insert(payload.path.clone());
+            for finding in &findings {
+                *report
+                    .kinds
+                    .entry(finding.label().to_string())
+                    .or_insert(0usize) += 1;
+            }
+        }
+    }
+    report.findings_total = report.kinds.values().sum();
+    if report.findings_total > 0 {
+        // Counts and categories only: never include a payload, a finding or a
+        // source value in the error body.
+        return Err(ForgeError::new(
+            ErrorCode::UnsupportedOperation,
+            format!(
+                "refusing to write a bundle: {} suspected secret(s) remain after forced redaction",
+                report.findings_total
+            ),
+        )
+        .with_context("findings_total", report.findings_total)
+        .with_context("kinds", serde_json::to_value(&report.kinds)?)
+        .with_context(
+            "files_affected",
+            serde_json::to_value(affected.iter().collect::<Vec<_>>())?,
+        )
+        .with_context("redaction_forced", true)
+        .with_suggestion(
+            "Redact the source artifacts or add a [redaction].patterns entry, then rebuild the bundle.",
+        ));
+    }
+    Ok(report)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_payload(
     payloads: &mut Vec<Payload>,
@@ -1030,16 +1141,32 @@ fn bundle_markdown(
 
 fn bundle_summary_markdown(manifest: &BundleManifest, summary: &Value) -> String {
     let mut out = format!(
-        "# Diagnostic bundle: `{}`\n\n- Bundle: `{}`\n- Created: {}\n- Project: `{}`\n- Source run: `{}`\n- Redaction enabled: {}\n\n## Included payloads ({} files, {} bytes)\n\n",
+        "# Diagnostic bundle: `{}`\n\n- Bundle: `{}`\n- Created: {}\n- Project: `{}`\n- Source run: `{}`\n- Redaction enabled: {}\n",
         manifest.run_id,
         manifest.bundle_id,
         manifest.created_at,
         manifest.project,
         manifest.source_run_dir,
         manifest.redaction_enabled,
+    );
+    if manifest.redact_secrets {
+        out.push_str(&format!(
+            "\n- Forced secret redaction: yes (post-redaction scan performed; {} finding(s)).\n",
+            manifest
+                .secret_scan
+                .as_ref()
+                .map(|scan| scan.findings_total)
+                .unwrap_or(0)
+        ));
+        out.push_str(
+            "- Binary screenshots and recordings, when explicitly included, are not pixel-redacted.\n",
+        );
+    }
+    out.push_str(&format!(
+        "\n## Included payloads ({} files, {} bytes)\n\n",
         manifest.entries.len(),
         manifest.total_payload_bytes
-    );
+    ));
     for entry in &manifest.entries {
         out.push_str(&format!(
             "- `{}` ({}, {} bytes) SHA-256 `{}`\n",
@@ -1101,7 +1228,7 @@ fn shell_join(argv: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use androidforge_core::redact::Redactor;
+    use serde_json::json;
 
     fn manifest() -> BundleManifest {
         BundleManifest {
@@ -1114,6 +1241,8 @@ mod tests {
             project_root: "A:/Example".to_string(),
             source_run_dir: "A:/Example/.artifacts/runs/run-1".to_string(),
             redaction_enabled: true,
+            redact_secrets: false,
+            secret_scan: None,
             format: "zip".to_string(),
             entries: Vec::new(),
             excluded: Vec::new(),
@@ -1230,6 +1359,44 @@ mod tests {
             unique_path("evidence", 2, Path::new("a b/c?.txt")),
             "evidence/003-c_.txt"
         );
+    }
+
+    #[test]
+    fn forced_redaction_works_when_config_switches_are_off() {
+        let forced = Redactor::new(true, &[], &[]);
+        let google = format!("AIza{}", "x".repeat(35));
+        let redacted = forced.redact(&format!("key={google}"));
+        assert!(!redacted.contains(&google));
+        assert!(forced.is_enabled());
+    }
+
+    #[test]
+    fn post_redaction_scan_refuses_unredacted_text_with_no_values() {
+        let google = format!("AIza{}", "x".repeat(35));
+        let payloads = vec![
+            payload("text/clean.txt", b"no secrets here\n"),
+            payload(
+                "screenshots/001-shot.png",
+                format!("raw {google}\n").as_bytes(),
+            ),
+        ];
+        let error = scan_bundle_payloads(&payloads).expect_err("unredacted payload must refuse");
+        assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+        assert_eq!(error.exit_code(), 3);
+        let body = error.body();
+        assert!(!body.message.contains(&google));
+        assert_eq!(body.context.get("findings_total"), Some(&json!(1)));
+        assert!(body.context.contains_key("kinds"));
+        assert!(body.context.contains_key("files_affected"));
+    }
+
+    #[test]
+    fn post_redaction_scan_accepts_clean_payloads() {
+        let scan = scan_bundle_payloads(&[payload("text/clean.txt", b"all clear\n")])
+            .expect("clean payloads are accepted");
+        assert_eq!(scan.findings_total, 0);
+        assert_eq!(scan.files_scanned, 1);
+        assert!(!scan.truncated);
     }
 
     #[test]

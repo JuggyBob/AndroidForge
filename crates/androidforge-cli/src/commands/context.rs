@@ -3,7 +3,7 @@ use std::time::Instant;
 use androidforge_core::error::{ForgeError, Result};
 use androidforge_core::output::CommandSuccess;
 use androidforge_core::run::{RunContext, RunStatus, list_runs};
-use androidforge_core::session::{Session, SessionState};
+use androidforge_core::session::{Session, SessionState, owner_of_serial};
 use androidforge_core::util::now_rfc3339;
 use serde_json::{Value, json};
 
@@ -121,26 +121,57 @@ pub async fn context(cli: &Cli, args: &ContextArgs) -> Result<CommandSuccess> {
         session_ignored = Some(reason);
         session = None;
     }
+
+    // Advisory signals only. They reuse persisted Session fields and the same
+    // semantics as `session list/inspect/status`; no lock is created or enforced.
+    let lock_serial = session
+        .as_ref()
+        .and_then(|session| session.serial.as_deref())
+        .or(ctx.config.file.project.default_device.as_deref());
+    let mut lock_owner = None;
+    if let Some(serial) = lock_serial {
+        match owner_of_serial(&ctx.paths, serial) {
+            Ok(owner) => lock_owner = owner,
+            Err(error) => warnings.push(error.body().message.clone()),
+        }
+    }
+    warnings.extend(advisory_warnings(
+        session.as_ref(),
+        lock_owner.as_ref(),
+        lock_serial,
+    ));
+
     let session_value = if include("session") {
         match &session {
-            Some(session) => json!({
-                "available": true,
-                "id": session.id,
-                "owner": session.owner,
-                "state": session.state,
-                "kind": session.kind,
-                "serial": session.serial,
-                "avd": session.avd,
-                "port": session.port,
-                "headless": session.headless,
-                "profile": session.profile,
-                "project_root": session.project_root,
-                "created_at": session.created_at,
-                "last_activity": session.heartbeat_at,
-                "build": session.build,
-                "lease_expires_at": session.lease_expires_at,
-                "lease_expired": session.lease_expired(),
-            }),
+            Some(session) => {
+                let advisory = session_advisory(session);
+                let mut value = json!({
+                    "available": true,
+                    "id": session.id,
+                    "owner": session.owner,
+                    "state": session.state,
+                    "kind": session.kind,
+                    "serial": session.serial,
+                    "avd": session.avd,
+                    "port": session.port,
+                    "headless": session.headless,
+                    "profile": session.profile,
+                    "project_root": session.project_root,
+                    "created_at": session.created_at,
+                    "last_activity": session.heartbeat_at,
+                    "build": session.build,
+                    "lease_expires_at": session.lease_expires_at,
+                    "lease_expired": session.lease_expired(),
+                });
+                if let (Some(object), Some(advisory)) =
+                    (value.as_object_mut(), advisory.as_object())
+                {
+                    for (key, signal) in advisory {
+                        object.insert(key.clone(), signal.clone());
+                    }
+                }
+                value
+            }
             None => json!({
                 "available": false,
                 "reason": session_ignored
@@ -441,6 +472,79 @@ pub async fn context(cli: &Cli, args: &ContextArgs) -> Result<CommandSuccess> {
     Ok(success("context", result, human))
 }
 
+/// Advisory signals derived only from persisted `Session` fields. These mirror
+/// the fields added by `session inspect` / `session status` and never touch a
+/// device or modify a lock.
+pub(crate) fn session_advisory(session: &Session) -> Value {
+    json!({
+        "heartbeat_age_seconds": session.age_seconds(),
+        "stale": session.is_stale(),
+        "operation_active": session.operation_active(),
+        "operation": session.operation.as_ref().map(|operation| operation.operation.clone()),
+        "lease_expires_at": session.lease_expires_at,
+        "lease_expired": session.lease_expired(),
+    })
+}
+
+/// Warnings are emitted only for actionable states: an old heartbeat, a live
+/// operation, an expired advisory lease, or a device lock held by a different
+/// session. Healthy sessions and our own lock stay silent.
+pub(crate) fn advisory_warnings(
+    session: Option<&Session>,
+    lock_owner: Option<&Session>,
+    serial: Option<&str>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(session) = session {
+        if session.is_stale() {
+            warnings.push(format!(
+                "Session {} heartbeat is {}s old (stale); run `androidforge session gc --reclaim --dry-run` to preview cleanup.",
+                session.id,
+                session.age_seconds()
+            ));
+        }
+        if session.operation_active() {
+            let operation = session
+                .operation
+                .as_ref()
+                .map(|lock| lock.operation.as_str())
+                .unwrap_or("unknown");
+            let pid = session.operation.as_ref().map(|lock| lock.pid).unwrap_or(0);
+            warnings.push(format!(
+                "Session {} has an active '{operation}' operation (pid {pid}); the device may be busy.",
+                session.id
+            ));
+        }
+        if session.lease_expired() {
+            warnings.push(format!(
+                "Session {} has an expired advisory lease ({}); work continues, but renew it with `session ensure --ttl`.",
+                session.id,
+                session.lease_expires_at.as_deref().unwrap_or("unknown")
+            ));
+        }
+    }
+    if let Some(owner) = lock_owner
+        && Some(owner.id.as_str()) != session.map(|session| session.id.as_str())
+    {
+        let serial = serial.unwrap_or("device");
+        let owner_label = if owner.owner.trim().is_empty() {
+            "no owner recorded".to_string()
+        } else {
+            format!("owner '{}'", owner.owner)
+        };
+        let expiry = match owner.lease_expires_at.as_deref() {
+            Some(value) if owner.lease_expired() => format!("until {value} (lease expired)"),
+            Some(value) => format!("until {value}"),
+            None => "with no advisory lease expiry recorded".to_string(),
+        };
+        warnings.push(format!(
+            "Device {serial} is in use by session {} ({owner_label}, state {:?}) {expiry}; do not steal it.",
+            owner.id, owner.state
+        ));
+    }
+    warnings
+}
+
 fn action(reason: impl Into<String>, argv: Vec<String>, priority: &str) -> Value {
     json!({
         "reason": reason.into(),
@@ -614,4 +718,119 @@ fn build_next_actions(
         ));
     }
     actions
+}
+
+#[cfg(test)]
+mod tests {
+    use androidforge_core::session::{OperationLock, SessionKind};
+    use chrono::{Duration, Utc};
+
+    use super::*;
+
+    fn synthetic(id: &str, owner: &str) -> Session {
+        let mut session = Session::new(
+            owner,
+            SessionKind::Attached,
+            Some("emulator-5554".to_string()),
+            None,
+            None,
+            true,
+        );
+        session.id = id.to_string();
+        session.state = SessionState::Ready;
+        session
+    }
+
+    fn warning_contains(warnings: &[String], needle: &str) -> bool {
+        warnings.iter().any(|warning| warning.contains(needle))
+    }
+
+    #[test]
+    fn healthy_session_is_quiet_and_reports_current_signals() {
+        let session = synthetic("ses-healthy", "alice");
+        let advisory = session_advisory(&session);
+        assert_eq!(advisory["stale"], false);
+        assert_eq!(advisory["operation_active"], false);
+        assert_eq!(advisory["lease_expired"], false);
+        assert!(advisory["lease_expires_at"].is_null());
+        assert!(
+            advisory["heartbeat_age_seconds"]
+                .as_i64()
+                .is_some_and(|age| (0..=5).contains(&age))
+        );
+        assert!(advisory_warnings(Some(&session), None, None).is_empty());
+    }
+
+    #[test]
+    fn stale_heartbeat_is_flagged_and_warned() {
+        let mut session = synthetic("ses-stale", "alice");
+        session.heartbeat_at = (Utc::now() - Duration::hours(3)).to_rfc3339();
+        let advisory = session_advisory(&session);
+        assert_eq!(advisory["stale"], true);
+        assert!(
+            advisory["heartbeat_age_seconds"]
+                .as_i64()
+                .is_some_and(|age| age > 2 * 60 * 60)
+        );
+        let warnings = advisory_warnings(Some(&session), None, None);
+        assert_eq!(warnings.len(), 1);
+        assert!(warning_contains(&warnings, "ses-stale"));
+        assert!(warning_contains(&warnings, "heartbeat"));
+    }
+
+    #[test]
+    fn active_operation_is_flagged_as_busy() {
+        let mut session = synthetic("ses-busy", "alice");
+        session.operation = Some(OperationLock {
+            pid: std::process::id(),
+            operation: "ui.tap".to_string(),
+            started_at: now_rfc3339(),
+        });
+        let advisory = session_advisory(&session);
+        assert_eq!(advisory["operation_active"], true);
+        assert_eq!(advisory["operation"], "ui.tap");
+        let warnings = advisory_warnings(Some(&session), None, None);
+        assert!(warning_contains(&warnings, "active 'ui.tap' operation"));
+        assert!(warning_contains(&warnings, "busy"));
+    }
+
+    #[test]
+    fn expired_lease_is_flagged_and_warned() {
+        let mut session = synthetic("ses-expired", "alice");
+        session.lease_expires_at = Some(
+            (Utc::now() - Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
+        let advisory = session_advisory(&session);
+        assert_eq!(advisory["lease_expired"], true);
+        assert_eq!(
+            advisory["lease_expires_at"],
+            json!(session.lease_expires_at)
+        );
+        let warnings = advisory_warnings(Some(&session), None, None);
+        assert_eq!(warnings.len(), 1);
+        assert!(warning_contains(&warnings, "expired advisory lease"));
+    }
+
+    #[test]
+    fn foreign_lock_without_owner_reports_device_in_use() {
+        let mut owner = synthetic("ses-other", "");
+        owner.lease_expires_at = Some(
+            (Utc::now() + Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
+        let warnings = advisory_warnings(None, Some(&owner), Some("emulator-5554"));
+        assert_eq!(warnings.len(), 1);
+        assert!(warning_contains(
+            &warnings,
+            "Device emulator-5554 is in use by session ses-other"
+        ));
+        assert!(warning_contains(&warnings, "no owner recorded"));
+        assert!(warning_contains(&warnings, "until"));
+    }
+
+    #[test]
+    fn own_device_lock_is_not_reported_as_in_use() {
+        let session = synthetic("ses-self", "alice");
+        let warnings = advisory_warnings(Some(&session), Some(&session), session.serial.as_deref());
+        assert!(warnings.is_empty());
+    }
 }

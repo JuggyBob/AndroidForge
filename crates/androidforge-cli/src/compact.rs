@@ -302,16 +302,30 @@ fn summary_for(success: &CommandSuccess, max_text: usize) -> String {
             .unwrap_or_else(|| "startup unknown".to_string());
         let jank = result
             .get("jank")
-            .and_then(|jank| {
-                let percent = jank.get("janky_percent").and_then(Value::as_f64)?;
-                let total = jank.get("total_frames").and_then(Value::as_u64);
-                let janky = jank.get("janky_frames").and_then(Value::as_u64);
-                Some(match (janky, total) {
-                    (Some(janky), Some(total)) => {
-                        format!("jank {percent:.1}% ({janky}/{total} frames)")
+            .map(|jank| {
+                if jank.get("sample_status").and_then(Value::as_str) == Some("insufficient") {
+                    let frames = jank
+                        .get("total_frames")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    return format!("jank insufficient sample ({frames} frame(s))");
+                }
+                match jank.get("janky_percent").and_then(Value::as_f64) {
+                    Some(percent) => {
+                        let total = jank.get("total_frames").and_then(Value::as_u64);
+                        let janky = jank.get("janky_frames").and_then(Value::as_u64);
+                        match (janky, total) {
+                            (Some(janky), Some(total)) => {
+                                format!("jank {percent:.1}% ({janky}/{total} frames)")
+                            }
+                            _ => format!("jank {percent:.1}%"),
+                        }
                     }
-                    _ => format!("jank {percent:.1}%"),
-                })
+                    None => match jank.get("sample_status").and_then(Value::as_str) {
+                        Some(status) if status != "unknown" => format!("jank {status}"),
+                        _ => "jank unknown".to_string(),
+                    },
+                }
             })
             .unwrap_or_else(|| "jank unknown".to_string());
         let pss = result
@@ -322,9 +336,15 @@ fn summary_for(success: &CommandSuccess, max_text: usize) -> String {
             .unwrap_or_else(|| "memory unknown".to_string());
         let cpu = result
             .get("cpu")
-            .and_then(|cpu| cpu.get("total_percent"))
-            .and_then(Value::as_f64)
-            .map(|value| format!("CPU {value:.1}%"))
+            .map(
+                |cpu| match cpu.get("total_percent").and_then(Value::as_f64) {
+                    Some(value) => format!("CPU {value:.1}%"),
+                    None => match cpu.get("status").and_then(Value::as_str) {
+                        Some(status) if status != "unknown" => format!("CPU {status}"),
+                        _ => "CPU unknown".to_string(),
+                    },
+                },
+            )
             .unwrap_or_else(|| "CPU unknown".to_string());
         return truncate(
             &format!("{package}: {startup}, {jank}, {pss}, {cpu}"),
@@ -1037,12 +1057,21 @@ fn compact_performance(value: &mut Value, plan: OutputPlan) {
     if let Some(jank) = object.get_mut("jank").and_then(Value::as_object_mut)
         && brief
     {
+        let insufficient =
+            jank.get("sample_status").and_then(Value::as_str) == Some("insufficient");
+        // Keep the frame count for insufficient samples so brief output can
+        // say "insufficient sample (N frame(s))" instead of a bogus percentage.
+        if !insufficient {
+            jank.remove("total_frames");
+            jank.remove("janky_frames");
+        }
         for key in [
-            "total_frames",
-            "janky_frames",
             "percentile_50_ms",
             "percentile_95_ms",
             "missed_vsync",
+            "window_start_ms",
+            "window_end_ms",
+            "frame_deadline_ms",
         ] {
             jank.remove(key);
         }
@@ -1050,9 +1079,15 @@ fn compact_performance(value: &mut Value, plan: OutputPlan) {
     if let Some(cpu) = object.get_mut("cpu").and_then(Value::as_object_mut)
         && brief
     {
-        cpu.remove("process");
-        cpu.remove("user_percent");
-        cpu.remove("kernel_percent");
+        for key in [
+            "process",
+            "user_percent",
+            "kernel_percent",
+            "window_start",
+            "window_end",
+        ] {
+            cpu.remove(key);
+        }
     }
     if let Some(warnings) = object.get_mut("warnings").and_then(Value::as_array_mut) {
         warnings.truncate(3);
@@ -1773,6 +1808,83 @@ mod tests {
         assert_eq!(value["memory"]["total_pss_kb"], 57177);
         assert!(value["memory"].get("total_rss_kb").is_none());
         assert_eq!(value["cpu"]["total_percent"], 0.0);
+    }
+
+    #[test]
+    fn performance_summary_reports_insufficient_sample_not_hundred_percent() {
+        let success = CommandSuccess::new(
+            "diagnostics.performance",
+            json!({
+                "package": "com.example",
+                "startup": {"requested": true, "cold": false, "total_time_ms": 100},
+                "jank": {
+                    "reset_before_launch": true,
+                    "total_frames": 1,
+                    "janky_frames": 1,
+                    "janky_percent": null,
+                    "sample_status": "insufficient",
+                    "comparable": false,
+                    "comparison_reason": "insufficient sample (1 frame(s)); at least 30 are required"
+                },
+                "memory": {"total_pss_kb": 1000},
+                "cpu": {"status": "unavailable", "total_percent": null}
+            }),
+            "",
+        );
+        let summary = summary_for(&success, 240);
+        assert!(
+            summary.contains("insufficient sample (1 frame(s))"),
+            "summary: {summary}"
+        );
+        assert!(!summary.contains("100.0%"), "summary: {summary}");
+        assert!(summary.contains("CPU unavailable"), "summary: {summary}");
+    }
+
+    #[test]
+    fn performance_brief_keeps_quality_status_and_insufficient_frame_count() {
+        let mut value = json!({
+            "schema_version": 1,
+            "package": "com.example",
+            "screen_on": true,
+            "startup": {"requested": true, "cold": false, "total_time_ms": 100},
+            "jank": {
+                "reset_before_launch": true,
+                "total_frames": 1,
+                "janky_frames": 1,
+                "janky_percent": null,
+                "sample_status": "insufficient",
+                "comparable": false,
+                "comparison_reason": "insufficient sample (1 frame(s)); at least 30 are required",
+                "window_start_ms": 10,
+                "window_end_ms": 20,
+                "frame_deadline_ms": 16.67
+            },
+            "memory": {"pid": 123, "total_pss_kb": 1000},
+            "cpu": {
+                "status": "stale",
+                "reason": "cpuinfo window is stale",
+                "total_percent": null,
+                "process": "com.example",
+                "window_start": 10,
+                "window_end": 20,
+                "sample_pid": 123
+            },
+            "sample_quality": {
+                "jank": {"status": "insufficient", "reason": "insufficient sample (1 frame(s))"},
+                "cpu": {"status": "stale", "reason": "cpuinfo window is stale"}
+            },
+            "commands": [],
+            "warnings": []
+        });
+        compact_performance(&mut value, plan(OutputProfile::Brief));
+        assert_eq!(value["jank"]["sample_status"], "insufficient");
+        assert_eq!(value["jank"]["total_frames"], 1);
+        assert!(value["jank"].get("window_start_ms").is_none());
+        assert_eq!(value["cpu"]["status"], "stale");
+        assert_eq!(value["cpu"]["reason"], "cpuinfo window is stale");
+        assert!(value["cpu"].get("window_start").is_none());
+        assert_eq!(value["sample_quality"]["jank"]["status"], "insufficient");
+        assert_eq!(value["screen_on"], true);
     }
 
     #[test]

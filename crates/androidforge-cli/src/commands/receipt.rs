@@ -492,6 +492,7 @@ mod tests {
             content_desc: None,
             hint: None,
             resource_id: Some("com.example:id/control".to_string()),
+            test_tag: None,
             class: Some(class.to_string()),
             package: Some("com.example".to_string()),
             bounds: ObservationBounds {
@@ -546,6 +547,9 @@ mod tests {
             context: Vec::new(),
             context_total: 0,
             context_truncated: false,
+            semantics: Vec::new(),
+            semantics_total: 0,
+            semantics_truncated: false,
             scrollable: Vec::new(),
             visible_text: Vec::new(),
             nodes: None,

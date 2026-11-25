@@ -88,6 +88,7 @@ error_codes! {
     WirelessConnectFailed => ("E_WIRELESS_CONNECT_FAILED", 4, true),
     DeviceHealthUnavailable => ("E_DEVICE_HEALTH_UNAVAILABLE", 4, true),
     PhysicalDeviceMutationBlocked => ("E_PHYSICAL_DEVICE_MUTATION_BLOCKED", 4, true),
+    ScreenOff => ("E_SCREEN_OFF", 4, true),
     RetryNotAllowed => ("E_RETRY_NOT_ALLOWED", 2, true),
     MatrixTargetInvalid => ("E_MATRIX_TARGET_INVALID", 2, true),
     MatrixDuplicateTarget => ("E_MATRIX_DUPLICATE_TARGET", 2, true),
@@ -108,8 +109,16 @@ error_codes! {
     HookNotFound => ("E_HOOK_NOT_FOUND", 3, true),
     HookVerificationFailed => ("E_HOOK_VERIFICATION_FAILED", 7, true),
     JunitInvalid => ("E_JUNIT_INVALID", 8, false),
+    BuildCommandNotConfigured => ("E_BUILD_COMMAND_NOT_CONFIGURED", 8, false),
+    BuildTimeout => ("E_BUILD_TIMEOUT", 5, true),
+    BuildFailed => ("E_BUILD_FAILED", 6, true),
+    BuildArtifactNotFound => ("E_BUILD_ARTIFACT_NOT_FOUND", 6, true),
+    BuildArtifactAmbiguous => ("E_BUILD_ARTIFACT_AMBIGUOUS", 6, true),
+    BuildIdentityMismatch => ("E_BUILD_IDENTITY_MISMATCH", 6, false),
+    BuildOutputTooLarge => ("E_BUILD_OUTPUT_TOO_LARGE", 6, false),
     UnsupportedOperation => ("E_UNSUPPORTED_OPERATION", 3, true),
     PartialFailure => ("E_PARTIAL_FAILURE", 10, true),
+    PerformanceRegression => ("E_PERFORMANCE_REGRESSION", 11, false),
     Interrupted => ("E_INTERRUPTED", 130, true),
     Internal => ("E_INTERNAL", 9, false),
 }
@@ -466,5 +475,18 @@ mod tests {
         assert_eq!(ErrorCode::Internal.exit_code(), 9);
         assert_eq!(ErrorCode::PartialFailure.exit_code(), 10);
         assert_eq!(ErrorCode::Interrupted.exit_code(), 130);
+    }
+
+    #[test]
+    fn new_1_1_0_exit_codes_are_stable() {
+        assert_eq!(ErrorCode::ScreenOff.exit_code(), 4);
+        assert_eq!(ErrorCode::BuildCommandNotConfigured.exit_code(), 8);
+        assert_eq!(ErrorCode::BuildFailed.exit_code(), 6);
+        assert_eq!(ErrorCode::BuildTimeout.exit_code(), 5);
+        assert_eq!(ErrorCode::BuildArtifactNotFound.exit_code(), 6);
+        assert_eq!(ErrorCode::BuildArtifactAmbiguous.exit_code(), 6);
+        assert_eq!(ErrorCode::BuildIdentityMismatch.exit_code(), 6);
+        assert_eq!(ErrorCode::BuildOutputTooLarge.exit_code(), 6);
+        assert_eq!(ErrorCode::PerformanceRegression.exit_code(), 11);
     }
 }

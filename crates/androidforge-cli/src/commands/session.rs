@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -12,16 +12,20 @@ use androidforge_core::session::{
     prune_sessions, set_current_session,
 };
 use androidforge_core::util::{ensure_dir, now_rfc3339, parse_duration, sha256_hex};
-use androidforge_emulator::{DevicePrepareOptions, DevicePreparer};
+use androidforge_emulator::{
+    CreateAvdOptions, CreateAvdRequest, DevicePrepareOptions, DevicePreparer, PortOwnerInfo,
+    StatusContext, create_avd, list_ports, list_system_images,
+};
 use serde_json::Value;
 
 use crate::cli::{
-    AvdCommand, EmulatorCommand, SessionAttachArgs, SessionCommand, SessionEnsureArgs,
-    SessionGcArgs, SessionPruneArgs, SessionReleaseArgs, SessionRestartArgs, SessionStartArgs,
-    SessionStopArgs, SnapshotCommand,
+    AvdCommand, AvdCreateArgs, EmulatorCommand, SessionAttachArgs, SessionCommand,
+    SessionEnsureArgs, SessionGcArgs, SessionPruneArgs, SessionReleaseArgs, SessionRestartArgs,
+    SessionStartArgs, SessionStopArgs, SnapshotCommand,
 };
 use crate::commands::common::{default_owner, success};
-use crate::context::CliContext;
+use crate::commands::doctor::host_capacity;
+use crate::context::{CliContext, Risk};
 
 pub async fn session(ctx: &CliContext, command: &SessionCommand) -> Result<CommandSuccess> {
     match command {
@@ -74,6 +78,8 @@ pub async fn session(ctx: &CliContext, command: &SessionCommand) -> Result<Comma
 pub async fn avd(ctx: &CliContext, command: &AvdCommand) -> Result<CommandSuccess> {
     match command {
         AvdCommand::List => avd_list(ctx).await,
+        AvdCommand::Images => avd_images(ctx).await,
+        AvdCommand::Create(args) => avd_create(ctx, args).await,
         AvdCommand::Clone { source, name } => Err(ForgeError::unsupported(
             "AVD cloning and named-profile isolation are not implemented",
         )
@@ -116,6 +122,151 @@ pub async fn avd_list(ctx: &CliContext) -> Result<CommandSuccess> {
         }
     }
     Ok(success("avd.list", result, human))
+}
+
+/// `avd images`: read-only inventory of installed SDK system images. Never
+/// launches `sdkmanager` and never writes to the SDK.
+pub async fn avd_images(ctx: &CliContext) -> Result<CommandSuccess> {
+    let images = list_system_images(&ctx.toolchain)?;
+    let mut human = if images.is_empty() {
+        String::from("No installed SDK system images found.\n")
+    } else {
+        String::new()
+    };
+    for image in &images {
+        human.push_str(&format!(
+            "{} api={} tag={} abi={} source={}\n",
+            image.id,
+            image
+                .api_level
+                .map(|level| level.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            image.tag,
+            image.abi,
+            image.source
+        ));
+    }
+    Ok(success(
+        "avd.images",
+        serde_json::json!({"images": images, "count": images.len()}),
+        human,
+    ))
+}
+
+/// `avd create`: host-side AVD creation through the core `create_avd` wrapper.
+/// A dry run returns only the argv and executes nothing; without `--yes` the
+/// core refuses to run `avdmanager` and never overwrites an existing AVD.
+pub async fn avd_create(ctx: &CliContext, args: &AvdCreateArgs) -> Result<CommandSuccess> {
+    let request = CreateAvdRequest {
+        name: args.name.clone(),
+        image: args.image.clone(),
+        device: args.device.clone(),
+    };
+    // Validate and build the plan before any process lookup. The core wrapper
+    // repeats validation and enforces `--yes` itself for non-dry runs.
+    let planned_argv = androidforge_emulator::create_avd_args(&request)?;
+    let options = CreateAvdOptions {
+        dry_run: ctx.dry_run,
+        yes: ctx.yes,
+        trace: ctx.trace,
+    };
+    if ctx.dry_run {
+        let result = create_avd(&ctx.toolchain, &request, &options).await?;
+        let mut human = format!(
+            "Dry run: would create AVD '{}' from {} with device profile '{}'.\nargv: {}\n",
+            args.name,
+            args.image,
+            args.device,
+            planned_argv.join(" ")
+        );
+        for note in &result.notes {
+            human.push_str(&format!("note: {note}\n"));
+        }
+        return Ok(success("avd.create", serde_json::to_value(&result)?, human));
+    }
+    if !ctx.yes {
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            "creating an AVD is a host-side mutation; pass --yes to confirm",
+        )
+        .with_suggestion("Use --dry-run to inspect the exact argv before confirming."));
+    }
+    let result = create_avd(&ctx.toolchain, &request, &options).await?;
+    let mut human = format!(
+        "Created AVD '{}' from {} with device profile '{}'.\n",
+        args.name, args.image, args.device
+    );
+    for note in &result.notes {
+        human.push_str(&format!("note: {note}\n"));
+    }
+    Ok(success("avd.create", serde_json::to_value(&result)?, human))
+}
+
+/// `ports list`: read-only mapping of the conventional emulator console range
+/// to ADB/gRPC ports, active-session ownership and free/allocated/occupied
+/// state. Ownership comes from session files; occupancy comes from bounded
+/// bind probes. No ADB device or emulator executable is required.
+pub async fn ports(ctx: &CliContext) -> Result<CommandSuccess> {
+    let mut owners = BTreeMap::new();
+    for entry in list_sessions(&ctx.paths)? {
+        if matches!(
+            entry.state,
+            SessionState::Released | SessionState::Failed | SessionState::Abandoned
+        ) {
+            continue;
+        }
+        if let Some(port) = entry.port {
+            owners.insert(
+                port,
+                PortOwnerInfo {
+                    owner: Some(entry.owner),
+                    session_id: Some(entry.id),
+                    avd: entry.avd,
+                },
+            );
+        }
+    }
+    let entries = list_ports(&owners);
+    let mut free = 0usize;
+    let mut allocated = 0usize;
+    let mut occupied = 0usize;
+    let mut human = String::new();
+    for entry in &entries {
+        match entry.state {
+            androidforge_emulator::PortState::Free => free += 1,
+            androidforge_emulator::PortState::Allocated => allocated += 1,
+            androidforge_emulator::PortState::Occupied => occupied += 1,
+        }
+        human.push_str(&format!(
+            "{} console={} adb={} grpc={} state={} console_occupied={} adb_occupied={} grpc_occupied={} owner={} session={} avd={}\n",
+            entry.serial,
+            entry.console_port,
+            entry.adb_port,
+            entry
+                .grpc_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            entry.state.as_str(),
+            entry.console_occupied,
+            entry.adb_occupied,
+            entry
+                .grpc_occupied
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            entry.owner.as_deref().unwrap_or("-"),
+            entry.session_id.as_deref().unwrap_or("-"),
+            entry.avd.as_deref().unwrap_or("-"),
+        ));
+    }
+    Ok(success(
+        "ports.list",
+        serde_json::json!({
+            "ports": entries,
+            "count": entries.len(),
+            "summary": {"free": free, "allocated": allocated, "occupied": occupied},
+        }),
+        human,
+    ))
 }
 
 async fn allocate_emulator_port(
@@ -1427,18 +1578,108 @@ async fn gc(ctx: &CliContext, args: &SessionGcArgs) -> Result<CommandSuccess> {
             }
         }
     }
+
+    // Terminal cleanup is opt-in through --forget-terminal. It only releases
+    // locks that still belong to the tombstone; `Session::release_terminal`
+    // refuses live sessions, foreign locks and mismatched owners. Dry runs
+    // never call it and therefore cannot mutate state.
+    let mut forget = serde_json::json!({
+        "enabled": args.forget_terminal,
+        "dry_run": ctx.dry_run,
+        "owner": args.owner,
+        "force": args.force,
+        "would_forget": Vec::<String>::new(),
+        "forgotten": Vec::<String>::new(),
+        "failures": Vec::<serde_json::Value>::new(),
+    });
+    if args.forget_terminal {
+        let owner = args.owner.clone().or_else(|| {
+            std::env::var("ANDROIDFORGE_OWNER")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+        if owner.is_none() && !args.force {
+            return Err(ForgeError::new(
+                ErrorCode::InvalidArgument,
+                "session gc --forget-terminal requires --owner <OWNER> or --force",
+            )
+            .with_suggestion(
+                "Pass the recorded owner, or use --force to forget another owner's tombstones.",
+            )
+            .with_suggestion("Use --dry-run to preview which sessions would be cleaned."));
+        }
+        let candidates: Vec<&androidforge_core::session::SessionListEntry> = before
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    SessionState::Released | SessionState::Failed | SessionState::Abandoned
+                ) && owner.as_deref().is_none_or(|caller| entry.owner == caller)
+            })
+            .collect();
+        if ctx.dry_run {
+            forget["would_forget"] = serde_json::to_value(
+                candidates
+                    .iter()
+                    .map(|entry| entry.id.clone())
+                    .collect::<Vec<_>>(),
+            )?;
+            warnings.push(format!(
+                "Dry run: {} terminal session(s) would be forgotten (locks released, history kept).",
+                candidates.len()
+            ));
+        } else {
+            let mut forgotten = Vec::new();
+            let mut failures = Vec::new();
+            for entry in candidates {
+                match Session::load(&ctx.paths, &entry.id).and_then(|mut session| {
+                    session.release_terminal(&ctx.paths, owner.as_deref(), args.force)?;
+                    Ok(session.id)
+                }) {
+                    Ok(id) => forgotten.push(id),
+                    Err(error) => failures.push(serde_json::json!({
+                        "session_id": entry.id,
+                        "code": error.code().as_str(),
+                        "message": error.message().to_string(),
+                    })),
+                }
+            }
+            forget["forgotten"] = serde_json::to_value(&forgotten)?;
+            forget["failures"] = serde_json::to_value(&failures)?;
+            if !failures.is_empty() {
+                warnings.push(format!(
+                    "{} terminal session(s) could not be forgotten; see failures.",
+                    failures.len()
+                ));
+            }
+        }
+    }
+
+    let mut result = serde_json::json!({
+        "report": report,
+        "warnings": warnings,
+        "forget_terminal": forget,
+        "would_reclaim": if ctx.dry_run { report.reclaimed_sessions.clone() } else { Vec::<String>::new() },
+        "next_commands": if ctx.dry_run && !report.reclaimed_sessions.is_empty() {
+            vec!["androidforge session gc --reclaim".to_string()]
+        } else {
+            Vec::<String>::new()
+        },
+    });
+    if args.forget_terminal && !ctx.dry_run {
+        let forgotten = result["forget_terminal"]["forgotten"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(0);
+        result["next_commands"] = serde_json::json!(if forgotten > 0 {
+            vec!["androidforge session list --json".to_string()]
+        } else {
+            Vec::<String>::new()
+        });
+    }
     Ok(success(
         "session.gc",
-        serde_json::json!({
-            "report": report,
-            "warnings": warnings,
-            "would_reclaim": if ctx.dry_run { report.reclaimed_sessions.clone() } else { Vec::<String>::new() },
-            "next_commands": if ctx.dry_run && !report.reclaimed_sessions.is_empty() {
-                vec!["androidforge session gc --reclaim".to_string()]
-            } else {
-                Vec::<String>::new()
-            },
-        }),
+        result,
         format!(
             "{}{}{}",
             serde_json::to_string_pretty(&report).unwrap_or_default(),
@@ -1678,30 +1919,70 @@ pub async fn emulator(ctx: &CliContext, command: &EmulatorCommand) -> Result<Com
                 .device(serial));
             }
             let manager = ctx.emulator_manager()?;
+            // Host capacity is measured through the same read-only primitive
+            // used by `doctor --capacity`. Unknown readings stay unknown, so
+            // the status warning is suppressed rather than fabricated.
+            let capacity = host_capacity(&ctx.paths.artifacts_dir);
+            let capacity_snapshot = capacity.snapshot();
+            let avds = androidforge_emulator::list_avds(&ctx.toolchain, ctx.trace)
+                .await
+                .unwrap_or_default();
+            let avd_ram_mb = session
+                .as_ref()
+                .and_then(|session| session.avd.as_deref())
+                .and_then(|name| {
+                    avds.iter()
+                        .find(|avd| avd.name == name)
+                        .and_then(|avd| avd.ram_mb)
+                });
+            let context = StatusContext {
+                owner: session.as_ref().map(|session| session.owner.as_str()),
+                session_id: session.as_ref().map(|session| session.id.as_str()),
+                avd_ram_mb,
+                capacity: Some(&capacity_snapshot),
+            };
             let status = manager
-                .status(
+                .status_with_context(
                     &serial,
                     session.as_ref().and_then(|session| session.emulator_pid),
+                    context,
                 )
                 .await?;
             let result = serde_json::to_value(&status)?;
-            Ok(success(
-                "emulator.status",
-                result,
-                format!(
-                    "{} avd={} pid={} process_alive={} boot_completed={:?}\n",
-                    status.serial,
-                    status.avd.as_deref().unwrap_or("-"),
-                    status
-                        .pid
-                        .map(|pid| pid.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                    status.process_alive,
-                    status.boot_completed
-                ),
-            )
-            .with_device(status.serial)
-            .with_optional_session(session.as_ref().map(|session| session.id.clone())))
+            let mut human = format!(
+                "{} avd={} pid={} process_alive={} boot_completed={:?}\n",
+                status.serial,
+                status.avd.as_deref().unwrap_or("-"),
+                status
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                status.process_alive,
+                status.boot_completed
+            );
+            human.push_str(&format!(
+                "ports: console={} adb={} grpc={}\nowner={} session={}\n",
+                status
+                    .console_port
+                    .map(|port| port.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                status
+                    .adb_port
+                    .map(|port| port.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                status
+                    .grpc_port
+                    .map(|port| port.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                status.owner.as_deref().unwrap_or("-"),
+                status.session_id.as_deref().unwrap_or("-"),
+            ));
+            if let Some(warning) = &status.capacity_warning {
+                human.push_str(&format!("capacity warning: {warning}\n"));
+            }
+            Ok(success("emulator.status", result, human)
+                .with_device(status.serial)
+                .with_optional_session(session.as_ref().map(|session| session.id.clone())))
         }
         EmulatorCommand::Stop(args) => {
             stop(
@@ -1747,7 +2028,7 @@ pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<Com
                     format!("Would save snapshot {name}\n"),
                 ));
             }
-            ctx.ensure_physical_mutation_allowed(&device, "saving an emulator snapshot")?;
+            ctx.ensure_risk_allowed(&device, Risk::Data, "saving an emulator snapshot")?;
             let snapshot = manager.snapshot_save(&serial, name).await?;
             session.record_snapshot(&ctx.paths, "save", name, true, None)?;
             Ok(success(
@@ -1775,7 +2056,7 @@ pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<Com
                 )
                 .with_suggestion("Save important state first or use a disposable AVD."));
             }
-            ctx.ensure_physical_mutation_allowed(&device, "loading an emulator snapshot")?;
+            ctx.ensure_risk_allowed(&device, Risk::Data, "loading an emulator snapshot")?;
             let result = manager.snapshot_load(&serial, name, ctx.yes).await;
             match result {
                 Ok(snapshot) => {
@@ -1808,7 +2089,7 @@ pub async fn snapshot(ctx: &CliContext, command: &SnapshotCommand) -> Result<Com
                     format!("Would delete snapshot {name}\n"),
                 ));
             }
-            ctx.ensure_physical_mutation_allowed(&device, "deleting an emulator snapshot")?;
+            ctx.ensure_risk_allowed(&device, Risk::Data, "deleting an emulator snapshot")?;
             let snapshot = manager.snapshot_delete(&serial, name).await?;
             session.record_snapshot(&ctx.paths, "delete", name, true, None)?;
             Ok(success(

@@ -1,9 +1,10 @@
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::error::{ForgeError, Result};
+use crate::error::{ErrorCode, ForgeError, Result};
 use crate::model::ArtifactRef;
 
 pub const ENVELOPE_SCHEMA_VERSION: u32 = 1;
@@ -62,6 +63,9 @@ pub struct CommandSuccess {
     pub summary: Option<String>,
     /// Short next commands used by compact/brief output.
     pub next: Vec<String>,
+    /// Extra NDJSON lines emitted *before* the final envelope when `--jsonl`
+    /// is active. Never serialized into the envelope and ignored for `--json`.
+    pub stream: Vec<Value>,
 }
 
 impl CommandSuccess {
@@ -79,7 +83,13 @@ impl CommandSuccess {
             exit_code: 0,
             summary: None,
             next: Vec::new(),
+            stream: Vec::new(),
         }
+    }
+
+    pub fn with_stream(mut self, stream: Vec<Value>) -> Self {
+        self.stream = stream;
+        self
     }
 
     pub fn with_status(mut self, status: &'static str) -> Self {
@@ -131,6 +141,14 @@ pub struct OutputOptions {
     pub compact: bool,
     /// Profile name included in the envelope (`compact` or `brief`).
     pub profile: Option<String>,
+    /// NDJSON mode: implies `json`, minifies every line and writes `stream`
+    /// lines before the final envelope. Presentation-only flag.
+    pub jsonl: bool,
+    /// Write one stats line to stderr after the primary payload.
+    pub stats: bool,
+    /// Top-level keys of the envelope's `result` object to retain.
+    /// Presentation-only flag; never removes envelope-level fields.
+    pub fields: Option<Vec<String>>,
 }
 
 impl OutputOptions {
@@ -140,6 +158,9 @@ impl OutputOptions {
             quiet,
             compact: false,
             profile: None,
+            jsonl: false,
+            stats: false,
+            fields: None,
         }
     }
 
@@ -148,9 +169,123 @@ impl OutputOptions {
         self.profile = Some(profile.into());
         self
     }
+
+    pub fn with_jsonl(mut self) -> Self {
+        self.jsonl = true;
+        self.json = true;
+        self
+    }
+
+    pub fn with_stats(mut self) -> Self {
+        self.stats = true;
+        self
+    }
+
+    pub fn with_fields(mut self, fields: Vec<String>) -> Self {
+        self.fields = Some(fields);
+        self
+    }
+}
+
+/// Keep only the requested top-level keys of a result object.
+///
+/// The envelope itself is never touched: `schema_version`, `status`,
+/// `command`, `exit_code`, `result` and `error` always survive. Only the
+/// contents of `result` are trimmed, and the command's original key order is
+/// preserved.
+fn trim_result_fields(value: &mut Value, fields: &[String]) -> Result<()> {
+    let Some(object) = value.as_object_mut() else {
+        let kind = match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            format!("--fields requires a JSON object result, but this command returned {kind}"),
+        )
+        .with_context_string("result_type", kind)
+        .with_suggestion(
+            "Choose a command whose result is an object, or omit --fields and use --output-profile compact|brief to trim the envelope.",
+        ));
+    };
+    let mut available = object.keys().cloned().collect::<Vec<_>>();
+    available.sort();
+    let unknown = fields
+        .iter()
+        .filter(|field| !object.contains_key(field.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        let list = if available.is_empty() {
+            "(none)".to_string()
+        } else {
+            available.join(", ")
+        };
+        return Err(ForgeError::new(
+            ErrorCode::InvalidArgument,
+            format!("unknown --fields key(s): {}", unknown.join(", ")),
+        )
+        .with_context_string("available_result_keys", list.clone())
+        .with_suggestion(format!("Available top-level result keys: {list}."))
+        .with_suggestion(
+            "Envelope trimming is still available through --output-profile compact|brief.",
+        ));
+    }
+    let keep = fields.iter().cloned().collect::<BTreeSet<_>>();
+    object.retain(|key, _| keep.contains(key));
+    Ok(())
+}
+
+/// Streamed iteration objects have no envelope, so trim only when they carry
+/// their own nested `result` object.
+fn trim_stream_fields(stream: &mut [Value], fields: &[String]) -> Result<()> {
+    for item in stream {
+        if let Some(result) = item.get_mut("result") {
+            trim_result_fields(result, fields)?;
+        }
+    }
+    Ok(())
+}
+
+/// Number of newline-terminated stdout lines and exact byte count shared by
+/// every payload builder below.
+fn emit_stats_if_requested(options: &OutputOptions, payload: &[u8]) {
+    if options.stats {
+        let lines = payload.iter().filter(|&&byte| byte == b'\n').count();
+        write_stats(payload.len(), lines);
+    }
+}
+
+/// Write the single deterministic stats line to stderr. Public so argument
+/// parsing failures can report zero-byte payloads before a command runs.
+fn stats_line(stdout_bytes: usize, lines: usize) -> String {
+    let estimated_tokens = stdout_bytes.div_ceil(4);
+    format!(
+        "{{\"stats\":{{\"schema_version\":1,\"stdout_bytes\":{},\"estimated_tokens\":{},\"token_method\":\"bytes_div_4\",\"lines\":{}}}}}",
+        stdout_bytes, estimated_tokens, lines
+    )
+}
+
+pub fn write_stats(stdout_bytes: usize, lines: usize) {
+    let mut stderr = io::stderr().lock();
+    let _ = writeln!(stderr, "{}", stats_line(stdout_bytes, lines));
+    let _ = stderr.flush();
 }
 
 pub fn emit_success(options: OutputOptions, success: &CommandSuccess) -> Result<()> {
+    let mut result = success.result.clone();
+    let mut stream = success.stream.clone();
+    if let Some(fields) = &options.fields {
+        trim_result_fields(&mut result, fields)?;
+        trim_stream_fields(&mut stream, fields)?;
+    }
+    // Build the complete payload in memory so the stats line can report the
+    // exact byte count and line count actually written to stdout.
+    let mut payload = Vec::new();
     if options.json {
         let envelope = Envelope {
             schema_version: ENVELOPE_SCHEMA_VERSION,
@@ -165,29 +300,33 @@ pub fn emit_success(options: OutputOptions, success: &CommandSuccess) -> Result<
             profile: options.profile.clone(),
             summary: success.summary.clone(),
             next: success.next.clone(),
-            result: Some(success.result.clone()),
+            result: Some(result),
             error: None,
             artifacts: success.artifacts.clone(),
             duration_ms: success.duration_ms,
         };
-        write_json(&envelope, options.compact)?;
+        if options.jsonl {
+            for item in &stream {
+                serde_json::to_writer(&mut payload, item)?;
+                payload.push(b'\n');
+            }
+            serde_json::to_writer(&mut payload, &envelope)?;
+            payload.push(b'\n');
+        } else {
+            write_json_bytes(&mut payload, &envelope, options.compact)?;
+        }
     } else if !options.quiet {
-        let mut stdout = io::stdout().lock();
         if !success.human.is_empty() {
-            stdout
-                .write_all(success.human.as_bytes())
-                .map_err(|error| {
-                    ForgeError::internal(format!("could not write output: {error}"))
-                })?;
+            let _ = payload.write_all(success.human.as_bytes());
             if !success.human.ends_with('\n') {
-                let _ = stdout.write_all(b"\n");
+                let _ = payload.write_all(b"\n");
             }
         }
         if !success.artifacts.is_empty() {
-            let _ = writeln!(stdout, "Artifacts:");
+            let _ = writeln!(payload, "Artifacts:");
             for artifact in &success.artifacts {
                 let _ = writeln!(
-                    stdout,
+                    payload,
                     "  [{}] {}{}",
                     artifact.kind,
                     artifact.path,
@@ -199,8 +338,9 @@ pub fn emit_success(options: OutputOptions, success: &CommandSuccess) -> Result<
                 );
             }
         }
-        let _ = stdout.flush();
     }
+    write_raw_stdout(&payload)?;
+    emit_stats_if_requested(&options, &payload);
     Ok(())
 }
 
@@ -223,6 +363,7 @@ pub fn emit_error(
     if body.device_serial.is_none() {
         body.device_serial = device_serial.clone();
     }
+    let mut payload = Vec::new();
     if options.json {
         let envelope = Envelope {
             schema_version: ENVELOPE_SCHEMA_VERSION,
@@ -240,7 +381,10 @@ pub fn emit_error(
             artifacts: error.body().artifacts.clone(),
             duration_ms,
         };
-        write_json(&envelope, options.compact)?;
+        // NDJSON mode minifies every line, including error envelopes emitted
+        // before a command could be parsed or dispatched.
+        write_json_bytes(&mut payload, &envelope, options.compact || options.jsonl)?;
+        write_raw_stdout(&payload)?;
     } else if !options.quiet {
         let mut stderr = io::stderr().lock();
         let _ = writeln!(
@@ -331,20 +475,18 @@ pub fn emit_error(
         }
         let _ = stderr.flush();
     }
+    emit_stats_if_requested(&options, &payload);
     Ok(())
 }
 
-fn write_json<T: Serialize>(value: &T, compact: bool) -> Result<()> {
-    let mut stdout = io::stdout().lock();
+fn write_json_bytes<T: Serialize>(buffer: &mut Vec<u8>, value: &T, compact: bool) -> Result<()> {
     if compact {
-        serde_json::to_writer(&mut stdout, value)?;
+        serde_json::to_writer(&mut *buffer, value)?;
     } else {
-        serde_json::to_writer_pretty(&mut stdout, value)?;
+        serde_json::to_writer_pretty(&mut *buffer, value)?;
     }
-    stdout
-        .write_all(b"\n")
-        .and_then(|_| stdout.flush())
-        .map_err(|error| ForgeError::internal(format!("could not write JSON output: {error}")))
+    buffer.push(b'\n');
+    Ok(())
 }
 
 pub fn write_raw_stdout(bytes: &[u8]) -> Result<()> {
@@ -462,6 +604,62 @@ mod tests {
         assert_eq!(json["status"], "failed");
         assert_eq!(json["exit_code"], 6);
         assert_eq!(json["result"]["final_status"], "failed");
+    }
+
+    #[test]
+    fn fields_trim_only_the_requested_result_keys() {
+        let mut result = serde_json::json!({"a": 1, "b": 2, "c": 3});
+        trim_result_fields(&mut result, &["c".to_string(), "a".to_string()]).unwrap();
+        assert_eq!(result, serde_json::json!({"a": 1, "c": 3}));
+    }
+
+    #[test]
+    fn fields_reject_unknown_keys_with_the_available_list() {
+        let mut result = serde_json::json!({"alpha": 1, "beta": 2});
+        let error = trim_result_fields(&mut result, &["gamma".to_string()]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+        let message = error.message();
+        assert!(message.contains("gamma"), "{message}");
+        let body = error.body();
+        let text = format!("{:?}", body.suggestions);
+        assert!(text.contains("alpha") && text.contains("beta"), "{text}");
+        assert_eq!(result, serde_json::json!({"alpha": 1, "beta": 2}));
+    }
+
+    #[test]
+    fn fields_reject_non_object_results() {
+        let mut result = serde_json::json!([1, 2, 3]);
+        let error = trim_result_fields(&mut result, &["a".to_string()]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+        assert!(error.message().contains("array"), "{}", error.message());
+        assert!(format!("{:?}", error.body().suggestions).contains("--output-profile"));
+    }
+
+    #[test]
+    fn stream_trim_only_touches_nested_result_objects() {
+        let mut stream = vec![
+            serde_json::json!({"event": "iteration", "iteration": 1}),
+            serde_json::json!({"event": "iteration", "result": {"a": 1, "b": 2}}),
+        ];
+        trim_stream_fields(&mut stream, &["b".to_string()]).unwrap();
+        assert_eq!(stream[0]["iteration"], 1);
+        assert_eq!(stream[1]["result"], serde_json::json!({"b": 2}));
+    }
+
+    #[test]
+    fn stats_line_is_exact_and_uses_ceil_division() {
+        assert_eq!(
+            stats_line(0, 0),
+            "{\"stats\":{\"schema_version\":1,\"stdout_bytes\":0,\"estimated_tokens\":0,\"token_method\":\"bytes_div_4\",\"lines\":0}}"
+        );
+        assert_eq!(
+            stats_line(9, 3),
+            "{\"stats\":{\"schema_version\":1,\"stdout_bytes\":9,\"estimated_tokens\":3,\"token_method\":\"bytes_div_4\",\"lines\":3}}"
+        );
+        assert_eq!(
+            stats_line(10, 4),
+            "{\"stats\":{\"schema_version\":1,\"stdout_bytes\":10,\"estimated_tokens\":3,\"token_method\":\"bytes_div_4\",\"lines\":4}}"
+        );
     }
 
     #[test]

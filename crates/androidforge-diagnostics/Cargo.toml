@@ -23,3 +23,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+png.workspace = true

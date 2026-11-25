@@ -371,6 +371,12 @@ pub struct UiMatch {
     pub class: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    /// Stable semantic role, using the same vocabulary as observation nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Observation-style element reference (`el-…`) derived from node identity.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ref")]
+    pub reference: Option<String>,
     pub bounds: Rect,
     pub clickable: bool,
     pub enabled: bool,
@@ -384,6 +390,48 @@ pub struct UiMatch {
 
 fn default_match_source() -> String {
     "uiautomator".to_string()
+}
+
+/// Deterministic observation-style element reference for a hierarchy node.
+///
+/// This is the canonical v2 reference material shared with the CLI observation
+/// store (`el-<12 hex chars>`), so a selector candidate can be correlated with
+/// a `ui observe --json` ref without loading an observation. Password text is
+/// masked exactly as it is in an observation. The returned value is a
+/// diagnostics hint only: a ref is valid together with the observation that
+/// produced it, never as a standalone handle.
+pub fn observation_ref(node: &UiNode) -> String {
+    observation_ref_with_length(node, 12)
+}
+
+/// The same canonical v2 material as [`observation_ref`], truncated to
+/// `length` hex characters.
+///
+/// The CLI observation store lengthens refs when two distinct nodes share a
+/// short hash prefix. Keeping the length parameter here means the ref formula
+/// has exactly one definition, shared by selectors and observations.
+pub fn observation_ref_with_length(node: &UiNode, length: usize) -> String {
+    let text = if node.password && node.text.is_some() {
+        "[password]"
+    } else {
+        node.text.as_deref().unwrap_or("")
+    };
+    let bounds = format!(
+        "{},{},{},{}",
+        node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom
+    );
+    let material = format!(
+        "v2|{}|{}|{}|{}|{}|{}|{bounds}|{}",
+        node.path,
+        node.class.as_deref().unwrap_or(""),
+        node.package.as_deref().unwrap_or(""),
+        node.resource_id.as_deref().unwrap_or(""),
+        text,
+        node.content_desc.as_deref().unwrap_or(""),
+        node.semantic_role(),
+    );
+    let hash = androidforge_core::util::sha256_hex(material.as_bytes());
+    format!("el-{}", &hash[..length.min(hash.len())])
 }
 
 impl UiMatch {
@@ -413,6 +461,8 @@ impl UiMatch {
             resource_id: node.resource_id.clone(),
             class: node.class.clone(),
             package: node.package.clone(),
+            role: Some(node.semantic_role().to_string()),
+            reference: Some(observation_ref(node)),
             bounds: node.bounds,
             clickable: node.clickable,
             enabled: node.enabled,
@@ -435,6 +485,8 @@ impl UiMatch {
             resource_id: None,
             class: None,
             package: None,
+            role: None,
+            reference: None,
             bounds,
             clickable: true,
             enabled: true,
@@ -571,21 +623,42 @@ pub fn select(hierarchy: UiHierarchy, selector: &Selector) -> Result<Selection> 
         )
         .with_suggestion(
             "Add a more specific condition, or pass --index N to choose one of the listed matches.",
+        )
+        .with_suggestion(
+            "Narrow by semantic role with --role (for example --role button), or add --resource-id or --content-desc.",
         );
+        if matches.iter().any(|item| item.reference.is_some()) {
+            error = error.with_suggestion(
+                "Run `androidforge ui observe --session <ID> --json`, then pass --ref <ref> to target the exact observed element.",
+            );
+        }
         if matches.iter().any(|item| item.clickable) && matches.iter().any(|item| !item.clickable) {
             error = error.with_suggestion(
                 "If only one candidate is interactive, add --clickable to exclude non-clickable text.",
             );
         }
         for item in &matches {
+            let mut details = Vec::new();
+            if let Some(role) = &item.role {
+                details.push(format!("role={role}"));
+            }
+            if let Some(reference) = &item.reference {
+                details.push(format!("ref={reference}"));
+            }
+            let suffix = if details.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", details.join(", "))
+            };
             error = error.with_suggestion(format!(
-                "--index {}: {}",
+                "--index {}: {}{}",
                 item.index,
                 item.text
                     .as_deref()
                     .or(item.content_desc.as_deref())
                     .or(item.resource_id.as_deref())
-                    .unwrap_or("(no label)")
+                    .unwrap_or("(no label)"),
+                suffix
             ));
         }
         return Err(error);
@@ -790,6 +863,70 @@ mod tests {
     }
 
     #[test]
+    fn find_matches_expose_role_and_observation_ref() {
+        let hierarchy = UiHierarchy::parse(XML).unwrap();
+        let selector = Selector {
+            text: Some("Save".to_string()),
+            ..Selector::default()
+        };
+        let matches = find(&hierarchy, &selector).unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].role.as_deref(), Some("button"));
+        // Locked to the v2 material used by the CLI observation store.
+        assert_eq!(matches[0].reference.as_deref(), Some("el-b94dd4c28015"));
+        assert!(
+            matches[1]
+                .reference
+                .as_deref()
+                .is_some_and(|reference| reference.starts_with("el-"))
+        );
+        assert_ne!(matches[0].reference, matches[1].reference);
+
+        let value = serde_json::to_value(&matches).unwrap();
+        assert_eq!(value[0]["role"], "button");
+        assert_eq!(value[0]["ref"], "el-b94dd4c28015");
+        assert!(value[1]["ref"].as_str().is_some());
+
+        // Payloads written before role/ref existed still deserialize.
+        let legacy = serde_json::json!({
+            "index": 0,
+            "node_id": 0,
+            "path": "0",
+            "bounds": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+            "clickable": true,
+            "enabled": true,
+            "focused": false,
+            "scrollable": false
+        });
+        let legacy: UiMatch = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.role, None);
+        assert_eq!(legacy.reference, None);
+        assert_eq!(legacy.source, "uiautomator");
+
+        // OCR matches have no hierarchy node, so both keys are omitted.
+        let ocr = UiMatch::ocr(0, "Save".to_string(), Rect::default());
+        let value = serde_json::to_value(&ocr).unwrap();
+        assert!(value.get("role").is_none());
+        assert!(value.get("ref").is_none());
+    }
+
+    #[test]
+    fn observation_ref_masks_password_text_like_observations() {
+        let hierarchy = UiHierarchy::parse(
+            r#"<hierarchy rotation="0">
+  <node index="0" text="secret" resource-id="com.example:id/password" class="android.widget.EditText" package="com.example" clickable="true" enabled="true" focused="false" scrollable="false" password="true" bounds="[0,0][100,50]" />
+</hierarchy>"#,
+        )
+        .unwrap();
+        let node = &hierarchy.nodes[0];
+        let reference = observation_ref(node);
+        let mut masked = node.clone();
+        masked.text = Some("[password]".to_string());
+        masked.password = false;
+        assert_eq!(reference, observation_ref(&masked));
+    }
+
+    #[test]
     fn ambiguous_selector_is_an_error_with_candidates() {
         let hierarchy = UiHierarchy::parse(XML).unwrap();
         let selector = Selector {
@@ -798,14 +935,26 @@ mod tests {
         };
         let error = select(hierarchy, &selector).unwrap_err();
         assert_eq!(error.code(), ErrorCode::SelectorAmbiguous);
-        assert!(error.body().context.contains_key("matches"));
-        assert!(
-            error
-                .body()
-                .suggestions
-                .iter()
-                .any(|suggestion| suggestion.contains("--index"))
-        );
+        let body = error.body();
+        let matches = body
+            .context
+            .get("matches")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        assert_eq!(matches.len(), 2);
+        for item in matches {
+            assert_eq!(item["role"], "button");
+            assert!(
+                item["ref"]
+                    .as_str()
+                    .is_some_and(|reference| reference.starts_with("el-"))
+            );
+        }
+        let suggestions = &body.suggestions;
+        assert!(suggestions.iter().any(|text| text.contains("--index")));
+        assert!(suggestions.iter().any(|text| text.contains("--role")));
+        assert!(suggestions.iter().any(|text| text.contains("--ref")));
+        assert!(suggestions.iter().any(|text| text.contains("ref=el-")));
     }
 
     #[test]
