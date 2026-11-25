@@ -9,6 +9,38 @@ fn binary() -> Command {
     Command::cargo_bin("androidforge").expect("androidforge binary")
 }
 
+/// Fake ADB that always reports zero devices. Used by top-level tests that call
+/// `context`/`agent brief` so no real ADB daemon is spawned (a daemon would
+/// inherit the captured stdio handles and keep `Command::output()` open).
+#[cfg(windows)]
+fn fake_empty_adb(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("fake-adb.cmd");
+    std::fs::write(
+        &path,
+        "@echo off\r\necho List of devices attached\r\necho.\r\nexit /b 0\r\n",
+    )
+    .expect("fake adb");
+    path
+}
+
+#[cfg(not(windows))]
+fn fake_empty_adb(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = dir.join("fake-adb");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nprintf 'List of devices attached\\n\\n'\nexit 0\n",
+    )
+    .expect("fake adb");
+    let mut permissions = std::fs::metadata(&path)
+        .expect("fake adb metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).expect("fake adb permissions");
+    path
+}
+
 fn ndjson_values(bytes: &[u8]) -> Vec<Value> {
     let text = std::str::from_utf8(bytes).expect("utf8 NDJSON");
     text.lines()
@@ -654,9 +686,11 @@ fn agent_brief_surfaces_busy_and_device_in_use_warnings() {
     write_synthetic_session(temp.path(), &session);
     select_synthetic_session(temp.path(), &session.id);
 
+    let adb = fake_empty_adb(temp.path());
     let output = binary()
         .current_dir(temp.path())
         .env("ANDROIDFORGE_HOME", temp.path())
+        .env("ANDROIDFORGE_ADB", &adb)
         .args(["agent", "brief", "--json"])
         .output()
         .expect("agent brief");
