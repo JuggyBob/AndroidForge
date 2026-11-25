@@ -2204,7 +2204,7 @@ mod tests {
     }
 
     fn write_scoped_report(
-        project: &std::path::Path,
+        ctx: &CliContext,
         run_id: &str,
         session: Option<&str>,
         serial: Option<&str>,
@@ -2212,9 +2212,14 @@ mod tests {
         status: RunStatus,
         started_at: &str,
     ) {
-        let dir = project.join(".artifacts").join("runs").join(run_id);
+        let dir = ctx.paths.artifacts_dir.join("runs").join(run_id);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut report = RunReport::new(run_id, "test.run", "Example", project.to_string_lossy());
+        let mut report = RunReport::new(
+            run_id,
+            "test.run",
+            "Example",
+            ctx.paths.project_root.to_string_lossy(),
+        );
         report.session_id = session.map(str::to_string);
         report.device_serial = serial.map(str::to_string);
         report.tags = tags.iter().map(|tag| tag.to_string()).collect();
@@ -2247,8 +2252,9 @@ mod tests {
     fn latest_selection_honors_session_and_device_scope() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path();
+        let mut ctx = test_context(project);
         write_scoped_report(
-            project,
+            &ctx,
             "ses-a-fail",
             Some("ses-a"),
             Some("dev-1"),
@@ -2257,7 +2263,7 @@ mod tests {
             "2026-01-01T00:00:00Z",
         );
         write_scoped_report(
-            project,
+            &ctx,
             "ses-a-pass",
             Some("ses-a"),
             Some("dev-1"),
@@ -2266,7 +2272,7 @@ mod tests {
             "2026-01-02T00:00:00Z",
         );
         write_scoped_report(
-            project,
+            &ctx,
             "ses-b-fail",
             Some("ses-b"),
             Some("dev-2"),
@@ -2275,7 +2281,7 @@ mod tests {
             "2026-01-03T00:00:00Z",
         );
         write_scoped_report(
-            project,
+            &ctx,
             "ses-b-pass",
             Some("ses-b"),
             Some("dev-2"),
@@ -2284,7 +2290,6 @@ mod tests {
             "2026-01-04T00:00:00Z",
         );
 
-        let mut ctx = test_context(project);
         let unfiltered = ReportScope::default();
         assert_eq!(
             selected(resolve_latest_run_dir(&ctx, false, &unfiltered).unwrap()),
@@ -2351,8 +2356,9 @@ mod tests {
     fn latest_selection_honors_tag_scope() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path();
+        let mut ctx = test_context(project);
         write_scoped_report(
-            project,
+            &ctx,
             "tagged-pass",
             Some("ses-a"),
             None,
@@ -2361,7 +2367,7 @@ mod tests {
             "2026-01-05T00:00:00Z",
         );
         write_scoped_report(
-            project,
+            &ctx,
             "tagged-fail",
             Some("ses-a"),
             None,
@@ -2370,7 +2376,7 @@ mod tests {
             "2026-01-06T00:00:00Z",
         );
         write_scoped_report(
-            project,
+            &ctx,
             "untagged-pass",
             Some("ses-a"),
             None,
@@ -2379,7 +2385,6 @@ mod tests {
             "2026-01-07T00:00:00Z",
         );
 
-        let mut ctx = test_context(project);
         ctx.session_arg = Some("ses-a".to_string());
 
         let tags = vec!["smoke".to_string()];

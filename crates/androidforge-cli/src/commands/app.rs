@@ -2631,14 +2631,16 @@ mod tests {
     const STAMP: &str = "20260102T030405Z";
 
     fn test_paths(cwd: &Path, project_root: &Path, artifacts_dir: &Path) -> ForgePaths {
+        // Mirror `ForgePaths::discover`: every path is canonicalized so prefix
+        // checks in `path_within` compare like-for-like forms on all platforms.
         ForgePaths {
-            cwd: cwd.to_path_buf(),
-            project_root: project_root.to_path_buf(),
+            cwd: canonicalize_or_self(cwd),
+            project_root: canonicalize_or_self(project_root),
             project_config_path: None,
             global_config_path: PathBuf::new(),
             global_dir: PathBuf::new(),
             state_dir: PathBuf::new(),
-            artifacts_dir: artifacts_dir.to_path_buf(),
+            artifacts_dir: canonicalize_or_self(artifacts_dir),
         }
     }
 
@@ -2653,10 +2655,11 @@ mod tests {
     #[test]
     fn export_default_lives_in_artifacts_export_area_outside_project() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
         std::fs::create_dir_all(&project).unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let destination = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2679,10 +2682,11 @@ mod tests {
     #[test]
     fn export_default_inside_project_artifacts_dir_is_allowed() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
         let artifacts = project.join(".artifacts");
         std::fs::create_dir_all(&artifacts).unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let destination = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2698,11 +2702,12 @@ mod tests {
     #[test]
     fn export_explicit_absolute_path_is_honoured() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
-        let output = temp.path().join("outside.tar");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
+        let output = root.join("outside.tar");
         std::fs::create_dir_all(&project).unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let destination = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2719,9 +2724,10 @@ mod tests {
     #[test]
     fn export_relative_path_resolves_against_cwd() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
-        let cwd = temp.path().join("work");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
+        let cwd = root.join("work");
         std::fs::create_dir_all(&cwd).unwrap();
         let paths = test_paths(&cwd, &project, &artifacts);
         let destination = resolve_export_destination(
@@ -2738,11 +2744,12 @@ mod tests {
     #[test]
     fn export_in_project_path_is_refused_without_override() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
         let inside = project.join("backup.tar");
         std::fs::create_dir_all(&project).unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let error = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2774,11 +2781,12 @@ mod tests {
     #[test]
     fn export_explicit_path_inside_default_export_area_still_needs_override() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
         let artifacts = project.join(".artifacts");
         let inside = artifacts.join("export").join("chosen.tar");
         std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let error = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2792,9 +2800,10 @@ mod tests {
     #[test]
     fn export_rejects_parent_dir_traversal() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
+        let paths = test_paths(&root, &project, &artifacts);
         for candidate in ["../outside.tar", "backup/../../outside.tar"] {
             let error = resolve_export_destination(
                 &paths,
@@ -2809,7 +2818,7 @@ mod tests {
                 "{candidate}"
             );
         }
-        let absolute_escape = temp.path().join("work").join("..").join("outside.tar");
+        let absolute_escape = root.join("work").join("..").join("outside.tar");
         let error = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2823,11 +2832,12 @@ mod tests {
     #[test]
     fn export_existing_file_is_refused_until_overwrite_is_enabled() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
-        let output = temp.path().join("outside.tar");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
+        let output = root.join("outside.tar");
         std::fs::write(&output, b"old").unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let error = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2856,15 +2866,16 @@ mod tests {
     #[test]
     fn export_existing_default_file_is_refused_until_overwrite_is_enabled() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
         let expected = artifacts
             .join("export")
             .join("com.example.app")
             .join(format!("com.example.app-{STAMP}.tar"));
         std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
         std::fs::write(&expected, b"old").unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let error = resolve_export_destination(
             &paths,
             "com.example.app",
@@ -2888,11 +2899,12 @@ mod tests {
     #[test]
     fn export_destination_directory_is_always_refused() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let artifacts = temp.path().join("managed-artifacts");
-        let directory = temp.path().join("backup.tar");
+        let root = canonicalize_or_self(temp.path());
+        let project = root.join("project");
+        let artifacts = root.join("managed-artifacts");
+        let directory = root.join("backup.tar");
         std::fs::create_dir_all(&directory).unwrap();
-        let paths = test_paths(temp.path(), &project, &artifacts);
+        let paths = test_paths(&root, &project, &artifacts);
         let replace = ExportDestinationPolicy {
             overwrite: ExportOverwritePolicy::Replace,
             ..ExportDestinationPolicy::explicit(&directory)
