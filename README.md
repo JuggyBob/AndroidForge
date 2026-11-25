@@ -104,6 +104,8 @@ environment-validation state visible when they were captured. See
 and report schema stay at `1`, existing commands keep their behaviour, and the `device` alias for
 `devices` is retained.
 
+Closes #1, #2, #3, #4.
+
 - **Build and install in one audited command:** `build` runs an explicit argv-array build config,
   bounds and redacts logs, verifies the produced APK identity, and can `--install`, `--launch`, or
   `--cold` launch through the fixed force-stop path. `--dry-run` executes nothing.

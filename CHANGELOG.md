@@ -17,6 +17,8 @@ complete for the supported scope: host gates, delegated physical campaigns and p
 recorded below. See [v1.1.0 release notes](docs/release-notes/v1.1.0.md) and
 [VERIFICATION.md](VERIFICATION.md).
 
+Closes #1, #2, #3, #4.
+
 ### Added
 
 - `build` — top-level argv-array build variants with bounded/redacted logs, APK identity verification,
