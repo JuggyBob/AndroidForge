@@ -168,7 +168,7 @@ environment failure; missing Maestro is a warning.
 
 ### Download a release
 
-1. Open [Releases](https://github.com/JuggyBob/AndroidForge/releases).
+1. Open [Releases](https://github.com/JuggyBob/AndroidForge/releases) or the current [v1.1.0 release](https://github.com/JuggyBob/AndroidForge/releases/tag/v1.1.0).
 2. Choose an asset and verify it with `SHA256SUMS.txt`:
    - `androidforge-desktop-windows-x86_64.zip` - portable `androidforge.exe` + `androidforge-desktop.exe`, docs and license;
    - `androidforge-windows-x86_64-setup.exe` - per-user Windows installer with both executables, Start Menu shortcut and uninstaller;

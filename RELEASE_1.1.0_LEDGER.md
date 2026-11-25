@@ -9,7 +9,7 @@
 - **Baseline commit:** `1643d6692d3eef2f1f731a059fdc219be20ecf8d`
 - **Current version:** 1.1.0 (working tree)
 - **Target version:** 1.1.0
-- **Ledger status:** COMPLETE — release-ready working tree; no commit, tag, push, upload, or release
+- **Ledger status:** PUBLISHED — committed, tagged, pushed and released on GitHub; release URL below
 
 ---
 
@@ -239,7 +239,7 @@ Conflict clusters are serialized: `{report selectors, run tags, retention}`,
 | Operation | Status | Notes |
 |---|---|---|
 | Physical mutation on Poco | **APPROVED and RUN: app launch + input only** (2026-11-25) | Delegated verification `ses_dec064c7dffemKr42JE8jKHGcs`: force-stop launch (PID 32318), Algebra tap/back, session released, runs cleaned. Physical performance, night-mode scenario and silent installer test remain NOT RUN. |
-| Commit/push/release | NOT APPROVED | Work stays in working tree. |
+| Commit/push/release | **APPROVED and EXECUTED** (2026-11-25) | Commit `e082166750e689d8032a57e688b37beb33f0ac4c` and annotated tag `v1.1.0` pushed to `origin`; release published at <https://github.com/JuggyBob/AndroidForge/releases/tag/v1.1.0>. |
 
 ---
 
@@ -389,8 +389,13 @@ Documentation audit completed (`ses_dec926e43ffeKeT4AEDTatQI2z`): current-claim 
 
 ## 12. Final verdict
 
-**READY — 1.1.0 is implemented and release-ready in the working tree. No commit, tag, push, upload, or release has been made.**
+**PUBLISHED — AndroidForge 1.1.0 is committed, tagged and released on GitHub.**
 
+- **Release URL:** <https://github.com/JuggyBob/AndroidForge/releases/tag/v1.1.0> (title "AndroidForge v1.1.0", latest, not a draft/prerelease).
+- **Commit:** `e082166750e689d8032a57e688b37beb33f0ac4c` (`release: AndroidForge 1.1.0`, 107 files); `origin/main` verified at the same SHA.
+- **Tag:** annotated `v1.1.0` with message `AndroidForge 1.1.0`; tag object `34d472b72a333bd7fb56775a621f92a8aabdf81f` resolves to the release commit above.
+- **Published assets (six):** `androidforge-cli-windows-x86_64.zip` 8,350,742 B; `androidforge-desktop-windows-x86_64.zip` 15,241,545 B; `androidforge-windows-x86_64-setup.exe` 11,425,383 B; `SHA256SUMS.txt` 491 B; `androidforge.exe` 23,362,560 B; `androidforge-desktop.exe` 15,638,528 B. GitHub-reported SHA-256 digests match the verified local assets.
+- **Release workflow:** the `Release` workflow (ID `419368659`) was temporarily disabled before the tag was pushed (`gh workflow disable Release`, verified `disabled_manually`) so CI would not rebuild/overwrite the verified local assets. No new Release run was triggered by the `v1.1.0` tag. It was re-enabled immediately after release creation (`gh workflow enable Release`) and verified `active` again.
 - **Scope:** issues #1–#4 implemented additively; envelope/report schema stay `1`; the 1.0.0 `device` alias is retained. The only explicit NOT RUN feature items are standalone `run repeat --count` and cross-device geometry/colour comparison; both have recorded reasons and scenario `--repeat` covers flake reporting.
 - **Verification:** full workspace gate **784 passed / 0 failed / 29 suites** before the final two safety fixes; post-fix CLI gate **375 passed / 0 failed** (bin 244, cli 91, frames 3, safety 22, schema 15); fmt, strict clippy and `cargo deny` (advisories/bans/licenses/sources) clean. Counts **219 catalog / 221 MCP / 38/38 schemas**; CLI `1.1.0`.
 - **Final safety fixes:** physical `diagnostics performance` now requires `Risk::AppControl`; catalog/MCP classify it `device-mutation` with `confirm=true` unless `dry_run=true`.

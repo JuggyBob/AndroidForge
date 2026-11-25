@@ -14,8 +14,10 @@ validation and packaging validation from areas that were not exercised.
 
 All delegated test and verification workstreams for this release used exactly
 `opencode-go/hy4-flash-free#high`. This section records the full host gate, the post-fix CLI gate, the
-delegated physical-device campaigns and the packaged-asset inspection. No commit, tag or push was
-made.
+delegated physical-device campaigns and the packaged-asset inspection. The verified assets were
+published as-is in [AndroidForge v1.1.0](https://github.com/JuggyBob/AndroidForge/releases/tag/v1.1.0)
+(commit `e082166750e689d8032a57e688b37beb33f0ac4c`, annotated tag `v1.1.0`). The `Release` workflow was
+temporarily disabled for the tag push so CI would not overwrite the verified assets, then re-enabled.
 
 ### Scope
 
